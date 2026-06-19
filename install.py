@@ -602,6 +602,30 @@ def _ask_hidden(prompt):
         return input(prompt).strip()
 
 
+# Caracteres seguros num userinfo de URL sem precisar de percent-encoding. As
+# strings de conexão do Postgres/PgBouncer são montadas como URL no compose
+# (postgres://user:senha@host/db); símbolos como @ : / # % espaço quebram o
+# parse e o PgBouncer nunca conecta. Validamos para falhar cedo, com mensagem.
+_URL_SAFE = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~!*+=")
+
+
+def _ensure_url_safe(label, value, interactive, hidden=False):
+    """Garante que ``value`` não tem caracteres que quebrem a URL de conexão.
+    Interativo: re-pergunta até ficar válido. Não-interativo: aborta."""
+    while True:
+        bad = sorted({c for c in (value or "") if c not in _URL_SAFE})
+        if not bad:
+            return value
+        shown = " ".join(repr(c) for c in bad)
+        msg = (f"{label} contém caracteres que quebram a URL de conexão do "
+               f"PgBouncer: {shown}. Use apenas letras, números e - . _ ~ ! * + =")
+        if not interactive:
+            die(msg)
+        warn(msg)
+        value = (_ask_hidden(f"  {label} (novo valor): ") if hidden
+                 else input(f"  {label} (novo valor): ").strip())
+
+
 def collect_secrets(args, compose_env, interactive):
     """Resolve e grava os segredos de produção no .env (prompt/flags/env, com os
     valores atuais como default). Não gera automaticamente. Retorna o dict."""
@@ -633,6 +657,13 @@ def collect_secrets(args, compose_env, interactive):
         am = input(f"  Auth de equipe off/warn/enforce [{cur['AUTH_MODE']}]: ").strip().lower()
         if am in ("off", "warn", "enforce"):
             cur["AUTH_MODE"] = am
+
+    # Credenciais embutidas na URL de conexão (Postgres/PgBouncer) não podem ter
+    # caracteres que quebrem o parse — valida (re-pergunta no interativo).
+    cur["POSTGRES_USER"] = _ensure_url_safe("Usuário PostgreSQL", cur["POSTGRES_USER"], interactive)
+    cur["POSTGRES_DB"] = _ensure_url_safe("Banco PostgreSQL", cur["POSTGRES_DB"], interactive)
+    cur["POSTGRES_PASSWORD"] = _ensure_url_safe(
+        "Senha PostgreSQL", cur["POSTGRES_PASSWORD"], interactive, hidden=True)
 
     for k, v in cur.items():
         set_env(compose_env, k, v)
@@ -700,7 +731,12 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
         die("Falha ao subir a infraestrutura base.")
     log("Aguardando o PgBouncer aceitar conexões")
     if not wait_for_pgbouncer(SCALE_COMPOSE):
-        die("PgBouncer não ficou pronto a tempo.")
+        warn("PgBouncer não respondeu — logs do postgres e do pgbouncer abaixo:")
+        dc("ps")
+        dc("logs", "--tail", "60", "postgres", "pgbouncer")
+        die("PgBouncer não ficou pronto a tempo. Causas comuns: senha do Postgres "
+            "com caractere especial; volume mem0_pgdata antigo com outra senha "
+            "(docker volume rm openmemory_mem0_pgdata para recriar — apaga dados).")
     ok("PgBouncer pronto.")
     log("Construindo a imagem da API")
     if dc("build", "openmemory-mcp").returncode != 0:
