@@ -1,36 +1,43 @@
 #!/usr/bin/env python3
-"""Instalador rápido LOCAL-FIRST da Memória Central Compartilhada (multiplataforma).
+"""Instalador multiplataforma da Memória Central Compartilhada.
 
-Roda em Linux, macOS e Windows (só precisa de Python 3.8+ e Docker). Equivalente
-multiplataforma ao ``openmemory/install-local-first.sh``: sobe API/MCP + Qdrant em
-container e usa um Ollama LOCAL para LLM/embeddings — operação 100% local, sem
-dependência de serviços fora da rede (privacidade).
+Roda em Linux, macOS e Windows (só precisa de Python 3.8+ e Docker). Dois modos:
 
-Faz, ponta a ponta:
-  1. Verifica pré-requisitos (Docker + Docker Compose v2).
-  2. Garante os arquivos .env (compose + api).
-  3. Detecta os modelos do Ollama (GET /api/tags) e deixa você escolher o LLM e o
-     embedder — sem download automático (task_09); fallback para entrada manual.
-  4. Persiste a seleção no .env do compose (interpolado no docker-compose.yml).
-  5. Sobe o conjunto (docker compose up -d) — o schema é criado no startup.
-  6. Valida a auto-descoberta (GET /discovery) e imprime os dados de conexão.
+  • local      — 1 máquina/dev: API/MCP + Qdrant + SQLite (docker-compose.yml).
+                 Operação simples; inferência local (Ollama/llama.cpp) ou API.
+  • production — stack de escala (docker-compose.scale.yml): PostgreSQL + PgBouncer
+                 + Redis + Qdrant + workers (write/governance) + Traefik + observa-
+                 bilidade (Prometheus/Grafana) + backup (MinIO). Pronto para um time.
+
+Faz, ponta a ponta (modo produção):
+  1. Pré-requisitos (Docker + Docker Compose v2) e arquivos .env.
+  2. Resolve LLM + embedder INDEPENDENTES (Ollama local e/ou API remota), testando
+     a conexão das APIs; ajusta MEM0_LOCAL_ONLY conforme o egress.
+  3. Coleta segredos (PostgreSQL/Grafana/MinIO/API_KEY/auth de equipe).
+  4. Sobe a infra base, roda migrations Alembic em container, sobe o stack completo
+     e valida GET /health via proxy.
 
 Uso:
-  python install.py                                   # interativo
-  python install.py --ollama-url http://192.168.0.10:11434
+  python install.py                                   # interativo (pergunta o modo)
+  python install.py --mode production                 # produção, interativo
+  python install.py --mode local --ollama-url http://192.168.0.10:11434
   python install.py --llm llama3.1:latest --embedder nomic-embed-text --yes
-  python install.py --api-key SEU_TOKEN               # token do backend local (opcional)
   # LLM no Ollama + embedder numa API remota (papéis independentes):
   python install.py --yes --llm llama3.1:latest --llm-backend ollama \\
       --embedder text-embedding-3-small --embedder-backend api \\
       --embedder-api-url https://api.openai.com/v1 --embedder-api-key SEU_TOKEN
-  python install.py --data-dir /srv/mem0-data         # salva Qdrant + SQLite nesse caminho
+  # produção não-interativa com segredos:
+  python install.py --mode production --yes \\
+      --llm llama3.1:8b --embedder nomic-embed-text \\
+      --postgres-password '...' --grafana-password '...' \\
+      --minio-secret-key '...' --auth-mode enforce --auth-tokens 'time-a:tok1,time-b:tok2'
+  python install.py --data-dir /srv/mem0-data         # relocaliza os dados (Qdrant)
   python install.py --skip-models                     # mantém modelos do .env atual
-  python install.py --with-ui                         # também sobe a UI (porta 3000)
 """
 
 import argparse
 import getpass
+import ipaddress
 import json
 import os
 import shutil
@@ -40,6 +47,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent
 COMPOSE_DIR = ROOT / "openmemory"
@@ -340,6 +348,59 @@ def write_role_env(compose_env, prefix, spec):
         set_env(compose_env, f"{prefix}_API_KEY", spec["api_key"] or "")
 
 
+def host_is_local(url):
+    """Espelha o guard MEM0_LOCAL_ONLY do servidor (app/utils/memory.py).
+
+    Loopback, host.docker.internal, *.local/*.internal, IPs RFC1918/loopback/
+    link-local e nomes de serviço de uma palavra (exceto nuvens conhecidas) são
+    locais. URL vazia (provider openai sem base_url → api.openai.com) é pública.
+    """
+    if not url:
+        return False
+    host = (urlsplit(url).hostname or "").lower()
+    if not host:
+        return False
+    if host in ("localhost", "host.docker.internal"):
+        return True
+    if host.endswith(".local") or host.endswith(".internal"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+        return ip.is_loopback or ip.is_private or ip.is_link_local
+    except ValueError:
+        pass
+    _CLOUD = frozenset({"openai", "anthropic", "gemini", "groq", "together",
+                        "azure", "cohere", "mistral", "replicate", "huggingface"})
+    if "." not in host:
+        return host not in _CLOUD
+    return False
+
+
+def container_host_url(url):
+    """Reescreve localhost/127.0.0.1 para host.docker.internal (alcançável do
+    container). Mantém esquema e porta."""
+    if not url:
+        return url
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if host in ("localhost", "127.0.0.1"):
+        netloc = "host.docker.internal" + (f":{parts.port}" if parts.port else "")
+        return parts._replace(netloc=netloc).geturl()
+    return url
+
+
+def read_env(file_path, key):
+    """Lê o valor atual de KEY num .env (ou None)."""
+    if not file_path.exists():
+        return None
+    prefix = key + "="
+    for line in file_path.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if s.startswith(prefix):
+            return s[len(prefix):]
+    return None
+
+
 def configure_storage(data_dir, interactive, compose_env):
     """Decide onde Qdrant + SQLite persistem e grava no .env do compose (task_11).
 
@@ -397,6 +458,300 @@ def wait_for_discovery(api_port, timeout):
     return False
 
 
+def wait_for_health(port, timeout):
+    """Poll GET /health (via proxy) até responder com um corpo contendo status."""
+    url = f"http://localhost:{port}/health"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                if '"status"' in resp.read().decode("utf-8", "replace"):
+                    return True
+        except Exception:
+            pass
+        time.sleep(3)
+    return False
+
+
+def wait_for_pgbouncer(compose_file, attempts=60):
+    """Aguarda o PgBouncer aceitar conexões (pg_isready dentro do container)."""
+    for _ in range(attempts):
+        r = run(["docker", "compose", "-f", compose_file, "exec", "-T", "pgbouncer",
+                 "pg_isready", "-h", "127.0.0.1", "-p", "5432"],
+                cwd=str(COMPOSE_DIR),
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if r.returncode == 0:
+            return True
+        time.sleep(2)
+    return False
+
+
+# --------------------------------------------------------------------------- #
+# Resolução de modelos (compartilhada entre local-first e produção)
+# --------------------------------------------------------------------------- #
+def resolve_specs(args, llamacpp_container_url, ollama_explicit):
+    """Detecta backends locais, resolve LLM + embedder (por papel) e testa as
+    APIs remotas. Retorna (llm_spec, emb_spec)."""
+    log("Detectando modelos locais (Ollama + llama.cpp)")
+    available = {}
+    if args.backend in ("auto", "ollama"):
+        m = detect_ollama_models(args.ollama_url)
+        if m:
+            available["ollama"] = m
+    if args.backend in ("auto", "llamacpp"):
+        m = detect_llamacpp_models(args.llamacpp_url)
+        if m:
+            available["llamacpp"] = m
+
+    labels = {"ollama": "Ollama", "llamacpp": "llama.cpp",
+              "api": "API remota (compatível com OpenAI)",
+              "manual": "Modelos locais (informar nomes manualmente)"}
+
+    # LLM e embedder são resolvidos de forma INDEPENDENTE: cada um pode usar um
+    # backend local (Ollama/llama.cpp) ou uma API remota — inclusive combinando.
+    if args.yes:
+        llm_spec = spec_from_flags("LLM", args, llamacpp_container_url, ollama_explicit)
+        emb_spec = spec_from_flags("embedder", args, llamacpp_container_url, ollama_explicit)
+    else:
+        llm_spec = resolve_role("LLM", available, args, labels,
+                                llamacpp_container_url, ollama_explicit, {})
+        api_defaults = {"base_url": llm_spec["base_url"], "api_key": llm_spec["api_key"]} \
+            if llm_spec["is_api"] else {}
+        emb_spec = resolve_role("embedder", available, args, labels,
+                                llamacpp_container_url, ollama_explicit, api_defaults)
+
+    if not llm_spec["model"]:
+        die("Modelo LLM não definido.")
+    if not emb_spec["model"]:
+        die("Modelo embedder não definido.")
+
+    # API remota: só prossegue se o endpoint do papel responder (conexão + auth).
+    for role, spec in (("llm", llm_spec), ("embedder", emb_spec)):
+        if spec["is_api"]:
+            log(f"Testando conexão com a API ({role})")
+            ok_conn, msg = test_remote_api(spec["base_url"], spec["api_key"],
+                                           spec["model"], role)
+            if not ok_conn:
+                die(f"Teste de conexão da API ({role}) falhou: {msg}")
+            ok(msg)
+    return llm_spec, emb_spec
+
+
+# --------------------------------------------------------------------------- #
+# Produção (stack de escala — docker-compose.scale.yml)
+# --------------------------------------------------------------------------- #
+SCALE_COMPOSE = "docker-compose.scale.yml"
+
+
+def write_inference_scale(compose_env, llm_spec, emb_spec, args):
+    """Grava a inferência por papel no .env do stack de escala e ajusta
+    MEM0_LOCAL_ONLY. No scale, Ollama usa OLLAMA_LLM_URL/OLLAMA_EMBED_URL (URLs
+    alcançáveis de dentro do container). Retorna True se houver egress público."""
+    public = False
+    role_url_key = {"LLM": "OLLAMA_LLM_URL", "EMBEDDER": "OLLAMA_EMBED_URL"}
+    for prefix, spec in (("LLM", llm_spec), ("EMBEDDER", emb_spec)):
+        set_env(compose_env, f"{prefix}_MODEL", spec["model"])
+        set_env(compose_env, f"{prefix}_PROVIDER", spec["provider"])
+        if spec["provider"] == "openai":
+            base = (spec["base_url"] or "").rstrip("/")
+            key = spec["api_key"] or "sk-no-key"
+        else:  # ollama — URL alcançável de dentro do container
+            base = container_host_url(spec.get("ollama_url") or args.ollama_url)
+            key = spec["api_key"] or ""
+        # Importante: o compose já dá default a OLLAMA_LLM_URL/OLLAMA_EMBED_URL
+        # (host.docker.internal) e o servidor prefere essas vars sobre *_BASE_URL
+        # (memory.py). Por isso gravamos AMBAS apontando para a URL efetiva — senão
+        # um provider openai (API) seria sobrescrito pelo default do Ollama.
+        set_env(compose_env, role_url_key[prefix], base)
+        set_env(compose_env, f"{prefix}_BASE_URL", base)
+        set_env(compose_env, f"{prefix}_API_KEY", key)
+        if not host_is_local(base):
+            public = True
+    # MEM0_LOCAL_ONLY=0 só quando há egress público (a inicialização do cliente
+    # seria recusada com =1). Caso contrário mantém o fail-closed (=1).
+    set_env(compose_env, "MEM0_LOCAL_ONLY", "0" if public else "1")
+    return public
+
+
+def configure_storage_scale(data_dir, interactive, compose_env):
+    """Define onde o Qdrant persiste (PostgreSQL usa o volume mem0_pgdata)."""
+    if not data_dir and interactive:
+        resp = input(
+            "  Onde salvar os vetores do Qdrant?\n"
+            "  [Enter] = volume Docker gerenciado (padrão) | ou informe um caminho: "
+        ).strip()
+        data_dir = resp or None
+    if not data_dir:
+        set_env(compose_env, "QDRANT_STORAGE", "mem0_storage")
+        ok("Qdrant: volume Docker gerenciado. PostgreSQL: volume mem0_pgdata.")
+        return None
+    qdir = Path(data_dir).expanduser().resolve() / "qdrant"
+    try:
+        qdir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        die(f"Não foi possível criar {qdir}: {e}")
+    set_env(compose_env, "QDRANT_STORAGE", qdir.as_posix())
+    ok(f"Qdrant em {qdir}. PostgreSQL: volume mem0_pgdata.")
+    return str(qdir.parent)
+
+
+def _ask_hidden(prompt):
+    try:
+        return getpass.getpass(prompt).strip()
+    except Exception:
+        return input(prompt).strip()
+
+
+def collect_secrets(args, compose_env, interactive):
+    """Resolve e grava os segredos de produção no .env (prompt/flags/env, com os
+    valores atuais como default). Não gera automaticamente. Retorna o dict."""
+    defaults = {"POSTGRES_USER": "mem0", "POSTGRES_DB": "openmemory",
+                "POSTGRES_PASSWORD": "mem0", "GRAFANA_PASSWORD": "mem0",
+                "S3_ACCESS_KEY": "minioadmin", "S3_SECRET_KEY": "minioadmin",
+                "API_KEY": "", "AUTH_MODE": "warn"}
+    cur = {k: (read_env(compose_env, k) or v) for k, v in defaults.items()}
+    flags = {"POSTGRES_USER": args.postgres_user, "POSTGRES_DB": args.postgres_db,
+             "POSTGRES_PASSWORD": args.postgres_password,
+             "GRAFANA_PASSWORD": args.grafana_password,
+             "S3_ACCESS_KEY": args.minio_access_key,
+             "S3_SECRET_KEY": args.minio_secret_key,
+             "API_KEY": args.server_api_key, "AUTH_MODE": args.auth_mode}
+    for k, v in flags.items():
+        if v:
+            cur[k] = v
+
+    if interactive:
+        log("Segredos de produção (Enter mantém o valor atual)")
+        cur["POSTGRES_USER"] = input(f"  Usuário PostgreSQL [{cur['POSTGRES_USER']}]: ").strip() or cur["POSTGRES_USER"]
+        cur["POSTGRES_DB"] = input(f"  Banco PostgreSQL [{cur['POSTGRES_DB']}]: ").strip() or cur["POSTGRES_DB"]
+        cur["POSTGRES_PASSWORD"] = _ask_hidden("  Senha PostgreSQL [Enter mantém]: ") or cur["POSTGRES_PASSWORD"]
+        cur["GRAFANA_PASSWORD"] = _ask_hidden("  Senha admin Grafana [Enter mantém]: ") or cur["GRAFANA_PASSWORD"]
+        cur["S3_ACCESS_KEY"] = input(f"  MinIO access key [{cur['S3_ACCESS_KEY']}]: ").strip() or cur["S3_ACCESS_KEY"]
+        cur["S3_SECRET_KEY"] = _ask_hidden("  MinIO secret key [Enter mantém]: ") or cur["S3_SECRET_KEY"]
+        api_in = input(f"  API_KEY do servidor (opcional) [{'definido' if cur['API_KEY'] else 'vazio'}]: ").strip()
+        cur["API_KEY"] = api_in or cur["API_KEY"]
+        am = input(f"  Auth de equipe off/warn/enforce [{cur['AUTH_MODE']}]: ").strip().lower()
+        if am in ("off", "warn", "enforce"):
+            cur["AUTH_MODE"] = am
+
+    for k, v in cur.items():
+        set_env(compose_env, k, v)
+    insecure = [k for k in ("POSTGRES_PASSWORD", "GRAFANA_PASSWORD", "S3_SECRET_KEY")
+                if cur[k] in ("mem0", "minioadmin")]
+    if insecure:
+        warn("Segredos ainda no default inseguro: " + ", ".join(insecure)
+             + " — troque antes de expor para 200 devs.")
+    return cur
+
+
+def write_auth_tokens(api_env, value):
+    """Grava AUTH_TOKENS (pares team:tok,...) em api/.env. `@arquivo` lê de arquivo."""
+    if value.startswith("@"):
+        p = Path(value[1:]).expanduser()
+        if not p.is_file():
+            die(f"Arquivo de tokens não encontrado: {p}")
+        value = ",".join(l.strip() for l in p.read_text(encoding="utf-8").splitlines() if l.strip())
+    set_env(api_env, "AUTH_TOKENS", value)
+
+
+def run_production(args, compose_env, api_env, llm_spec, emb_spec):
+    """Sobe o stack de escala completo (PostgreSQL/PgBouncer/Redis/Qdrant/workers/
+    proxy/observabilidade/backup), roda migrations e valida /health."""
+    def dc(*a, **k):
+        return run(["docker", "compose", "-f", SCALE_COMPOSE, *a],
+                   cwd=str(COMPOSE_DIR), **k)
+
+    # Inferência + fail-closed -----------------------------------------------
+    if llm_spec and emb_spec:
+        log(f"Gravando inferência e flags de produção em {compose_env.relative_to(ROOT)}")
+        public = write_inference_scale(compose_env, llm_spec, emb_spec, args)
+        if public:
+            warn("MEM0_LOCAL_ONLY=0: o conteúdo das memórias SAIRÁ para a API externa escolhida.")
+        else:
+            ok("MEM0_LOCAL_ONLY=1: inferência local — memórias não saem da rede.")
+        ok(f"LLM={llm_spec['label']}/{llm_spec['model']} | "
+           f"embedder={emb_spec['label']}/{emb_spec['model']}")
+
+    # Porta do proxy / descoberta --------------------------------------------
+    set_env(compose_env, "PROXY_PORT", str(args.proxy_port))
+
+    # Segredos ----------------------------------------------------------------
+    secrets = collect_secrets(args, compose_env, interactive=not args.yes)
+    if args.auth_tokens:
+        write_auth_tokens(api_env, args.auth_tokens)
+        ok("Tokens de equipe gravados em api/.env (AUTH_TOKENS).")
+    if secrets["AUTH_MODE"] == "enforce" and not (args.auth_tokens or read_env(api_env, "AUTH_TOKENS")):
+        warn("AUTH_MODE=enforce sem tokens definidos — TODOS os acessos serão negados. "
+             "Defina --auth-tokens 'time:token,...'.")
+
+    try:
+        user = os.environ.get("USER") or os.environ.get("USERNAME") or getpass.getuser()
+    except Exception:
+        user = "openmemory"
+    set_env(compose_env, "USER", user)
+
+    # Armazenamento -----------------------------------------------------------
+    log("Definindo o local de salvamento (Qdrant)")
+    configure_storage_scale(args.data_dir, interactive=not args.yes, compose_env=compose_env)
+
+    # Orquestração ------------------------------------------------------------
+    log("Subindo infraestrutura base (PostgreSQL, PgBouncer, Redis, Qdrant)")
+    if dc("up", "-d", "postgres", "pgbouncer", "redis", "mem0_store").returncode != 0:
+        die("Falha ao subir a infraestrutura base.")
+    log("Aguardando o PgBouncer aceitar conexões")
+    if not wait_for_pgbouncer(SCALE_COMPOSE):
+        die("PgBouncer não ficou pronto a tempo.")
+    ok("PgBouncer pronto.")
+    log("Construindo a imagem da API")
+    if dc("build", "openmemory-mcp").returncode != 0:
+        die("Falha ao construir a imagem da API.")
+    log("Aplicando migrations (alembic upgrade head)")
+    if dc("run", "--rm", "--no-deps", "openmemory-mcp", "alembic", "upgrade", "head").returncode != 0:
+        die("Falha ao aplicar as migrations no PostgreSQL.")
+    ok("Schema do PostgreSQL criado/atualizado.")
+    log("Subindo o stack completo")
+    if dc("up", "-d", "--build").returncode != 0:
+        die("Falha ao subir o stack completo (docker compose up).")
+
+    log(f"Aguardando GET /health via proxy (até {args.timeout}s)")
+    if not wait_for_health(args.proxy_port, args.timeout):
+        dc("logs", "--tail", "60", "openmemory-mcp")
+        die("/health não respondeu a tempo.")
+    ok("/health respondeu.")
+
+    log("Instalação de PRODUÇÃO concluída 🎉")
+    print(f"""
+  Proxy MCP:  http://localhost:{args.proxy_port}
+  Descoberta: http://localhost:{args.proxy_port}/discovery
+  Health:     http://localhost:{args.proxy_port}/health
+  Qdrant:     http://localhost:6333
+  Prometheus: http://localhost:9090
+  Grafana:    http://localhost:3001  (admin / senha configurada)
+
+  Stack: PostgreSQL + PgBouncer + Redis + Qdrant + workers (write/governance)
+         + Traefik + observabilidade + backup (MinIO).
+  Auth de equipe: AUTH_MODE={secrets['AUTH_MODE']} (defina tokens com --auth-tokens).
+
+  Rota MCP (preencha hostname e project):
+    /mcp/{{client_name}}/sse/{{hostname}}      (SSE)
+    /mcp/{{client_name}}/http/{{hostname}}     (Streamable HTTP)""")
+    return 0
+
+
+def select_mode(args):
+    """Decide entre instalação local-first e produção (escala)."""
+    if args.mode in ("local", "production"):
+        return args.mode
+    if args.yes:
+        return "local"  # compatibilidade: não-interativo sem --mode = local-first
+    print("\n  Tipo de instalação:")
+    print("    1. Local-first — 1 máquina/dev: SQLite + Qdrant (simples)")
+    print("    2. Produção    — escala p/ time: PostgreSQL + Redis + workers + "
+          "proxy + observabilidade + backup")
+    c = input("  Selecione [1]: ").strip().lower()
+    return "production" if c in ("2", "production", "prod", "producao", "produção") else "local"
+
+
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
@@ -433,9 +788,28 @@ def parse_args(argv):
                         "Vazio/omitido = volumes Docker gerenciados (padrão).")
     p.add_argument("--yes", "-y", action="store_true", help="Não-interativo (usa --llm/--embedder).")
     p.add_argument("--skip-models", action="store_true", help="Não mexe nos modelos do .env.")
-    p.add_argument("--with-ui", action="store_true", help="Também sobe a UI (porta 3000).")
+    p.add_argument("--with-ui", action="store_true", help="Também sobe a UI (porta 3000) — só no modo local.")
     p.add_argument("--api-port", default=os.environ.get("API_PORT", "8765"))
     p.add_argument("--timeout", type=int, default=int(os.environ.get("TIMEOUT", "180")))
+    # --- Modo de instalação ---------------------------------------------------
+    p.add_argument("--mode", choices=("local", "production"), default=None,
+                   help="local (SQLite+Qdrant, 1 máquina) ou production (stack de "
+                        "escala completo). Omitido = pergunta (ou local com --yes).")
+    p.add_argument("--proxy-port", default=os.environ.get("PROXY_PORT", "8765"),
+                   help="Porta do reverse proxy (Traefik) no modo produção.")
+    # Segredos de produção (prompt quando interativo; senão usa flag/env/default).
+    p.add_argument("--postgres-user", default=os.environ.get("POSTGRES_USER"))
+    p.add_argument("--postgres-password", default=os.environ.get("POSTGRES_PASSWORD"))
+    p.add_argument("--postgres-db", default=os.environ.get("POSTGRES_DB"))
+    p.add_argument("--grafana-password", default=os.environ.get("GRAFANA_PASSWORD"))
+    p.add_argument("--minio-access-key", default=os.environ.get("S3_ACCESS_KEY"))
+    p.add_argument("--minio-secret-key", default=os.environ.get("S3_SECRET_KEY"))
+    p.add_argument("--server-api-key", default=os.environ.get("API_KEY"),
+                   help="Valor de API_KEY exigido pelo servidor (opcional).")
+    p.add_argument("--auth-mode", choices=("off", "warn", "enforce"), default=None,
+                   help="Auth de equipe na borda (produção). Default: warn.")
+    p.add_argument("--auth-tokens", default=None,
+                   help="Tokens de equipe 'time:token,...' (ou @arquivo) p/ produção.")
     return p.parse_args(argv)
 
 
@@ -449,15 +823,18 @@ def main(argv=None):
     # de dentro do container): usa a informada ou o host.docker.internal.
     llamacpp_container_url = args.llamacpp_url if llamacpp_explicit else "http://host.docker.internal:8080"
 
+    mode = select_mode(args)
+
     # 1. Pré-requisitos -------------------------------------------------------
     log("Verificando pré-requisitos")
     if not shutil.which("docker"):
         die("Docker não encontrado. Instale o Docker.")
     if not have_docker_compose():
         die("Docker Compose v2 não encontrado (use 'docker compose').")
-    if not COMPOSE_DIR.is_dir() or not (COMPOSE_DIR / "docker-compose.yml").is_file():
-        die(f"docker-compose.yml não encontrado em {COMPOSE_DIR}.")
-    ok("Docker e Docker Compose v2 disponíveis.")
+    needed = SCALE_COMPOSE if mode == "production" else "docker-compose.yml"
+    if not COMPOSE_DIR.is_dir() or not (COMPOSE_DIR / needed).is_file():
+        die(f"{needed} não encontrado em {COMPOSE_DIR}.")
+    ok(f"Docker e Docker Compose v2 disponíveis (modo: {mode}).")
 
     # 2. Arquivos .env --------------------------------------------------------
     log("Preparando arquivos de ambiente")
@@ -473,55 +850,19 @@ def main(argv=None):
         ok(f"{api_env.relative_to(ROOT)} já existe (preservado).")
     compose_env.touch()
 
-    # 3 + 4. Detecção/seleção de modelos (Ollama + llama.cpp) ----------------
+    # 3 + 4. Detecção/seleção de modelos (LLM + embedder, por papel) ---------
+    llm_spec = emb_spec = None
     if args.skip_models:
         log("Detecção de modelos pulada (--skip-models): mantendo o .env atual.")
     else:
-        log("Detectando modelos locais (Ollama + llama.cpp)")
-        available = {}
-        if args.backend in ("auto", "ollama"):
-            m = detect_ollama_models(args.ollama_url)
-            if m:
-                available["ollama"] = m
-        if args.backend in ("auto", "llamacpp"):
-            m = detect_llamacpp_models(args.llamacpp_url)
-            if m:
-                available["llamacpp"] = m
+        llm_spec, emb_spec = resolve_specs(args, llamacpp_container_url, ollama_explicit)
 
-        labels = {"ollama": "Ollama", "llamacpp": "llama.cpp",
-                  "api": "API remota (compatível com OpenAI)",
-                  "manual": "Modelos locais (informar nomes manualmente)"}
+    # 5. Produção: stack de escala completo (orquestração dedicada) ----------
+    if mode == "production":
+        return run_production(args, compose_env, api_env, llm_spec, emb_spec)
 
-        # LLM e embedder são resolvidos de forma INDEPENDENTE: cada um pode usar
-        # um backend local (Ollama/llama.cpp) ou uma API remota — inclusive
-        # combinando os dois (ex.: Ollama no LLM, API no embedder).
-        if args.yes:
-            llm_spec = spec_from_flags("LLM", args, llamacpp_container_url, ollama_explicit)
-            emb_spec = spec_from_flags("embedder", args, llamacpp_container_url, ollama_explicit)
-        else:
-            llm_spec = resolve_role("LLM", available, args, labels,
-                                    llamacpp_container_url, ollama_explicit, {})
-            # Se o LLM usou uma API, oferece reaproveitar URL/token no embedder.
-            api_defaults = {"base_url": llm_spec["base_url"], "api_key": llm_spec["api_key"]} \
-                if llm_spec["is_api"] else {}
-            emb_spec = resolve_role("embedder", available, args, labels,
-                                    llamacpp_container_url, ollama_explicit, api_defaults)
-
-        if not llm_spec["model"]:
-            die("Modelo LLM não definido.")
-        if not emb_spec["model"]:
-            die("Modelo embedder não definido.")
-
-        # API remota: só prossegue se o endpoint do papel responder (conexão+auth).
-        for role, spec in (("llm", llm_spec), ("embedder", emb_spec)):
-            if spec["is_api"]:
-                log(f"Testando conexão com a API ({role})")
-                ok_conn, msg = test_remote_api(
-                    spec["base_url"], spec["api_key"], spec["model"], role)
-                if not ok_conn:
-                    die(f"Teste de conexão da API ({role}) falhou: {msg}")
-                ok(msg)
-
+    # 5'. Local-first: grava a seleção e sobe o conjunto simples -------------
+    if llm_spec and emb_spec:
         log(f"Gravando a seleção em {compose_env.relative_to(ROOT)}")
         write_role_env(compose_env, "LLM", llm_spec)
         write_role_env(compose_env, "EMBEDDER", emb_spec)
@@ -540,11 +881,11 @@ def main(argv=None):
     set_env(compose_env, "USER", user)
     set_env(compose_env, "NEXT_PUBLIC_API_URL", f"http://localhost:{args.api_port}")
 
-    # 4b. Local de salvamento das memórias (Qdrant + SQLite) -----------------
+    # Local de salvamento das memórias (Qdrant + SQLite) ---------------------
     log("Definindo o local de salvamento das memórias")
     configure_storage(args.data_dir, interactive=not args.yes, compose_env=compose_env)
 
-    # 5. Subir o conjunto -----------------------------------------------------
+    # Subir o conjunto --------------------------------------------------------
     services = ["mem0_store", "openmemory-mcp"]
     if args.with_ui:
         services.append("openmemory-ui")
@@ -553,7 +894,7 @@ def main(argv=None):
     if r.returncode != 0:
         die("Falha ao subir os containers (docker compose up).")
 
-    # 6. Validar a auto-descoberta -------------------------------------------
+    # Validar a auto-descoberta ----------------------------------------------
     log(f"Aguardando GET /discovery (até {args.timeout}s)")
     if not wait_for_discovery(args.api_port, args.timeout):
         run(["docker", "compose", "logs", "--tail", "40", "openmemory-mcp"],
