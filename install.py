@@ -20,6 +20,10 @@ Uso:
   python install.py --ollama-url http://192.168.0.10:11434
   python install.py --llm llama3.1:latest --embedder nomic-embed-text --yes
   python install.py --api-key SEU_TOKEN               # token do backend local (opcional)
+  # LLM no Ollama + embedder numa API remota (papéis independentes):
+  python install.py --yes --llm llama3.1:latest --llm-backend ollama \\
+      --embedder text-embedding-3-small --embedder-backend api \\
+      --embedder-api-url https://api.openai.com/v1 --embedder-api-key SEU_TOKEN
   python install.py --data-dir /srv/mem0-data         # salva Qdrant + SQLite nesse caminho
   python install.py --skip-models                     # mantém modelos do .env atual
   python install.py --with-ui                         # também sobe a UI (porta 3000)
@@ -121,9 +125,9 @@ def detect_llamacpp_models(llamacpp_url):
     return names
 
 
-def select_source(sources, labels):
-    """Prompt to choose how to provide models (local backend or remote API)."""
-    print("  Como informar os modelos:")
+def select_source(sources, labels, title="Como informar os modelos:"):
+    """Prompt to choose how to provide a model (local backend or remote API)."""
+    print(f"  {title}")
     for i, name in enumerate(sources, start=1):
         print(f"    {i}. {labels.get(name, name)}")
     choice = input("  Selecione (número ou nome): ").strip()
@@ -136,29 +140,49 @@ def select_source(sources, labels):
     return sources[0]
 
 
-def prompt_remote_api(args):
-    """Entrada manual de um endpoint compatível com OpenAI (URL + modelo + token).
+def prompt_remote_api_role(role, default_url, default_model, default_key):
+    """Pergunta URL + modelo + token de um endpoint OpenAI-compatível para UM papel.
 
-    Usa as flags (--api-url/--llm/--embedder/--api-key) como default quando
-    informadas; caso contrário, pergunta interativamente. Retorna a tupla
-    (base_url, llm, embedder, api_key).
+    ``default_*`` pré-preenchem os campos (ex.: reaproveitar a API já configurada
+    para o outro papel). Retorna (base_url, model, api_key).
     """
-    print("  API remota (compatível com OpenAI):")
-    base_url = args.api_url or input(
-        "    Base URL (ex.: https://api.openai.com/v1): ").strip()
+    print(f"  API remota para {role} (compatível com OpenAI):")
+    if default_url:
+        base_url = input(f"    Base URL [{default_url}]: ").strip() or default_url
+    else:
+        base_url = input("    Base URL (ex.: https://api.openai.com/v1): ").strip()
     while not base_url:
         base_url = input("    Base URL (obrigatória): ").strip()
-    llm = args.llm or input("    Modelo LLM (ex.: gpt-4o-mini): ").strip()
-    while not llm:
-        llm = input("    Modelo LLM (obrigatório): ").strip()
-    embedder = args.embedder or input(
-        "    Modelo embedder (ex.: text-embedding-3-small): ").strip()
-    while not embedder:
-        embedder = input("    Modelo embedder (obrigatório): ").strip()
-    api_key = args.api_key
-    if api_key is None:
+
+    if default_model:
+        model = input(f"    Modelo {role} [{default_model}]: ").strip() or default_model
+    else:
+        model = input(f"    Modelo {role}: ").strip()
+    while not model:
+        model = input(f"    Modelo {role} (obrigatório): ").strip()
+
+    if default_key:
+        key_in = input("    Token/API key [Enter = mesmo do anterior]: ").strip()
+        api_key = key_in or default_key
+    else:
         api_key = input("    Token/API key (Enter se não houver): ").strip()
-    return base_url, llm, embedder, (api_key or "").strip()
+    return base_url, model, (api_key or "").strip()
+
+
+def _local_spec(backend, model, args, llamacpp_container_url, ollama_explicit):
+    """Monta o spec de um papel servido por backend LOCAL (ollama ou llama.cpp)."""
+    if backend == "llamacpp":
+        # llama.cpp fala via provider openai apontando para o servidor local.
+        v1 = llamacpp_container_url.rstrip("/")
+        if not v1.endswith("/v1"):
+            v1 += "/v1"
+        return {"provider": "openai", "model": model, "base_url": v1,
+                "api_key": (args.api_key or "").strip() or None,
+                "ollama_url": None, "is_api": False, "label": "llama.cpp"}
+    return {"provider": "ollama", "model": model, "base_url": None,
+            "api_key": (args.api_key or "").strip() or None,
+            "ollama_url": args.ollama_url if ollama_explicit else None,
+            "is_api": False, "label": "Ollama"}
 
 
 def _http(url, headers=None, data=None, timeout=15):
@@ -182,12 +206,13 @@ def _short(body):
         return ""
 
 
-def test_remote_api(base_url, api_key, llm, embedder):
-    """Testa o endpoint remoto compatível com OpenAI. Retorna (ok, mensagem).
+def test_remote_api(base_url, api_key, model, role):
+    """Testa um endpoint OpenAI-compatível para UM papel. Retorna (ok, mensagem).
 
-    Tenta GET /models (conexão + autenticação, sem custo de tokens). Se o provedor
-    não expõe /models (404/405), faz um probe real em /chat/completions e
-    /embeddings com os modelos informados.
+    ``role`` é 'llm' ou 'embedder'. Tenta GET /models (conexão + autenticação, sem
+    custo de tokens) e confere o modelo na lista. Se o provedor não expõe /models
+    (404/405), faz um probe real no endpoint do papel (/chat/completions para LLM,
+    /embeddings para embedder).
     """
     base = (base_url or "").rstrip("/")
     headers = {"Content-Type": "application/json"}
@@ -201,39 +226,35 @@ def test_remote_api(base_url, api_key, llm, embedder):
         return False, f"não foi possível conectar a {base} ({e})."
 
     if status in (401, 403):
-        return False, "autenticação recusada (HTTP %d) — verifique o token." % status
+        return False, f"autenticação recusada (HTTP {status}) — verifique o token."
     if status == 200:
         try:
             ids = [m.get("id") for m in (json.loads(body).get("data") or [])]
         except Exception:
             ids = []
-        faltando = [m for m in (llm, embedder) if ids and m not in ids]
-        if faltando:
-            warn(f"Conexão OK, mas estes modelos não aparecem no /models: "
-                 f"{', '.join(faltando)} (a lista pode estar incompleta).")
+        if ids and model not in ids:
+            warn(f"Conexão OK, mas o modelo '{model}' não aparece no /models "
+                 "(a lista pode estar incompleta).")
         return True, f"conexão e autenticação OK ({len(ids)} modelos visíveis)."
     if status not in (404, 405):
         return False, f"GET /models retornou HTTP {status}: {_short(body)}"
 
-    # 2. /models indisponível → probe real (chat + embeddings).
-    chat = json.dumps({"model": llm,
-                       "messages": [{"role": "user", "content": "ping"}],
-                       "max_tokens": 1}).encode("utf-8")
+    # 2. /models indisponível → probe real no endpoint do papel.
+    if role == "embedder":
+        path, payload = "/embeddings", {"model": model, "input": "ping"}
+    else:
+        path, payload = "/chat/completions", {
+            "model": model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+        }
     try:
-        s, b = _http(base + "/chat/completions", headers=headers, data=chat)
+        s, b = _http(base + path, headers=headers, data=json.dumps(payload).encode("utf-8"))
     except Exception as e:
-        return False, f"falha no /chat/completions ({e})."
+        return False, f"falha no {path} ({e})."
     if s != 200:
-        return False, f"/chat/completions retornou HTTP {s}: {_short(b)}"
-
-    emb = json.dumps({"model": embedder, "input": "ping"}).encode("utf-8")
-    try:
-        s, b = _http(base + "/embeddings", headers=headers, data=emb)
-    except Exception as e:
-        return False, f"falha no /embeddings ({e})."
-    if s != 200:
-        return False, f"/embeddings retornou HTTP {s}: {_short(b)}"
-    return True, "chat e embeddings responderam 200."
+        return False, f"{path} retornou HTTP {s}: {_short(b)}"
+    return True, f"{path} respondeu 200."
 
 
 def select_model(models, role):
@@ -244,6 +265,79 @@ def select_model(models, role):
         if 0 <= idx < len(models):
             return models[idx]
     return choice
+
+
+def resolve_role(role, available, args, labels, llamacpp_container_url,
+                 ollama_explicit, api_defaults):
+    """Resolve interativamente a origem de UM papel (LLM ou embedder).
+
+    Cada papel pode vir de um backend local detectado (Ollama/llama.cpp), de
+    nomes locais à mão, ou de uma API remota compatível com OpenAI — de forma
+    independente do outro papel. ``api_defaults`` pré-preenche a URL/token quando
+    o outro papel já configurou uma API. Retorna um spec dict.
+    """
+    sources = (list(available) + ["api"]) if available else ["api", "manual"]
+    log(f"Seleção do modelo de {role}")
+    src = sources[0] if len(sources) == 1 \
+        else select_source(sources, labels, title=f"Origem do {role}:")
+
+    if src == "api":
+        base_url, model, key = prompt_remote_api_role(
+            role, api_defaults.get("base_url") or args.api_url,
+            args.llm if role == "LLM" else args.embedder,
+            api_defaults.get("api_key"))
+        return {"provider": "openai", "model": model, "base_url": base_url,
+                "api_key": key, "ollama_url": None, "is_api": True,
+                "label": "API remota"}
+
+    if src == "manual":
+        backend = args.backend if args.backend in ("ollama", "llamacpp") else "ollama"
+        model = input(f"  Nome do modelo {role}: ").strip()
+        return _local_spec(backend, model, args, llamacpp_container_url, ollama_explicit)
+
+    models = available[src]
+    ok(f"Backend {labels[src]} — modelos detectados:")
+    for i, name in enumerate(models, start=1):
+        print(f"    {i}. {name}")
+    model = select_model(models, role)
+    return _local_spec(src, model, args, llamacpp_container_url, ollama_explicit)
+
+
+def spec_from_flags(role, args, llamacpp_container_url, ollama_explicit):
+    """Monta o spec de um papel a partir das flags (modo não-interativo --yes).
+
+    Backend por papel: --llm-backend/--embedder-backend, com fallback para
+    --backend. URL/token por papel: --{role}-api-url/--{role}-api-key, com
+    fallback para --api-url/--api-key.
+    """
+    key = "llm" if role == "LLM" else "embedder"
+    model = args.llm if role == "LLM" else args.embedder
+    if not model:
+        die(f"--yes exige --{key} (nome do modelo de {role}).")
+    backend = getattr(args, f"{key}_backend") or args.backend
+    if backend in ("auto", None):
+        backend = "ollama"  # nomes informados → assume Ollama por padrão
+    if backend == "api":
+        url = getattr(args, f"{key}_api_url") or args.api_url
+        if not url:
+            die(f"backend api para {role} com --yes exige --{key}-api-url (ou --api-url).")
+        tok = getattr(args, f"{key}_api_key") or args.api_key
+        return {"provider": "openai", "model": model, "base_url": url,
+                "api_key": (tok or "").strip(), "ollama_url": None,
+                "is_api": True, "label": "API remota"}
+    return _local_spec(backend, model, args, llamacpp_container_url, ollama_explicit)
+
+
+def write_role_env(compose_env, prefix, spec):
+    """Grava as variáveis de UM papel (prefix = 'LLM' ou 'EMBEDDER') no .env."""
+    set_env(compose_env, f"{prefix}_MODEL", spec["model"])
+    set_env(compose_env, f"{prefix}_PROVIDER", spec["provider"])
+    if spec["provider"] == "openai":
+        # provider openai exige key não-vazia — placeholder quando não há token.
+        set_env(compose_env, f"{prefix}_BASE_URL", (spec["base_url"] or "").rstrip("/"))
+        set_env(compose_env, f"{prefix}_API_KEY", spec["api_key"] or "sk-no-key")
+    else:  # ollama
+        set_env(compose_env, f"{prefix}_API_KEY", spec["api_key"] or "")
 
 
 def configure_storage(data_dir, interactive, compose_env):
@@ -322,8 +416,18 @@ def parse_args(argv):
     p.add_argument("--llm", help="Nome do modelo LLM (não-interativo; exige --embedder e --yes).")
     p.add_argument("--embedder", help="Nome do modelo embedder (idem).")
     p.add_argument("--api-key", default=None,
-                   help="Token/API key do backend local (LLM + embedder). "
+                   help="Token/API key do backend (LLM + embedder). "
                         "Vazio/omitido = sem token (Ollama não exige).")
+    # Overrides por papel (não-interativo): permitem mixar, ex. Ollama no LLM e
+    # API remota no embedder. Sem fallback → herdam --backend/--api-url/--api-key.
+    p.add_argument("--llm-backend", choices=("ollama", "llamacpp", "api"), default=None,
+                   help="Backend só do LLM (sobrepõe --backend).")
+    p.add_argument("--embedder-backend", choices=("ollama", "llamacpp", "api"), default=None,
+                   help="Backend só do embedder (sobrepõe --backend).")
+    p.add_argument("--llm-api-url", default=None, help="Base URL da API só do LLM.")
+    p.add_argument("--embedder-api-url", default=None, help="Base URL da API só do embedder.")
+    p.add_argument("--llm-api-key", default=None, help="Token da API só do LLM.")
+    p.add_argument("--embedder-api-key", default=None, help="Token da API só do embedder.")
     p.add_argument("--data-dir", default=None,
                    help="Diretório no host para salvar as memórias (Qdrant + SQLite). "
                         "Vazio/omitido = volumes Docker gerenciados (padrão).")
@@ -387,103 +491,46 @@ def main(argv=None):
         labels = {"ollama": "Ollama", "llamacpp": "llama.cpp",
                   "api": "API remota (compatível com OpenAI)",
                   "manual": "Modelos locais (informar nomes manualmente)"}
-        llm, embedder, backend = args.llm, args.embedder, None
-        base_url = None  # definido quando backend == "api"
 
-        if args.backend == "api":
-            # API remota explícita (via flags ou prompt).
-            backend = "api"
-            if args.yes:
-                base_url = args.api_url
-                if not (base_url and llm and embedder):
-                    die("--backend api com --yes exige --api-url, --llm e --embedder.")
-            else:
-                base_url, llm, embedder, args.api_key = prompt_remote_api(args)
-        elif llm and embedder:
-            backend = "llamacpp" if args.backend == "llamacpp" else "ollama"
-            ok(f"Usando modelos informados por flag (backend {labels[backend]}).")
-        elif args.yes:
-            die("--yes exige --llm e --embedder.")
+        # LLM e embedder são resolvidos de forma INDEPENDENTE: cada um pode usar
+        # um backend local (Ollama/llama.cpp) ou uma API remota — inclusive
+        # combinando os dois (ex.: Ollama no LLM, API no embedder).
+        if args.yes:
+            llm_spec = spec_from_flags("LLM", args, llamacpp_container_url, ollama_explicit)
+            emb_spec = spec_from_flags("embedder", args, llamacpp_container_url, ollama_explicit)
         else:
-            # Menu: backends locais detectados + API remota; ou, se nada foi
-            # detectado, escolher entre API remota e nomes locais à mão.
-            sources = (list(available) + ["api"]) if available else ["api", "manual"]
-            backend = select_source(sources, labels)
-            if backend == "api":
-                base_url, llm, embedder, args.api_key = prompt_remote_api(args)
-            elif backend == "manual":
-                backend = args.backend if args.backend in ("ollama", "llamacpp") else "ollama"
-                llm = input("  Nome do modelo LLM: ").strip()
-                embedder = input("  Nome do modelo embedder: ").strip()
-            else:
-                models = available[backend]
-                ok(f"Backend {labels[backend]} — modelos detectados:")
-                for i, name in enumerate(models, start=1):
-                    print(f"    {i}. {name}")
-                llm = select_model(models, "LLM")
-                embedder = select_model(models, "embedder")
+            llm_spec = resolve_role("LLM", available, args, labels,
+                                    llamacpp_container_url, ollama_explicit, {})
+            # Se o LLM usou uma API, oferece reaproveitar URL/token no embedder.
+            api_defaults = {"base_url": llm_spec["base_url"], "api_key": llm_spec["api_key"]} \
+                if llm_spec["is_api"] else {}
+            emb_spec = resolve_role("embedder", available, args, labels,
+                                    llamacpp_container_url, ollama_explicit, api_defaults)
 
-        if not llm:
+        if not llm_spec["model"]:
             die("Modelo LLM não definido.")
-        if not embedder:
+        if not emb_spec["model"]:
             die("Modelo embedder não definido.")
 
-        # Token/API key do backend local detectado (opcional — Ollama não exige;
-        # Enter deixa em branco). Aplica-se ao LLM e ao embedder.
-        api_key = args.api_key
-        if api_key is None and not args.yes:
-            api_key = input(
-                f"  Token/API key do {labels[backend]} (Enter se não houver): "
-            ).strip()
-        api_key = (api_key or "").strip()
-
-        # API remota: só prossegue se o endpoint responder (conexão + auth).
-        if backend == "api":
-            log("Testando conexão com a API remota")
-            ok_conn, msg = test_remote_api(base_url, api_key, llm, embedder)
-            if not ok_conn:
-                die(f"Teste de conexão com a API falhou: {msg}")
-            ok(msg)
+        # API remota: só prossegue se o endpoint do papel responder (conexão+auth).
+        for role, spec in (("llm", llm_spec), ("embedder", emb_spec)):
+            if spec["is_api"]:
+                log(f"Testando conexão com a API ({role})")
+                ok_conn, msg = test_remote_api(
+                    spec["base_url"], spec["api_key"], spec["model"], role)
+                if not ok_conn:
+                    die(f"Teste de conexão da API ({role}) falhou: {msg}")
+                ok(msg)
 
         log(f"Gravando a seleção em {compose_env.relative_to(ROOT)}")
-        set_env(compose_env, "LLM_MODEL", llm)
-        set_env(compose_env, "EMBEDDER_MODEL", embedder)
-        if backend == "api":
-            # Endpoint remoto compatível com OpenAI: usa a URL informada como
-            # está. O provider openai exige key não-vazia — usa um placeholder
-            # quando o usuário não passa token.
-            base = (base_url or "").rstrip("/")
-            key = api_key or "sk-no-key"
-            set_env(compose_env, "LLM_PROVIDER", "openai")
-            set_env(compose_env, "EMBEDDER_PROVIDER", "openai")
-            set_env(compose_env, "LLM_BASE_URL", base)
-            set_env(compose_env, "EMBEDDER_BASE_URL", base)
-            set_env(compose_env, "LLM_API_KEY", key)
-            set_env(compose_env, "EMBEDDER_API_KEY", key)
-        elif backend == "llamacpp":
-            # llama.cpp via provider openai apontando para o servidor local. O
-            # provider openai exige uma key não-vazia: usa a informada ou um
-            # placeholder ("llama.cpp") quando o usuário não passa token.
-            v1 = llamacpp_container_url.rstrip("/")
-            if not v1.endswith("/v1"):
-                v1 += "/v1"
-            key = api_key or "llama.cpp"
-            set_env(compose_env, "LLM_PROVIDER", "openai")
-            set_env(compose_env, "EMBEDDER_PROVIDER", "openai")
-            set_env(compose_env, "LLM_BASE_URL", v1)
-            set_env(compose_env, "EMBEDDER_BASE_URL", v1)
-            set_env(compose_env, "LLM_API_KEY", key)
-            set_env(compose_env, "EMBEDDER_API_KEY", key)
-        else:
-            set_env(compose_env, "LLM_PROVIDER", "ollama")
-            set_env(compose_env, "EMBEDDER_PROVIDER", "ollama")
-            # Token opcional do Ollama (em branco quando não informado).
-            set_env(compose_env, "LLM_API_KEY", api_key)
-            set_env(compose_env, "EMBEDDER_API_KEY", api_key)
-            if ollama_explicit:
-                set_env(compose_env, "OLLAMA_BASE_URL", args.ollama_url)
-        key_note = "com token" if api_key else "sem token"
-        ok(f"Backend={labels[backend]} | LLM={llm} | embedder={embedder} | {key_note}")
+        write_role_env(compose_env, "LLM", llm_spec)
+        write_role_env(compose_env, "EMBEDDER", emb_spec)
+        # OLLAMA_BASE_URL é global: grava a URL explícita de qualquer papel Ollama.
+        ollama_url = llm_spec.get("ollama_url") or emb_spec.get("ollama_url")
+        if ollama_url:
+            set_env(compose_env, "OLLAMA_BASE_URL", ollama_url)
+        ok(f"LLM={llm_spec['label']}/{llm_spec['model']} | "
+           f"embedder={emb_spec['label']}/{emb_spec['model']}")
 
     # USER / NEXT_PUBLIC_API_URL: ajudam a UI e silenciam avisos do compose.
     try:
