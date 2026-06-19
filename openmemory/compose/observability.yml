@@ -5,8 +5,19 @@ services:
     restart: unless-stopped
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alerts.yml:/etc/prometheus/alerts.yml:ro
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
+
+  # Alertmanager opcional (profile alerts): roteia os alertas definidos.
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    profiles: ["alerts"]
+    restart: unless-stopped
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
 
   grafana:
     image: grafana/grafana:11.4.0
@@ -18,3 +29,23 @@ services:
       - "${GRAFANA_PORT:-3001}:3000"
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
+
+  # Tracing distribuído (task_08 / ADR-004): Collector OTLP -> Tempo.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "${OTLP_GRPC_PORT:-4317}:4317"  # OTLP gRPC (a API exporta para cá)
+      - "${OTLP_HTTP_PORT:-4318}:4318"  # OTLP HTTP
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./tempo-config.yaml:/etc/tempo/tempo.yaml:ro
+    ports:
+      - "${TEMPO_PORT:-3200}:3200"

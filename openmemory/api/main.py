@@ -12,7 +12,9 @@ from uuid import uuid4
 from app.config import DEFAULT_APP_ID, USER_ID
 from app.database import Base, SessionLocal, engine
 from app.mcp_server import setup_mcp_server
+from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIdMiddleware
+from app.middleware.team_auth import TeamAuthMiddleware
 from app.models import App, User
 from app.routers import (
     admin_router,
@@ -30,6 +32,7 @@ from app.routers import (
 )
 from app.workers.write_worker import embedded_worker_enabled, write_worker
 from app.utils.logging_context import install_structured_logging
+from app.utils.tracing import configure_tracing
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_pagination import add_pagination
@@ -37,6 +40,9 @@ from fastapi_pagination import add_pagination
 install_structured_logging()
 
 app = FastAPI(title="OpenMemory API")
+
+# Tracing distribuído (task_08 / ADR-004): no-op se OTel ausente/desativado.
+configure_tracing(service_name="openmemory-api", app=app, engine=engine)
 
 app.add_middleware(RequestIdMiddleware)
 app.add_middleware(
@@ -46,6 +52,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Rate limit por (project, hostname) na borda (task_10 / ADR-006).
+app.add_middleware(RateLimitMiddleware)
+# Autenticação por equipe (task_11 / ADR-006): off|warn|enforce via AUTH_MODE.
+app.add_middleware(TeamAuthMiddleware)
 
 # Create all tables
 Base.metadata.create_all(bind=engine)
