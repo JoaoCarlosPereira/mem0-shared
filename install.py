@@ -443,7 +443,10 @@ def configure_storage(data_dir, interactive, compose_env):
 
 def wait_for_discovery(api_port, timeout):
     """Poll GET /discovery until it returns the expected JSON, or time out."""
-    url = f"http://localhost:{api_port}/discovery"
+    # 127.0.0.1 (não 'localhost'): no Linux 'localhost' pode resolver para ::1
+    # (IPv6) primeiro, mas o Docker publica a porta em IPv4 — o urllib não cai
+    # pro IPv4 sozinho e a sonda falharia mesmo com o serviço no ar.
+    url = f"http://127.0.0.1:{api_port}/discovery"
     deadline = time.time() + timeout
     required = ("transport", "base_url", "route_template", "fields")
     while time.time() < deadline:
@@ -458,19 +461,30 @@ def wait_for_discovery(api_port, timeout):
     return False
 
 
+def _probe_health(port):
+    """Uma requisição a /health. Retorna (ok, detalhe). ok=True só em 2xx."""
+    url = f"http://127.0.0.1:{port}/health"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            body = resp.read().decode("utf-8", "replace")
+            return (200 <= resp.status < 300), f"HTTP {resp.status}: {body[:400]}"
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")
+        return False, f"HTTP {e.code}: {body[:400]}"
+    except Exception as e:
+        return False, f"sem resposta ({e})"
+
+
 def wait_for_health(port, timeout):
-    """Poll GET /health (via proxy) até responder com um corpo contendo status."""
-    url = f"http://localhost:{port}/health"
+    """Poll GET /health (via proxy) até responder 2xx. Retorna (ok, detalhe)."""
     deadline = time.time() + timeout
+    detail = "sem resposta"
     while time.time() < deadline:
-        try:
-            with urllib.request.urlopen(url, timeout=5) as resp:
-                if '"status"' in resp.read().decode("utf-8", "replace"):
-                    return True
-        except Exception:
-            pass
+        okp, detail = _probe_health(port)
+        if okp:
+            return True, detail
         time.sleep(3)
-    return False
+    return False, detail
 
 
 def wait_for_pgbouncer(compose_file, attempts=60):
@@ -750,10 +764,13 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
         die("Falha ao subir o stack completo (docker compose up).")
 
     log(f"Aguardando GET /health via proxy (até {args.timeout}s)")
-    if not wait_for_health(args.proxy_port, args.timeout):
+    healthy, detail = wait_for_health(args.proxy_port, args.timeout)
+    if not healthy:
+        warn(f"Última resposta de /health: {detail}")
+        dc("ps")
         dc("logs", "--tail", "60", "openmemory-mcp")
-        die("/health não respondeu a tempo.")
-    ok("/health respondeu.")
+        die("/health não respondeu saudável a tempo (veja a resposta e os logs acima).")
+    ok(f"/health saudável ({detail}).")
 
     log("Instalação de PRODUÇÃO concluída 🎉")
     print(f"""
