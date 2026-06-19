@@ -3,7 +3,13 @@ services:
   traefik:
     image: traefik:v3.3
     restart: unless-stopped
+    # DOCKER_API_VERSION: o cliente docker embutido no Traefik fala API 1.24 por
+    # padrão; daemons recentes recusam (< 1.44) e o provider não descobre rotas
+    # (404 em tudo). O install.py detecta e grava a versão do daemon no .env.
+    environment:
+      - DOCKER_API_VERSION=${DOCKER_API_VERSION:-1.44}
     command:
+      - --ping=true
       - --api.dashboard=false
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false

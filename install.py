@@ -487,6 +487,16 @@ def wait_for_health(port, timeout):
     return False, detail
 
 
+def docker_api_version():
+    """Versão da API do Docker daemon (ex.: '1.51'), ou None se indisponível."""
+    try:
+        r = subprocess.run(["docker", "version", "--format", "{{.Server.APIVersion}}"],
+                           capture_output=True, text=True, timeout=10)
+        return r.stdout.strip() or None
+    except Exception:
+        return None
+
+
 def wait_for_pgbouncer(compose_file, attempts=60):
     """Aguarda o PgBouncer aceitar conexões (pg_isready dentro do container)."""
     for _ in range(attempts):
@@ -728,6 +738,22 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
     if secrets["AUTH_MODE"] == "enforce" and not (args.auth_tokens or read_env(api_env, "AUTH_TOKENS")):
         warn("AUTH_MODE=enforce sem tokens definidos — TODOS os acessos serão negados. "
              "Defina --auth-tokens 'time:token,...'.")
+
+    # DATABASE_URL explícito no .env: mata o warning do compose e habilita o
+    # serviço de backup (pg_dump) — usa as credenciais já validadas acima.
+    set_env(compose_env, "DATABASE_URL",
+            f"postgresql://{secrets['POSTGRES_USER']}:{secrets['POSTGRES_PASSWORD']}"
+            f"@pgbouncer:5432/{secrets['POSTGRES_DB']}")
+
+    # DOCKER_API_VERSION: alinha o cliente docker do Traefik com o daemon. Sem
+    # isso, daemons recentes recusam a API antiga do Traefik e ele não descobre
+    # rotas (404 em tudo).
+    api_ver = docker_api_version()
+    if api_ver:
+        set_env(compose_env, "DOCKER_API_VERSION", api_ver)
+        ok(f"Docker API {api_ver} fixada para o Traefik.")
+    else:
+        warn("Não detectei a versão da API do Docker; usando o default do compose (1.44).")
 
     try:
         user = os.environ.get("USER") or os.environ.get("USERNAME") or getpass.getuser()
