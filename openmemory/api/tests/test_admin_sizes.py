@@ -32,9 +32,19 @@ _spec.loader.exec_module(_admin)
 router = _admin.router
 
 
+def _project_counts():
+    return {"small": 10, "big": 5000}
+
+
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv("PROJECT_PROMOTION_THRESHOLD", "1000")
+    counts = _project_counts()
+    monkeypatch.setattr(
+        _admin,
+        "count_project_memories",
+        lambda name: counts.get(name, 0),
+    )
     # StaticPool + a single shared connection so the sync endpoint (run in a
     # worker thread by TestClient) sees the same in-memory database.
     engine = create_engine(
@@ -78,10 +88,12 @@ def test_sizes_lists_projects_with_tier_and_flag(client):
     assert by_name["small"]["over_threshold"] is False
     assert by_name["small"]["partition_tier"] == "shared"
     assert by_name["small"]["shard_key"] is None
+    assert by_name["small"]["memory_count"] == 10
 
     assert by_name["big"]["over_threshold"] is True
     assert by_name["big"]["partition_tier"] == "dedicated"
     assert by_name["big"]["shard_key"] == "big"
+    assert by_name["big"]["memory_count"] == 5000
 
 
 def test_over_threshold_count_and_metric(client):

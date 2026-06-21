@@ -46,6 +46,11 @@ from app.utils.backup import BackupService
 from app.utils.metrics import PROJECT_MEMORY_COUNT, PROJECT_SIZE_OVER_THRESHOLD
 from app.utils.migration_control import MigrationControl, MigrationError, default_count_fn
 from app.utils.promotion import PromotionService, default_promotion_service
+from app.utils.vector_stats import (
+    count_collection_memories,
+    count_memories_last_24h,
+    count_project_memories,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -82,7 +87,7 @@ def project_sizes(db: Session = Depends(get_db)) -> dict:
     items = []
     over = 0
     for p in projects:
-        count = p.memory_count or 0
+        count = count_project_memories(p.name)
         is_over = count >= threshold
         if is_over:
             over += 1
@@ -284,16 +289,8 @@ def admin_overview(db: Session = Depends(get_db)) -> AdminOverviewResponse:
         return gov_counts.get(status, 0)
 
     total_projects = db.query(func.count(Project.name)).scalar() or 0
-    total_memories = (
-        db.query(func.count(Memory.id))
-        .filter(Memory.state == MemoryState.active)
-        .scalar()
-        or 0
-    )
-    cutoff = datetime.utcnow() - timedelta(hours=24)
-    memories_last_24h = (
-        db.query(func.count(Memory.id)).filter(Memory.created_at >= cutoff).scalar() or 0
-    )
+    total_memories = count_collection_memories()
+    memories_last_24h = count_memories_last_24h()
 
     return AdminOverviewResponse(
         total_projects=total_projects,

@@ -122,7 +122,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
     setError(null);
     try {
       const response = await axios.post<ApiResponse>(
-        `${URL}/api/v1/memories/filter`,
+        `${URL}/api/v1/memories/shared-filter`,
         {
           user_id: user_id,
           page: page,
@@ -132,7 +132,8 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
           category_ids: filters?.categories,
           sort_column: filters?.sortColumn?.toLowerCase(),
           sort_direction: filters?.sortDirection,
-          show_archived: filters?.showArchived
+          show_archived: filters?.showArchived,
+          source: "shared",
         }
       );
 

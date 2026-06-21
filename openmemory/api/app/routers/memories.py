@@ -20,7 +20,7 @@ from app.utils.permissions import check_memory_access_permissions
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi_pagination import Page, Params
 from fastapi_pagination.ext.sqlalchemy import paginate as sqlalchemy_paginate
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
@@ -156,7 +156,12 @@ async def list_memories(
     if sort_column:
         sort_field = getattr(Memory, sort_column, None)
         if sort_field:
-            query = query.order_by(sort_field.desc()) if sort_direction == "desc" else query.order_by(sort_field.asc())
+            if sort_direction == "desc":
+                query = query.order_by(Memory.id, sort_field.desc())
+            else:
+                query = query.order_by(Memory.id, sort_field.asc())
+    else:
+        query = query.order_by(Memory.id, Memory.created_at.desc())
 
     # Add eager loading for app and categories
     query = query.options(
@@ -541,12 +546,75 @@ class FilterMemoriesRequest(BaseModel):
     from_date: Optional[int] = None
     to_date: Optional[int] = None
     show_archived: Optional[bool] = False
+    project: Optional[str] = None
+    source: Optional[str] = None  # "sql" (default) or "shared" (Qdrant/MCP path)
+
+
+class SharedMemoryResponse(BaseModel):
+    id: str
+    content: str
+    created_at: str | int
+    state: str
+    app_id: Optional[UUID] = None
+    app_name: str
+    categories: List[str] = Field(default_factory=list)
+    metadata_: Optional[dict] = None
+
+
+class SharedMemoriesPage(BaseModel):
+    items: List[SharedMemoryResponse]
+    total: int
+    page: int
+    size: int
+    pages: int
+
+
+@router.post("/shared-filter", response_model=SharedMemoriesPage)
+async def filter_shared_memories(request: FilterMemoriesRequest):
+    """List project-scoped memories from Qdrant (MCP write path)."""
+    from app.utils.vector_stats import list_shared_memories
+
+    try:
+        data = list_shared_memories(
+            search=request.search_query,
+            project=request.project,
+            page=request.page,
+            size=request.size,
+            sort_direction=request.sort_direction or "desc",
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    items = [
+        SharedMemoryResponse(
+            id=str(item["id"]),
+            content=item["content"],
+            created_at=item["created_at"],
+            state=item["state"],
+            app_id=item["app_id"],
+            app_name=item["app_name"],
+            categories=item["categories"],
+            metadata_=item.get("metadata_"),
+        )
+        for item in data["items"]
+    ]
+    return SharedMemoriesPage(
+        items=items,
+        total=data["total"],
+        page=data["page"],
+        size=data["size"],
+        pages=data["pages"],
+    )
+
 
 @router.post("/filter", response_model=Page[MemoryResponse])
 async def filter_memories(
     request: FilterMemoriesRequest,
     db: Session = Depends(get_db)
 ):
+    if (request.source or "").lower() == "shared":
+        shared = await filter_shared_memories(request)
+        return Page.create(shared.items, total=shared.total, params=Params(page=shared.page, size=shared.size))
     user = db.query(User).filter(User.user_id == request.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -604,12 +672,12 @@ async def filter_memories(
 
         sort_field = sort_mapping[request.sort_column]
         if sort_direction == 'desc':
-            query = query.order_by(sort_field.desc())
+            query = query.order_by(Memory.id, sort_field.desc())
         else:
-            query = query.order_by(sort_field.asc())
+            query = query.order_by(Memory.id, sort_field.asc())
     else:
-        # Default sorting
-        query = query.order_by(Memory.created_at.desc())
+        # Default sorting — Memory.id first for PostgreSQL DISTINCT ON
+        query = query.order_by(Memory.id, Memory.created_at.desc())
 
     # Add eager loading for categories and make the query distinct
     query = query.options(

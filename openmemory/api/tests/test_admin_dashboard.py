@@ -81,7 +81,9 @@ def _wq(project="proj-x", hostname="host1", status=WriteQueueStatus.queued, text
 # --------------------------------------------------------------------------- #
 # overview
 # --------------------------------------------------------------------------- #
-def test_overview_empty_db_all_zeros(factory):
+def test_overview_empty_db_all_zeros(factory, monkeypatch):
+    monkeypatch.setattr(_admin, "count_collection_memories", lambda: 0)
+    monkeypatch.setattr(_admin, "count_memories_last_24h", lambda: 0)
     client = make_client(factory)
     resp = client.get("/admin/overview")
     assert resp.status_code == 200
@@ -100,7 +102,18 @@ def test_overview_empty_db_all_zeros(factory):
         assert body[key] == 0
 
 
-def test_overview_three_failed_write_jobs(factory):
+def test_overview_uses_qdrant_memory_counts(factory, monkeypatch):
+    monkeypatch.setattr(_admin, "count_collection_memories", lambda: 525)
+    monkeypatch.setattr(_admin, "count_memories_last_24h", lambda: 12)
+    client = make_client(factory)
+    body = client.get("/admin/overview").json()
+    assert body["total_memories"] == 525
+    assert body["memories_last_24h"] == 12
+
+
+def test_overview_three_failed_write_jobs(factory, monkeypatch):
+    monkeypatch.setattr(_admin, "count_collection_memories", lambda: 0)
+    monkeypatch.setattr(_admin, "count_memories_last_24h", lambda: 0)
     db = factory()
     for _ in range(3):
         db.add(_wq(status=WriteQueueStatus.failed))
