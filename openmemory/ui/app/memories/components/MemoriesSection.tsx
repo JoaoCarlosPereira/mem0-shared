@@ -39,7 +39,7 @@ export function MemoriesSection() {
         setTotalItems(result.total);
         setTotalPages(result.pages);
       } catch (error) {
-        console.error("Failed to fetch memories:", error);
+        console.error("Falha ao buscar memórias:", error);
       }
       setIsLoading(false);
     };
@@ -56,7 +56,7 @@ export function MemoriesSection() {
 
   const handlePageSizeChange = (size: number) => {
     const params = new URLSearchParams(searchParams.toString());
-    params.set("page", "1"); // Reset to page 1 when changing page size
+    params.set("page", "1"); // Reset a page 1 when changing page size
     params.set("size", size.toString());
     router.push(`?${params.toString()}`);
   };
@@ -86,9 +86,9 @@ export function MemoriesSection() {
                 onPageSizeChange={handlePageSizeChange}
               />
               <div className="text-sm text-zinc-500 mr-2">
-                Showing {(currentPage - 1) * itemsPerPage + 1} to{" "}
-                {Math.min(currentPage * itemsPerPage, totalItems)} of{" "}
-                {totalItems} memories
+                Exibindo {(currentPage - 1) * itemsPerPage + 1} a{" "}
+                {Math.min(currentPage * itemsPerPage, totalItems)} de{" "}
+                {totalItems} memórias
               </div>
               <MemoryPagination
                 currentPage={currentPage}
@@ -118,11 +118,11 @@ export function MemoriesSection() {
                 <path d="M9 15h6"></path>
               </svg>
             </div>
-            <h3 className="text-lg font-medium">No memories found</h3>
+            <h3 className="text-lg font-medium">Nenhuma memória encontrada</h3>
             <p className="text-zinc-400 mt-1 mb-4">
               {selectedCategory !== "all" || selectedClient !== "all"
-                ? "Try adjusting your filters"
-                : "Create your first memory to see it here"}
+                ? "Tente ajustar seus filtros"
+                : "Crie sua primeira memória para vê-la aqui"}
             </p>
             {selectedCategory !== "all" || selectedClient !== "all" ? (
               <Button
@@ -132,7 +132,7 @@ export function MemoriesSection() {
                   setSelectedClient("all");
                 }}
               >
-                Clear Filters
+                Limpar Filtros
               </Button>
             ) : (
               <CreateMemoryDialog />

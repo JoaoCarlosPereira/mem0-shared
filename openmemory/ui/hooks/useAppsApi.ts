@@ -103,7 +103,7 @@ export const useAppsApi = (): UseAppsApiReturn => {
         total: response.data.total
       };
     } catch (err: any) {
-      const errorMessage = err.message || 'Failed to fetch apps';
+      const errorMessage = err.message || 'Falha ao buscar apps';
       setError(errorMessage);
       dispatch(setAppsError(errorMessage));
       setIsLoading(false);
@@ -121,7 +121,7 @@ export const useAppsApi = (): UseAppsApiReturn => {
       dispatch(setSelectedAppDetails(response.data));
       setIsLoading(false);
     } catch (err: any) {
-      const errorMessage = err.message || 'Failed to fetch app details';
+      const errorMessage = err.message || 'Falha ao buscar detalhes do app';
       dispatch(setSelectedAppError(errorMessage));
       setError(errorMessage);
       setIsLoading(false);
@@ -143,7 +143,7 @@ export const useAppsApi = (): UseAppsApiReturn => {
       }));
       setIsLoading(false);
     } catch (err: any) {
-      const errorMessage = err.message || 'Failed to fetch app memories';
+      const errorMessage = err.message || 'Falha ao buscar memórias do app';
       dispatch(setCreatedMemoriesError(errorMessage));
       setError(errorMessage);
       setIsLoading(false);
@@ -164,7 +164,7 @@ export const useAppsApi = (): UseAppsApiReturn => {
       }));
       setIsLoading(false);
     } catch (err: any) {
-      const errorMessage = err.message || 'Failed to fetch accessed memories';
+      const errorMessage = err.message || 'Falha ao buscar memórias acessadas';
       dispatch(setAccessedMemoriesError(errorMessage));
       setError(errorMessage);
       setIsLoading(false);

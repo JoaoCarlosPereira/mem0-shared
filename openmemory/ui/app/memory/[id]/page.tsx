@@ -38,7 +38,7 @@ function MemoryContent({ id }: { id: string }) {
   }
 
   if (!memory) {
-    return <NotFound message="Memory not found" statusCode={404} />;
+    return <NotFound message="Memória não encontrada" statusCode={404} />;
   }
 
   return <MemoryDetails memory_id={memory.id} />;

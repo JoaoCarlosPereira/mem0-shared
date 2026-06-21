@@ -40,7 +40,7 @@ export function AccessLog({ memoryId }: AccessLogProps) {
   if (isLoading) {
     return (
       <div className="w-full max-w-md mx-auto rounded-3xl overflow-hidden bg-[#1c1c1c] text-white p-6">
-        <p className="text-center text-zinc-500">Loading access logs...</p>
+        <p className="text-center text-zinc-500">Carregando logs de acesso...</p>
       </div>
     );
   }
@@ -48,7 +48,7 @@ export function AccessLog({ memoryId }: AccessLogProps) {
   return (
     <div className="w-full max-w-md mx-auto rounded-lg overflow-hidden bg-zinc-900 border border-zinc-800 text-white pb-1">
       <div className="px-6 py-4 flex justify-between items-center bg-zinc-800 border-b border-zinc-800">
-        <h2 className="font-semibold">Access Log</h2>
+        <h2 className="font-semibold">Log de Acesso</h2>
         {/* <button className="px-3 py-1 text-sm rounded-lg border border-[#ff5533] text-[#ff5533] flex items-center gap-2 hover:bg-[#ff5533]/10 transition-colors">
           <PauseIcon size={18} />
           <span>Pause Access</span>
@@ -59,7 +59,7 @@ export function AccessLog({ memoryId }: AccessLogProps) {
         {accessEntries.length === 0 && (
           <div className="w-full max-w-md mx-auto rounded-3xl overflow-hidden min-h-[110px] flex items-center justify-center text-white p-6">
             <p className="text-center text-zinc-500">
-              No access logs available
+              Nenhum log de acesso disponível
             </p>
           </div>
         )}
@@ -75,7 +75,7 @@ export function AccessLog({ memoryId }: AccessLogProps) {
                   {appConfig.iconImage ? (
                     <Image
                       src={appConfig.iconImage}
-                      alt={`${appConfig.name} icon`}
+                      alt={`${appConfig.name} — ícone`}
                       width={30}
                       height={30}
                       className="w-8 h-8 object-contain"
@@ -95,7 +95,7 @@ export function AccessLog({ memoryId }: AccessLogProps) {
                   <span className="font-medium">{appConfig.name}</span>
                   <span className="text-zinc-400 text-sm">
                     {new Date(entry.accessed_at + "Z").toLocaleDateString(
-                      "en-US",
+                      "pt-BR",
                       {
                         year: "numeric",
                         month: "short",

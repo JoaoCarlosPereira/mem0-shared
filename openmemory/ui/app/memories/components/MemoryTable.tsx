@@ -90,8 +90,8 @@ export function MemoryTable() {
       await updateMemoryState([id], newState);
     } catch (error) {
       toast({
-        title: "Error",
-        description: "Failed to update memory state",
+        title: "Erro",
+        description: "Falha ao atualizar o estado da memória",
         variant: "destructive",
       });
     }
@@ -128,25 +128,25 @@ export function MemoryTable() {
             <TableHead className="border-zinc-700">
               <div className="flex items-center min-w-[600px]">
                 <HiMiniRectangleStack className="mr-1" />
-                Memory
+                Memória
               </div>
             </TableHead>
             <TableHead className="border-zinc-700">
               <div className="flex items-center">
                 <PiSwatches className="mr-1" size={15} />
-                Categories
+                Categorias
               </div>
             </TableHead>
             <TableHead className="w-[140px] border-zinc-700">
               <div className="flex items-center">
                 <GoPackage className="mr-1" />
-                Source App
+                App de Origem
               </div>
             </TableHead>
             <TableHead className="w-[140px] border-zinc-700">
               <div className="flex items-center w-full justify-center">
                 <CiCalendar className="mr-1" size={16} />
-                Created On
+                Criada em
               </div>
             </TableHead>
             <TableHead className="text-right border-zinc-700 flex justify-center">
@@ -194,11 +194,11 @@ export function MemoryTable() {
                       </TooltipTrigger>
                       <TooltipContent>
                         <p>
-                          This memory is{" "}
+                          Esta memória está{" "}
                           <span className="font-bold">
-                            {memory.state === "paused" ? "paused" : "archived"}
+                            {memory.state === "paused" ? "pausada" : "arquivada"}
                           </span>{" "}
-                          and <span className="font-bold">disabled</span>.
+                          e <span className="font-bold">desativada</span>.
                         </p>
                       </TooltipContent>
                     </Tooltip>
@@ -251,12 +251,12 @@ export function MemoryTable() {
                       {memory?.state === "active" ? (
                         <>
                           <Pause className="mr-2 h-4 w-4" />
-                          Pause
+                          Pausar
                         </>
                       ) : (
                         <>
                           <Play className="mr-2 h-4 w-4" />
-                          Resume
+                          Retomar
                         </>
                       )}
                     </DropdownMenuItem>
@@ -270,9 +270,9 @@ export function MemoryTable() {
                     >
                       <Archive className="mr-2 h-4 w-4" />
                       {memory?.state !== "archived" ? (
-                        <>Archive</>
+                        <>Arquivar</>
                       ) : (
-                        <>Unarchive</>
+                        <>Desarquivar</>
                       )}
                     </DropdownMenuItem>
                     <DropdownMenuItem
@@ -280,7 +280,7 @@ export function MemoryTable() {
                       onClick={() => handleEditMemory(memory.id, memory.memory)}
                     >
                       <Edit className="mr-2 h-4 w-4" />
-                      Edit
+                      Editar
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
@@ -288,7 +288,7 @@ export function MemoryTable() {
                       onClick={() => handleDeleteMemory(memory.id)}
                     >
                       <Trash2 className="mr-2 h-4 w-4" />
-                      Delete
+                      Excluir
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>

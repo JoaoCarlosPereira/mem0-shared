@@ -1,4 +1,5 @@
 import { WriteQueueStatus, GovernanceJobStatus } from "@/types/admin";
+import { jobStatusLabel } from "@/lib/i18n/pt-BR";
 
 type AnyStatus = WriteQueueStatus | GovernanceJobStatus;
 
@@ -12,10 +13,10 @@ const STATUS_CLASSES: Record<AnyStatus, string> = {
 export function JobStatusBadge({ status }: { status: AnyStatus }) {
   return (
     <span
-      data-status={status}
+      data-status={jobStatusLabel(status)}
       className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_CLASSES[status]}`}
     >
-      {status}
+      {jobStatusLabel(status)}
     </span>
   );
 }

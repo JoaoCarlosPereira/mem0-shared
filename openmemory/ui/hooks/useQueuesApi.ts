@@ -50,7 +50,7 @@ export const useQueuesApi = (options?: UseQueuesApiOptions) => {
       );
       dispatch(setWriteQueue(res.data));
     } catch (err: any) {
-      dispatch(setQueuesError(err?.message || "Failed to fetch write queue"));
+      dispatch(setQueuesError(err?.message || "Falha ao buscar fila de escrita"));
     }
   }, [dispatch, writeFilter.status, writeFilter.project, writeFilter.page]);
 
@@ -71,7 +71,7 @@ export const useQueuesApi = (options?: UseQueuesApiOptions) => {
       dispatch(setGovernanceQueue(res.data));
     } catch (err: any) {
       dispatch(
-        setQueuesError(err?.message || "Failed to fetch governance jobs"),
+        setQueuesError(err?.message || "Falha ao buscar jobs de governança"),
       );
     }
   }, [

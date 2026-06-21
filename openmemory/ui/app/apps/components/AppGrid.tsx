@@ -33,7 +33,7 @@ export function AppGrid() {
   if (apps.length === 0) {
     return (
       <div className="text-center text-zinc-500 py-8">
-        No apps found matching your filters
+        Nenhum app encontrado para os filtros aplicados
       </div>
     );
   }

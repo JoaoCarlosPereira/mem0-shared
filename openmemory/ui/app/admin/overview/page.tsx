@@ -27,7 +27,7 @@ export default function OverviewPage() {
   if (!overview) {
     return (
       <div>
-        <h1 className="mb-4 text-xl font-semibold text-zinc-100">Overview</h1>
+        <h1 className="mb-4 text-xl font-semibold text-zinc-100">Visão Geral</h1>
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
           {Array.from({ length: 5 }).map((_, i) => (
             <Skeleton key={i} className="h-28 w-full rounded-lg" />
@@ -43,7 +43,7 @@ export default function OverviewPage() {
 
   return (
     <div>
-      <h1 className="mb-4 text-xl font-semibold text-zinc-100">Overview</h1>
+      <h1 className="mb-4 text-xl font-semibold text-zinc-100">Visão Geral</h1>
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
         <StatCard title="Total de Projetos" value={overview.total_projects} />
         <StatCard title="Total de Memórias" value={overview.total_memories} />
@@ -52,7 +52,7 @@ export default function OverviewPage() {
           value={overview.memories_last_24h}
         />
         <StatCard
-          title="Write Queue"
+          title="Fila de Escrita"
           value={writeDepth}
           alert={overview.write_queue_failed > 0}
           hint={
@@ -65,7 +65,7 @@ export default function OverviewPage() {
           }
         />
         <StatCard
-          title="Governance Queue"
+          title="Fila de Governança"
           value={govDepth}
           alert={overview.governance_queue_failed > 0}
           hint={

@@ -41,7 +41,7 @@ export const useConfig = (): UseConfigApiReturn => {
       dispatch(setConfigSuccess(response.data));
       setIsLoading(false);
     } catch (err: any) {
-      const errorMessage = err.response?.data?.detail || err.message || 'Failed to fetch configuration';
+      const errorMessage = err.response?.data?.detail || err.message || 'Falha ao buscar configuração';
       dispatch(setConfigError(errorMessage));
       setError(errorMessage);
       setIsLoading(false);
@@ -59,7 +59,7 @@ export const useConfig = (): UseConfigApiReturn => {
       setIsLoading(false);
       return response.data;
     } catch (err: any) {
-      const errorMessage = err.response?.data?.detail || err.message || 'Failed to save configuration';
+      const errorMessage = err.response?.data?.detail || err.message || 'Falha ao salvar configuração';
       dispatch(setConfigError(errorMessage));
       setError(errorMessage);
       setIsLoading(false);
@@ -77,7 +77,7 @@ export const useConfig = (): UseConfigApiReturn => {
       setIsLoading(false);
       return response.data;
     } catch (err: any) {
-      const errorMessage = err.response?.data?.detail || err.message || 'Failed to reset configuration';
+      const errorMessage = err.response?.data?.detail || err.message || 'Falha ao redefinir configuração';
       dispatch(setConfigError(errorMessage));
       setError(errorMessage);
       setIsLoading(false);
@@ -95,7 +95,7 @@ export const useConfig = (): UseConfigApiReturn => {
       setIsLoading(false);
       return response.data;
     } catch (err: any) {
-      const errorMessage = err.response?.data?.detail || err.message || 'Failed to save LLM configuration';
+      const errorMessage = err.response?.data?.detail || err.message || 'Falha ao salvar configuração do LLM';
       setError(errorMessage);
       setIsLoading(false);
       throw new Error(errorMessage);
@@ -112,7 +112,7 @@ export const useConfig = (): UseConfigApiReturn => {
       setIsLoading(false);
       return response.data;
     } catch (err: any) {
-      const errorMessage = err.response?.data?.detail || err.message || 'Failed to save Embedder configuration';
+      const errorMessage = err.response?.data?.detail || err.message || 'Falha ao salvar configuração do embedder';
       setError(errorMessage);
       setIsLoading(false);
       throw new Error(errorMessage);

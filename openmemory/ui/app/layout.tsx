@@ -7,8 +7,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Providers } from "./providers";
 
 export const metadata = {
-  title: "OpenMemory - Developer Dashboard",
-  description: "Manage your OpenMemory integration and stored memories",
+  title: "OpenMemory - Painel do Desenvolvedor",
+  description: "Gerencie sua integração OpenMemory e as memórias armazenadas",
   generator: "v0.dev",
 };
 
@@ -18,7 +18,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="pt-BR" suppressHydrationWarning>
       <body className="h-screen font-sans antialiased flex flex-col bg-zinc-950">
         <Providers>
           <ThemeProvider

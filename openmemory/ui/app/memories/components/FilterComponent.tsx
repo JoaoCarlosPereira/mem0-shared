@@ -37,15 +37,15 @@ import { useMemoriesApi } from "@/hooks/useMemoriesApi";
 
 const columns = [
   {
-    label: "Memory",
+    label: "Memória",
     value: "memory",
   },
   {
-    label: "App Name",
+    label: "Nome do App",
     value: "app_name",
   },
   {
-    label: "Created On",
+    label: "Criada em",
     value: "created_at",
   },
 ];
@@ -208,7 +208,7 @@ export default function FilterComponent() {
             <Filter
               className={`h-4 w-4 ${hasActiveFilters ? "text-primary" : ""}`}
             />
-            Filter
+            Filtrar
             {hasActiveFilters && (
               <Badge className="ml-2 bg-primary hover:bg-primary/80 text-xs">
                 {filters.selectedApps.length +
@@ -221,7 +221,7 @@ export default function FilterComponent() {
         <DialogContent className="sm:max-w-[425px] bg-zinc-900 border-zinc-800 text-zinc-100">
           <DialogHeader>
             <DialogTitle className="text-zinc-100 flex justify-between items-center">
-              <span>Filters</span>
+              <span>Filtros</span>
             </DialogTitle>
           </DialogHeader>
           <Tabs defaultValue="apps" className="w-full">
@@ -236,13 +236,13 @@ export default function FilterComponent() {
                 value="categories"
                 className="data-[state=active]:bg-zinc-700"
               >
-                Categories
+                Categorias
               </TabsTrigger>
               <TabsTrigger
                 value="archived"
                 className="data-[state=active]:bg-zinc-700"
               >
-                Archived
+                Arquivadas
               </TabsTrigger>
             </TabsList>
             <TabsContent value="apps" className="mt-4">
@@ -262,7 +262,7 @@ export default function FilterComponent() {
                     htmlFor="select-all-apps"
                     className="text-sm font-normal text-zinc-300 cursor-pointer"
                   >
-                    Select All
+                    Selecionar Todos
                   </Label>
                 </div>
                 {apps.map((app) => (
@@ -301,7 +301,7 @@ export default function FilterComponent() {
                     htmlFor="select-all-categories"
                     className="text-sm font-normal text-zinc-300 cursor-pointer"
                   >
-                    Select All
+                    Selecionar Todos
                   </Label>
                 </div>
                 {categories.map((category) => (
@@ -342,7 +342,7 @@ export default function FilterComponent() {
                     htmlFor="show-archived"
                     className="text-sm font-normal text-zinc-300 cursor-pointer"
                   >
-                    Show Archived Memories
+                    Mostrar Memórias Arquivadas
                   </Label>
                 </div>
               </div>
@@ -355,7 +355,7 @@ export default function FilterComponent() {
                 onClick={handleClearFilters}
                 className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
               >
-                Clear All
+                Limpar Tudo
               </Button>
             )}
             {/* Apply filters button */}
@@ -363,7 +363,7 @@ export default function FilterComponent() {
               onClick={handleApplyFilters}
               className="bg-primary hover:bg-primary/80 text-white"
             >
-              Apply Filters
+              Aplicar Filtros
             </Button>
           </div>
         </DialogContent>
@@ -380,12 +380,12 @@ export default function FilterComponent() {
             ) : (
               <SortDesc className="h-4 w-4" />
             )}
-            Sort: {columns.find((c) => c.value === filters.sortColumn)?.label}
+            Ordenar: {columns.find((c) => c.value === filters.sortColumn)?.label}
             <ChevronDown className="h-4 w-4 ml-2" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="w-56 bg-zinc-900 border-zinc-800 text-zinc-100">
-          <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+          <DropdownMenuLabel>Ordenar por</DropdownMenuLabel>
           <DropdownMenuSeparator className="bg-zinc-800" />
           <DropdownMenuGroup>
             {columns.map((column) => (

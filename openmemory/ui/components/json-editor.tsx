@@ -24,7 +24,7 @@ export function JsonEditor({ value, onChange }: JsonEditorProps) {
       setIsValid(true)
       setError(null)
     } catch (err) {
-      setError("Invalid JSON object")
+      setError("Objeto JSON inválido")
       setIsValid(false)
     }
   }, [value])
@@ -36,7 +36,7 @@ export function JsonEditor({ value, onChange }: JsonEditorProps) {
       setIsValid(true)
       setError(null)
     } catch (err) {
-      setError("Invalid JSON syntax")
+      setError("Sintaxe JSON inválida")
       setIsValid(false)
     }
   }
@@ -48,7 +48,7 @@ export function JsonEditor({ value, onChange }: JsonEditorProps) {
       setIsValid(true)
       setError(null)
     } catch (err) {
-      setError("Failed to apply changes: Invalid JSON")
+      setError("Falha ao aplicar alterações: JSON inválido")
     }
   }
 
@@ -72,7 +72,7 @@ export function JsonEditor({ value, onChange }: JsonEditorProps) {
       )}
 
       <Button onClick={handleApply} disabled={!isValid} className="w-full">
-        Apply Changes
+        Aplicar alterações
       </Button>
     </div>
   )

@@ -155,7 +155,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
         pages: response.data.pages
       };
     } catch (err: any) {
-      const errorMessage = err.message || 'Failed to fetch memories';
+      const errorMessage = err.message || 'Falha ao buscar memórias';
       setError(errorMessage);
       setIsLoading(false);
       throw new Error(errorMessage);
@@ -172,7 +172,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
       }
       await axios.post<ApiMemoryItem>(`${getApiUrl()}/api/v1/memories/`, memoryData);
     } catch (err: any) {
-      const errorMessage = err.message || 'Failed to create memory';
+      const errorMessage = err.message || 'Falha ao criar memória';
       setError(errorMessage);
       setIsLoading(false);
       throw new Error(errorMessage);
@@ -186,7 +186,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
       });
       dispatch(setMemoriesSuccess(memories.filter((memory: Memory) => !memory_ids.includes(memory.id))));
     } catch (err: any) {
-      const errorMessage = err.message || 'Failed to delete memories';
+      const errorMessage = err.message || 'Falha ao excluir memórias';
       setError(errorMessage);
       setIsLoading(false);
       throw new Error(errorMessage);
@@ -206,7 +206,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
       setIsLoading(false);
       dispatch(setSelectedMemory(response.data));
     } catch (err: any) {
-      const errorMessage = err.message || 'Failed to fetch memory';
+      const errorMessage = err.message || 'Falha ao buscar memória';
       setError(errorMessage);
       setIsLoading(false);
       throw new Error(errorMessage);
@@ -226,7 +226,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
       setIsLoading(false);
       dispatch(setAccessLogs(response.data.logs));
     } catch (err: any) {
-      const errorMessage = err.message || 'Failed to fetch access logs';
+      const errorMessage = err.message || 'Falha ao buscar logs de acesso';
       setError(errorMessage);
       setIsLoading(false);
       throw new Error(errorMessage);
@@ -258,7 +258,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
       setIsLoading(false);
       dispatch(setRelatedMemories(adaptedMemories));
     } catch (err: any) {
-      const errorMessage = err.message || 'Failed to fetch related memories';
+      const errorMessage = err.message || 'Falha ao buscar memórias relacionadas';
       setError(errorMessage);
       setIsLoading(false);
       throw new Error(errorMessage);
@@ -280,7 +280,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
       setIsLoading(false);
       setHasUpdates(hasUpdates + 1);
     } catch (err: any) {
-      const errorMessage = err.message || 'Failed to update memory';
+      const errorMessage = err.message || 'Falha ao atualizar memória';
       setError(errorMessage);
       setIsLoading(false);
       throw new Error(errorMessage);
@@ -320,7 +320,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
       setIsLoading(false);
       setHasUpdates(hasUpdates + 1);
     } catch (err: any) {
-      const errorMessage = err.message || 'Failed to update memory state';
+      const errorMessage = err.message || 'Falha ao atualizar memória state';
       setError(errorMessage);
       setIsLoading(false);
       throw new Error(errorMessage);

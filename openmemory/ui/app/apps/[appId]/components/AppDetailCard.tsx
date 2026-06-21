@@ -8,6 +8,7 @@ import { setAppDetails } from "@/store/appsSlice";
 import { BiEdit } from "react-icons/bi";
 import { constants } from "@/components/shared/source-app";
 import { RootState } from "@/store/store";
+import { appStatusLabel, formatDateTime } from "@/lib/i18n/pt-BR";
 
 const capitalize = (str: string) => {
   return str.charAt(0).toUpperCase() + str.slice(1);
@@ -49,8 +50,8 @@ const AppDetailCard = ({
   };
 
   const buttonText = selectedApp.details.is_active
-    ? "Pause Access"
-    : "Unpause Access";
+    ? "Pausar Acesso"
+    : "Retomar Acesso";
 
   return (
     <div>
@@ -79,7 +80,7 @@ const AppDetailCard = ({
 
         <div className="space-y-4 p-3">
           <div>
-            <p className="text-xs text-zinc-400">Access Status</p>
+            <p className="text-xs text-zinc-400">Status de Acesso</p>
             <p
               className={`font-medium ${
                 selectedApp.details.is_active
@@ -88,56 +89,56 @@ const AppDetailCard = ({
               }`}
             >
               {capitalize(
-                selectedApp.details.is_active ? "active" : "inactive"
+                appStatusLabel(selectedApp.details.is_active).toLowerCase()
               )}
             </p>
           </div>
 
           <div>
-            <p className="text-xs text-zinc-400">Total Memories Created</p>
+            <p className="text-xs text-zinc-400">Total de Memórias Criadas</p>
             <p className="font-medium">
-              {selectedApp.details.total_memories_created} Memories
+              {selectedApp.details.total_memories_created} Memórias
             </p>
           </div>
 
           <div>
-            <p className="text-xs text-zinc-400">Total Memories Accessed</p>
+            <p className="text-xs text-zinc-400">Total de Memórias Acessadas</p>
             <p className="font-medium">
-              {selectedApp.details.total_memories_accessed} Memories
+              {selectedApp.details.total_memories_accessed} Memórias
             </p>
           </div>
 
           <div>
-            <p className="text-xs text-zinc-400">First Accessed</p>
+            <p className="text-xs text-zinc-400">Primeiro Acesso</p>
             <p className="font-medium">
               {selectedApp.details.first_accessed
                 ? new Date(
                     selectedApp.details.first_accessed
-                  ).toLocaleDateString("en-US", {
+                  ).toLocaleDateString("pt-BR", {
                     day: "numeric",
                     month: "short",
                     year: "numeric",
                     hour: "numeric",
                     minute: "numeric",
                   })
-                : "Never"}
+                : "Nunca"}
             </p>
           </div>
 
           <div>
-            <p className="text-xs text-zinc-400">Last Accessed</p>
+            <p className="text-xs text-zinc-400">Último Acesso</p>
             <p className="font-medium">
               {selectedApp.details.last_accessed
                 ? new Date(
                     selectedApp.details.last_accessed
-                  ).toLocaleDateString("en-US", {
+                  ).toLocaleDateString("pt-BR", {
                     day: "numeric",
                     month: "short",
                     year: "numeric",
                     hour: "numeric",
                     minute: "numeric",
                   })
-                : "Never"}
+                : "Nunca"}
             </p>
           </div>
 
@@ -152,7 +153,7 @@ const AppDetailCard = ({
             >
               {isLoading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
-              ) : buttonText === "Pause Access" ? (
+              ) : buttonText === "Pausar Acesso" ? (
                 <PauseIcon className="h-4 w-4" />
               ) : (
                 <PlayIcon className="h-4 w-4" />

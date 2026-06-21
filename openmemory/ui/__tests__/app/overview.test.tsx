@@ -45,7 +45,7 @@ function renderPage(overview: AdminOverview | null) {
 describe("OverviewPage", () => {
   it("exibe skeleton (sem métricas) quando overview é null", () => {
     renderPage(null);
-    expect(screen.getByText("Overview")).toBeInTheDocument();
+    expect(screen.getByText("Visão Geral")).toBeInTheDocument();
     expect(screen.queryByText("Total de Projetos")).not.toBeInTheDocument();
   });
 

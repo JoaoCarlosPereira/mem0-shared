@@ -19,11 +19,11 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { label: "Overview", href: "/admin/overview", icon: LayoutDashboard },
+  { label: "Visão Geral", href: "/admin/overview", icon: LayoutDashboard },
   { label: "Filas", href: "/admin/queues", icon: ListOrdered },
   { label: "Projetos", href: "/admin/projects", icon: Database },
   { label: "Governança", href: "/admin/governance", icon: Shield },
-  { label: "Audit Log", href: "/admin/audit", icon: ScrollText },
+  { label: "Log de Auditoria", href: "/admin/audit", icon: ScrollText },
 ];
 
 export function AdminSidebar() {

@@ -25,7 +25,7 @@ export function FormView({ settings, onChange }: FormViewProps) {
   const [showLlmApiKey, setShowLlmApiKey] = useState(false)
   const [showEmbedderApiKey, setShowEmbedderApiKey] = useState(false)
   const [isUploading, setIsUploading] = useReactState(false)
-  const [selectedImportFileName, setSelectedImportFileName] = useReactState("")
+  const [selectedImportarFileName, setSelectedImportarFileName] = useReactState("")
   const fileInputRef = useRef<HTMLInputElement>(null)
     const userId = useSelector((state: RootState) => state.profile.userId)
 
@@ -135,44 +135,44 @@ export function FormView({ settings, onChange }: FormViewProps) {
 
   return (
     <div className="space-y-8">
-      {/* OpenMemory Settings */}
+      {/* Configurações do OpenMemory */}
       <Card>
         <CardHeader>
-          <CardTitle>OpenMemory Settings</CardTitle>
-          <CardDescription>Configure your OpenMemory instance settings</CardDescription>
+          <CardTitle>Configurações do OpenMemory</CardTitle>
+          <CardDescription>Configure as opções da sua instância OpenMemory</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">
-            <Label htmlFor="custom-instructions">Custom Instructions</Label>
+            <Label htmlFor="custom-instructions">Instruções personalizadas</Label>
             <Textarea
               id="custom-instructions"
-              placeholder="Enter custom instructions for memory management..."
+              placeholder="Insira instruções personalizadas para gerenciamento de memórias..."
               value={settings.openmemory?.custom_instructions || ""}
               onChange={(e) => handleOpenMemoryChange("custom_instructions", e.target.value)}
               className="min-h-[100px]"
             />
             <p className="text-xs text-muted-foreground mt-1">
-              Custom instructions that will be used to guide memory processing and fact extraction.
+              Instruções usadas para guiar o processamento de memórias e extração de fatos.
             </p>
           </div>
         </CardContent>
       </Card>
 
-      {/* LLM Settings */}
+      {/* Configurações de LLM */}
       <Card>
         <CardHeader>
-          <CardTitle>LLM Settings</CardTitle>
-          <CardDescription>Configure your Large Language Model provider and settings</CardDescription>
+          <CardTitle>Configurações de LLM</CardTitle>
+          <CardDescription>Configure o provedor e as opções do LLM</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">
-            <Label htmlFor="llm-provider">LLM Provider</Label>
+            <Label htmlFor="llm-provider">Provedor de LLM</Label>
             <Select 
               value={settings.mem0?.llm?.provider || ""}
               onValueChange={handleLlmProviderChange}
             >
               <SelectTrigger id="llm-provider">
-                <SelectValue placeholder="Select a provider" />
+                <SelectValue placeholder="Selecione um provedor" />
               </SelectTrigger>
               <SelectContent>
                 {Object.entries(LLM_PROVIDERS).map(([provider, value]) => (
@@ -185,10 +185,10 @@ export function FormView({ settings, onChange }: FormViewProps) {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="llm-model">Model</Label>
+            <Label htmlFor="llm-model">Modelo</Label>
             <Input
               id="llm-model"
-              placeholder="Enter model name"
+              placeholder="Digite o nome do modelo"
               value={settings.mem0?.llm?.config?.model || ""}
               onChange={(e) => handleLlmConfigChange("model", e.target.value)}
             />
@@ -204,14 +204,14 @@ export function FormView({ settings, onChange }: FormViewProps) {
                 onChange={(e) => handleLlmConfigChange("ollama_base_url", e.target.value)}
               />
               <p className="text-xs text-muted-foreground mt-1">
-                Leave empty to use default: http://host.docker.internal:11434
+                Deixe em branco para usar o padrão: http://host.docker.internal:11434
               </p>
             </div>
           )}
 
           {needsLlmApiKey && (
             <div className="space-y-2">
-              <Label htmlFor="llm-api-key">API Key</Label>
+              <Label htmlFor="llm-api-key">Chave de API</Label>
               <div className="relative">
                 <Input
                   id="llm-api-key"
@@ -231,21 +231,21 @@ export function FormView({ settings, onChange }: FormViewProps) {
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Use "env:API_KEY" to load from environment variable, or enter directly
+                Use "env:API_KEY" para carregar de variável de ambiente, ou informe diretamente
               </p>
             </div>
           )}
 
           <div className="flex items-center space-x-2 pt-2">
             <Switch id="llm-advanced-settings" checked={showLlmAdvanced} onCheckedChange={setShowLlmAdvanced} />
-            <Label htmlFor="llm-advanced-settings">Show advanced settings</Label>
+            <Label htmlFor="llm-advanced-settings">Exibir configurações avançadas</Label>
           </div>
 
           {showLlmAdvanced && (
             <div className="space-y-6 pt-2">
               <div className="space-y-2">
                 <div className="flex justify-between">
-                  <Label htmlFor="temperature">Temperature: {settings.mem0?.llm?.config?.temperature}</Label>
+                  <Label htmlFor="temperature">Temperatura: {settings.mem0?.llm?.config?.temperature}</Label>
                 </div>
                 <Slider
                   id="temperature"
@@ -258,7 +258,7 @@ export function FormView({ settings, onChange }: FormViewProps) {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="max-tokens">Max Tokens</Label>
+                <Label htmlFor="max-tokens">Máximo de tokens</Label>
                 <Input
                   id="max-tokens"
                   type="number"
@@ -272,21 +272,21 @@ export function FormView({ settings, onChange }: FormViewProps) {
         </CardContent>
       </Card>
 
-      {/* Embedder Settings */}
+      {/* Configurações do embedder */}
       <Card>
         <CardHeader>
-          <CardTitle>Embedder Settings</CardTitle>
-          <CardDescription>Configure your Embedding Model provider and settings</CardDescription>
+          <CardTitle>Configurações do embedder</CardTitle>
+          <CardDescription>Configure your Embedding Modelo provider and settings</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">
-            <Label htmlFor="embedder-provider">Embedder Provider</Label>
+            <Label htmlFor="embedder-provider">Provedor de embedder</Label>
             <Select 
               value={settings.mem0?.embedder?.provider || ""} 
               onValueChange={handleEmbedderProviderChange}
             >
               <SelectTrigger id="embedder-provider">
-                <SelectValue placeholder="Select a provider" />
+                <SelectValue placeholder="Selecione um provedor" />
               </SelectTrigger>
               <SelectContent>
                 {Object.entries(EMBEDDER_PROVIDERS).map(([provider, value]) => (
@@ -299,10 +299,10 @@ export function FormView({ settings, onChange }: FormViewProps) {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="embedder-model">Model</Label>
+            <Label htmlFor="embedder-model">Modelo</Label>
             <Input
               id="embedder-model"
-              placeholder="Enter model name"
+              placeholder="Digite o nome do modelo"
               value={settings.mem0?.embedder?.config?.model || ""}
               onChange={(e) => handleEmbedderConfigChange("model", e.target.value)}
             />
@@ -318,14 +318,14 @@ export function FormView({ settings, onChange }: FormViewProps) {
                 onChange={(e) => handleEmbedderConfigChange("ollama_base_url", e.target.value)}
               />
               <p className="text-xs text-muted-foreground mt-1">
-                Leave empty to use default: http://host.docker.internal:11434
+                Deixe em branco para usar o padrão: http://host.docker.internal:11434
               </p>
             </div>
           )}
 
           {needsEmbedderApiKey && (
             <div className="space-y-2">
-              <Label htmlFor="embedder-api-key">API Key</Label>
+              <Label htmlFor="embedder-api-key">Chave de API</Label>
               <div className="relative">
                 <Input
                   id="embedder-api-key"
@@ -345,24 +345,24 @@ export function FormView({ settings, onChange }: FormViewProps) {
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Use "env:API_KEY" to load from environment variable, or enter directly
+                Use "env:API_KEY" para carregar de variável de ambiente, ou informe diretamente
               </p>
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Backup (Export / Import) */}
+      {/* Backup (Exportar / Importar) */}
       <Card>
         <CardHeader>
           <CardTitle>Backup</CardTitle>
-          <CardDescription>Export or import your memories</CardDescription>
+          <CardDescription>Exportare ou importe suas memórias</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Export Section */}
+          {/* Exportar Section */}
           <div className="p-4 border border-zinc-800 rounded-lg space-y-2">
-            <div className="text-sm font-medium">Export</div>
-            <p className="text-xs text-muted-foreground">Download a ZIP containing your memories.</p>
+            <div className="text-sm font-medium">Exportar</div>
+            <p className="text-xs text-muted-foreground">Baixe um ZIP contendo suas memórias.</p>
             <div>
               <Button
                 type="button"
@@ -374,7 +374,7 @@ export function FormView({ settings, onChange }: FormViewProps) {
                       headers: { "Content-Type": "application/json", Accept: "application/zip" },
                       body: JSON.stringify({ user_id: userId }),
                     })
-                    if (!res.ok) throw new Error(`Export failed with status ${res.status}`)
+                    if (!res.ok) throw new Error(`Exportar failed with status ${res.status}`)
                     const blob = await res.blob()
                     const url = window.URL.createObjectURL(blob)
                     const a = document.createElement("a")
@@ -386,19 +386,19 @@ export function FormView({ settings, onChange }: FormViewProps) {
                     window.URL.revokeObjectURL(url)
                   } catch (e) {
                     console.error(e)
-                    alert("Export failed. Check console for details.")
+                    alert("Exportar failed. Check console for details.")
                   }
                 }}
               >
-                <Download className="h-4 w-4 mr-2" /> Export Memories
+                <Download className="h-4 w-4 mr-2" /> Exportar memórias
               </Button>
             </div>
           </div>
 
-          {/* Import Section */}
+          {/* Importar Section */}
           <div className="p-4 border border-zinc-800 rounded-lg space-y-2">
-            <div className="text-sm font-medium">Import</div>
-            <p className="text-xs text-muted-foreground">Upload a ZIP exported by OpenMemory. Default settings will be used.</p>
+            <div className="text-sm font-medium">Importar</div>
+            <p className="text-xs text-muted-foreground">Envie um ZIP exportado pelo OpenMemory. As configurações padrão serão usadas.</p>
             <div className="flex items-center gap-3 flex-wrap">
               <input
                 ref={fileInputRef}
@@ -408,7 +408,7 @@ export function FormView({ settings, onChange }: FormViewProps) {
                 onChange={(evt) => {
                   const f = evt.target.files?.[0]
                   if (!f) return
-                  setSelectedImportFileName(f.name)
+                  setSelectedImportarFileName(f.name)
                 }}
               />
               <Button
@@ -418,10 +418,10 @@ export function FormView({ settings, onChange }: FormViewProps) {
                   if (fileInputRef.current) fileInputRef.current.click()
                 }}
               >
-                <Upload className="h-4 w-4 mr-2" /> Choose ZIP
+                <Upload className="h-4 w-4 mr-2" /> Escolher ZIP
               </Button>
               <span className="text-xs text-muted-foreground truncate max-w-[220px]">
-                {selectedImportFileName || "No file selected"}
+                {selectedImportarFileName || "Nenhum arquivo selecionado"}
               </span>
               <div className="ml-auto">
                 <Button
@@ -437,19 +437,19 @@ export function FormView({ settings, onChange }: FormViewProps) {
                       form.append("file", file)
                       form.append("user_id", String(userId))
                       const res = await fetch(`${getApiUrl()}/api/v1/backup/import`, { method: "POST", body: form })
-                      if (!res.ok) throw new Error(`Import failed with status ${res.status}`)
+                      if (!res.ok) throw new Error(`Importar failed with status ${res.status}`)
                       await res.json()
                       if (fileInputRef.current) fileInputRef.current.value = ""
-                      setSelectedImportFileName("")
+                      setSelectedImportarFileName("")
                     } catch (e) {
                       console.error(e)
-                      alert("Import failed. Check console for details.")
+                      alert("Importar failed. Check console for details.")
                     } finally {
                       setIsUploading(false)
                     }
                   }}
                 >
-                  {isUploading ? "Uploading..." : "Import"}
+                  {isUploading ? "Enviando..." : "Importar"}
                 </Button>
               </div>
             </div>

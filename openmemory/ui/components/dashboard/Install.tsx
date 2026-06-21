@@ -36,7 +36,7 @@ const getColorGradient = (color: string) => {
   return "data-[state=active]:bg-[linear-gradient(to_top,_rgba(126,63,242,0.3),_rgba(126,63,242,0))] data-[state=active]:border-[#7E3FF2]";
 };
 
-const allTabs = [{ key: "mcp", label: "MCP Link", icon: "🔗" }, ...clientTabs];
+const allTabs = [{ key: "mcp", label: "Link MCP", icon: "🔗" }, ...clientTabs];
 
 export const Install = () => {
   const [copiedTab, setCopiedTab] = useState<string | null>(null);
@@ -75,7 +75,7 @@ export const Install = () => {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold mb-6">Install OpenMemory</h2>
+      <h2 className="text-xl font-semibold mb-6">Instalar OpenMemory</h2>
 
       <div className="hidden">
         <div className="data-[state=active]:bg-[linear-gradient(to_top,_rgba(239,108,60,0.3),_rgba(239,108,60,0))] data-[state=active]:border-[#EF6C3C]"></div>
@@ -119,7 +119,7 @@ export const Install = () => {
         <TabsContent value="mcp" className="mt-6">
           <Card className="bg-zinc-900 border-zinc-800">
             <CardHeader className="py-4">
-              <CardTitle className="text-white text-xl">MCP Link</CardTitle>
+              <CardTitle className="text-white text-xl">Link MCP</CardTitle>
             </CardHeader>
             <hr className="border-zinc-800" />
             <CardContent className="py-4">
@@ -132,7 +132,7 @@ export const Install = () => {
                 <div>
                   <button
                     className="absolute top-0 right-0 py-3 px-4 rounded-md hover:bg-zinc-600 bg-zinc-700"
-                    aria-label="Copy to clipboard"
+                    aria-label="Copiar para a área de transferência"
                     onClick={() => handleCopy("mcp", true)}
                   >
                     {copiedTab === "mcp" ? (
@@ -168,7 +168,7 @@ export const Install = () => {
                   <div>
                     <button
                       className="absolute top-0 right-0 py-3 px-4 rounded-md hover:bg-zinc-600 bg-zinc-700"
-                      aria-label="Copy to clipboard"
+                      aria-label="Copiar para a área de transferência"
                       onClick={() => handleCopy(key)}
                     >
                       {copiedTab === key ? (

@@ -37,7 +37,7 @@ export function MemoryCard({
 
         {metadata && Object.keys(metadata).length > 0 && (
           <div className="mb-4">
-            <p className="text-xs text-zinc-500 uppercase mb-2">METADATA</p>
+            <p className="text-xs text-zinc-500 uppercase mb-2">METADADOS</p>
             <div className="bg-zinc-800 rounded p-3 text-zinc-400">
               <pre className="whitespace-pre-wrap">
                 {JSON.stringify(metadata, null, 2)}
@@ -58,10 +58,10 @@ export function MemoryCard({
             <span className="text-zinc-400 text-sm">
               {access_count ? (
                 <span className="relative top-1">
-                  Accessed {access_count} times
+                  Acessada {access_count} vezes
                 </span>
               ) : (
-                new Date(created_at + "Z").toLocaleDateString("en-US", {
+                new Date(created_at + "Z").toLocaleDateString("pt-BR", {
                   year: "numeric",
                   month: "short",
                   day: "numeric",
@@ -73,7 +73,7 @@ export function MemoryCard({
 
             {state !== "active" && (
               <span className="inline-block px-3 border border-yellow-600 text-yellow-600 font-semibold text-xs rounded-full bg-yellow-400/10 backdrop-blur-sm">
-                {state === "paused" ? "Paused" : "Archived"}
+                {state === "paused" ? "Pausada" : "Arquivada"}
               </span>
             )}
           </div>
@@ -83,14 +83,14 @@ export function MemoryCard({
               href={`/memory/${id}`}
               className="hover:cursor-pointer bg-zinc-800 hover:bg-zinc-700 flex items-center px-3 py-1 text-sm rounded-lg text-white p-0 hover:text-white"
             >
-              View Details
+              Ver Detalhes
               <ArrowRight className="ml-2 h-4 w-4" />
             </Link>
           )}
           {app_name && (
             <div className="flex items-center gap-2">
               <div className="flex items-center gap-1 bg-zinc-700 px-3 py-1 rounded-lg">
-                <span className="text-sm text-zinc-400">Created by:</span>
+                <span className="text-sm text-zinc-400">Criada por:</span>
                 <div className="w-5 h-5 rounded-full bg-zinc-700 flex items-center justify-center overflow-hidden">
                   <Image
                     src={

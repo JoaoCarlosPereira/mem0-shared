@@ -51,7 +51,7 @@ export default function AppDetailsPage() {
 
   if (selectedApp.error) {
     return (
-      <NotFound message={selectedApp.error} title="Error loading app details" />
+      <NotFound message={selectedApp.error} title="Erro ao carregar detalhes do app" />
     );
   }
 
@@ -92,13 +92,13 @@ export default function AppDetailsPage() {
 
     if (memories.error) {
       return (
-        <NotFound message={memories.error} title="Error loading memories" />
+        <NotFound message={memories.error} title="Erro ao carregar memórias" />
       );
     }
 
     if (memories.items.length === 0) {
       return (
-        <div className="text-zinc-400 text-center py-8">No memories found</div>
+        <div className="text-zinc-400 text-center py-8">Nenhuma memória encontrada</div>
       );
     }
 
@@ -132,7 +132,7 @@ export default function AppDetailsPage() {
     if (memories.error) {
       return (
         <div className="text-red-400 bg-red-400/10 p-4 rounded-lg">
-          Error loading memories: {memories.error}
+          Erro ao carregar memórias: {memories.error}
         </div>
       );
     }
@@ -140,7 +140,7 @@ export default function AppDetailsPage() {
     if (memories.items.length === 0) {
       return (
         <div className="text-zinc-400 text-center py-8">
-          No accessed memories found
+          Nenhuma memória acessada encontrada
         </div>
       );
     }
@@ -181,7 +181,7 @@ export default function AppDetailsPage() {
                   activeTab === "created" ? "text-white" : "text-zinc-400"
                 }`}
               >
-                Created ({selectedApp.memories.created.total})
+                Criadas ({selectedApp.memories.created.total})
               </TabsTrigger>
               <TabsTrigger
                 value="accessed"
@@ -189,7 +189,7 @@ export default function AppDetailsPage() {
                   activeTab === "accessed" ? "text-white" : "text-zinc-400"
                 }`}
               >
-                Accessed ({selectedApp.memories.accessed.total})
+                Acessadas ({selectedApp.memories.accessed.total})
               </TabsTrigger>
             </TabsList>
 

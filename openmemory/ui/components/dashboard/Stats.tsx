@@ -22,17 +22,17 @@ const Stats = () => {
   return (
     <div className="bg-zinc-900 rounded-lg border border-zinc-800">
       <div className="bg-zinc-800 border-b border-zinc-800 rounded-t-lg p-4">
-        <div className="text-white text-xl font-semibold">Memories Stats</div>
+        <div className="text-white text-xl font-semibold">Estatísticas de Memórias</div>
       </div>
       <div className="space-y-3 p-4">
         <div>
-          <p className="text-zinc-400">Total Memories</p>
+          <p className="text-zinc-400">Total de Memórias</p>
           <h3 className="text-lg font-bold text-white">
-            {totalMemories} Memories
+            {totalMemories} Memórias
           </h3>
         </div>
         <div>
-          <p className="text-zinc-400">Total Apps Connected</p>
+          <p className="text-zinc-400">Total de Apps Conectados</p>
           <div className="flex flex-col items-start gap-1 mt-2">
             <div className="flex -space-x-2">
               {apps.map((app) => (

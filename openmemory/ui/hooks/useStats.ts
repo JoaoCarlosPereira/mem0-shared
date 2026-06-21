@@ -48,7 +48,7 @@ export const useStats = (): UseMemoriesApiReturn => {
       dispatch(setTotalApps(response.data.total_apps));
       dispatch(setApps(response.data.apps));
     } catch (err: any) {
-      const errorMessage = err.message || 'Failed to fetch stats';
+      const errorMessage = err.message || 'Falha ao buscar estatísticas';
       setError(errorMessage);
       setIsLoading(false);
       throw new Error(errorMessage);

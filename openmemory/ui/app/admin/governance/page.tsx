@@ -30,10 +30,10 @@ import { getApiUrl } from "@/lib/api-url";
 
 
 const JOB_TYPES: { type: string; label: string; destructive?: boolean }[] = [
-  { type: "dedup", label: "Dedup" },
+  { type: "dedup", label: "Deduplicar" },
   { type: "ttl_prune", label: "TTL Prune" },
-  { type: "consolidate", label: "Consolidate" },
-  { type: "purge", label: "Purge", destructive: true },
+  { type: "consolidate", label: "Consolidar" },
+  { type: "purge", label: "Purgar", destructive: true },
 ];
 
 function fmtDate(iso: string): string {

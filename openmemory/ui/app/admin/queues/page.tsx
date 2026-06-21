@@ -51,10 +51,10 @@ function StatusCounters({
 }) {
   return (
     <div className="mb-3 flex gap-4 text-sm text-zinc-400">
-      <span>queued: {queued}</span>
-      <span>processing: {processing}</span>
-      <span>done: {done}</span>
-      <span className={failed > 0 ? "text-red-400" : ""}>failed: {failed}</span>
+      <span>na fila: {queued}</span>
+      <span>processando: {processing}</span>
+      <span>concluído: {done}</span>
+      <span className={failed > 0 ? "text-red-400" : ""}>falhou: {failed}</span>
     </div>
   );
 }
@@ -154,8 +154,8 @@ export default function QueuesPage() {
       <h1 className="mb-4 text-xl font-semibold text-zinc-100">Filas</h1>
       <Tabs defaultValue="write">
         <TabsList>
-          <TabsTrigger value="write">Write Queue</TabsTrigger>
-          <TabsTrigger value="governance">Governance Queue</TabsTrigger>
+          <TabsTrigger value="write">Fila de Escrita</TabsTrigger>
+          <TabsTrigger value="governance">Fila de Governança</TabsTrigger>
         </TabsList>
 
         <TabsContent value="write" className="mt-4">

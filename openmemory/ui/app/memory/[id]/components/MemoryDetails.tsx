@@ -45,7 +45,7 @@ export function MemoryDetails({ memory_id }: MemoryDetailsProps) {
         onClick={() => router.back()}
       >
         <ArrowLeft className="h-4 w-4 mr-2" />
-        Back to Memories
+        Voltar para Memórias
       </Button>
       <div className="flex gap-4 w-full">
         <div className="rounded-lg w-2/3 border h-fit pb-2 border-zinc-800 bg-zinc-900 overflow-hidden">
@@ -53,7 +53,7 @@ export function MemoryDetails({ memory_id }: MemoryDetailsProps) {
             <div className="flex px-6 py-3 justify-between items-center mb-6 bg-zinc-800 border-b border-zinc-800">
               <div className="flex items-center gap-2">
                 <h1 className="font-semibold text-white">
-                  Memory{" "}
+                  Memória{" "}
                   <span className="ml-1 text-zinc-400 text-sm font-normal">
                     #{memory?.id?.slice(0, 6)}
                   </span>
@@ -106,7 +106,7 @@ export function MemoryDetails({ memory_id }: MemoryDetailsProps) {
                     <div className="flex items-center gap-2">
                       <div className="flex items-center gap-1 bg-zinc-700 px-3 py-1 rounded-lg">
                         <span className="text-sm text-zinc-400">
-                          Created by:
+                          Criada por:
                         </span>
                         <div className="w-4 h-4 rounded-full bg-zinc-700 flex items-center justify-center overflow-hidden">
                           <Image
@@ -115,7 +115,7 @@ export function MemoryDetails({ memory_id }: MemoryDetailsProps) {
                                 memory?.app_name as keyof typeof constants
                               ]?.iconImage || ""
                             }
-                            alt="OpenMemory"
+                            alt="App de origem"
                             width={24}
                             height={24}
                           />

@@ -38,7 +38,7 @@ const UpdateMemory = ({
   const handleUpdateMemory = async (text: string) => {
     try {
       await updateMemory(memoryId, text);
-      toast.success("Memory updated successfully");
+      toast.success("Memória atualizada com sucesso");
       onOpenChange(false);
       if (pathname.includes("memories")) {
         await fetchMemories();
@@ -47,7 +47,7 @@ const UpdateMemory = ({
       }
     } catch (error) {
       console.error(error);
-      toast.error("Failed to update memory");
+      toast.error("Falha ao atualizar memória");
     }
   };
 
@@ -55,12 +55,12 @@ const UpdateMemory = ({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[525px] bg-zinc-900 border-zinc-800 z-50">
         <DialogHeader>
-          <DialogTitle>Update Memory</DialogTitle>
-          <DialogDescription>Edit your existing memory</DialogDescription>
+          <DialogTitle>Atualizar Memória</DialogTitle>
+          <DialogDescription>Edite sua memória existente</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">
           <div className="grid gap-2">
-            <Label htmlFor="memory">Memory</Label>
+            <Label htmlFor="memory">Memória</Label>
             <Textarea
               ref={textRef}
               id="memory"
@@ -71,7 +71,7 @@ const UpdateMemory = ({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            Cancelar
           </Button>
           <Button
             className="w-[140px]"
@@ -81,7 +81,7 @@ const UpdateMemory = ({
             {isLoading ? (
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
             ) : (
-              "Update Memory"
+              "Atualizar Memória"
             )}
           </Button>
         </DialogFooter>

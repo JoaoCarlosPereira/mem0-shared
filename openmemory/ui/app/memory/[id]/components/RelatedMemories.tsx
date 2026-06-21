@@ -6,6 +6,7 @@ import { Memory } from "@/components/types";
 import Categories from "@/components/shared/categories";
 import Link from "next/link";
 import { formatDate } from "@/lib/helpers";
+import { memoryStateLabel } from "@/lib/i18n/pt-BR";
 interface RelatedMemoriesProps {
   memoryId: string;
 }
@@ -34,7 +35,7 @@ export function RelatedMemories({ memoryId }: RelatedMemoriesProps) {
   if (isLoading) {
     return (
       <div className="w-full max-w-2xl mx-auto rounded-lg overflow-hidden bg-zinc-900 text-white p-6">
-        <p className="text-center text-zinc-500">Loading related memories...</p>
+        <p className="text-center text-zinc-500">Carregando memórias relacionadas...</p>
       </div>
     );
   }
@@ -42,7 +43,7 @@ export function RelatedMemories({ memoryId }: RelatedMemoriesProps) {
   if (!relatedMemories.length) {
     return (
       <div className="w-full max-w-2xl mx-auto rounded-lg overflow-hidden bg-zinc-900 text-white p-6">
-        <p className="text-center text-zinc-500">No related memories found</p>
+        <p className="text-center text-zinc-500">Nenhuma memória relacionada encontrada</p>
       </div>
     );
   }
@@ -50,7 +51,7 @@ export function RelatedMemories({ memoryId }: RelatedMemoriesProps) {
   return (
     <div className="w-full max-w-2xl mx-auto rounded-lg overflow-hidden bg-zinc-900 border border-zinc-800 text-white">
       <div className="px-6 py-4 flex justify-between items-center bg-zinc-800 border-b border-zinc-800">
-        <h2 className="font-semibold">Related Memories</h2>
+        <h2 className="font-semibold">Memórias Relacionadas</h2>
       </div>
       <div className="space-y-6 p-6">
         {relatedMemories.map((memory: Memory) => (
@@ -71,7 +72,7 @@ export function RelatedMemories({ memoryId }: RelatedMemoriesProps) {
                   />
                   {memory.state !== "active" && (
                     <span className="inline-block px-3 border border-yellow-600 text-yellow-600 font-semibold text-xs rounded-full bg-yellow-400/10 backdrop-blur-sm">
-                      {memory.state === "paused" ? "Paused" : "Archived"}
+                      {memory.state === "paused" ? memoryStateLabel("paused") : memoryStateLabel("archived")}
                     </span>
                   )}
                 </div>

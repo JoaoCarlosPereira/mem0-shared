@@ -48,7 +48,7 @@ export const useFiltersApi = (): UseFiltersApiReturn => {
       }));
       setIsLoading(false);
     } catch (err: any) {
-      const errorMessage = err.message || 'Failed to fetch categories';
+      const errorMessage = err.message || 'Falha ao buscar categorias';
       setError(errorMessage);
       dispatch(setCategoriesError(errorMessage));
       setIsLoading(false);

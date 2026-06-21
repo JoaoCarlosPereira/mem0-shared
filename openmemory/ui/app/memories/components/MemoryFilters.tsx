@@ -94,7 +94,7 @@ export function MemoryFilters() {
         <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
         <Input
           ref={inputRef}
-          placeholder="Search memories..."
+          placeholder="Buscar memórias..."
           className="pl-8 bg-zinc-950 border-zinc-800 max-w-[500px]"
           onChange={(e) => handleSearch(e.target.value)}
         />
@@ -107,7 +107,7 @@ export function MemoryFilters() {
             className="bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
             onClick={handleClearAllFilters}
           >
-            Clear Filters
+            Limpar Filtros
           </Button>
         )}
         {selectedMemoryIds.length > 0 && (
@@ -118,7 +118,7 @@ export function MemoryFilters() {
                   variant="outline"
                   className="border-zinc-700/50 bg-zinc-900 hover:bg-zinc-800"
                 >
-                  Actions
+                  Ações
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent
@@ -127,22 +127,22 @@ export function MemoryFilters() {
               >
                 <DropdownMenuItem onClick={handleArchiveSelected}>
                   <Archive className="mr-2 h-4 w-4" />
-                  Archive Selected
+                  Arquivar Selecionadas
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={handlePauseSelected}>
                   <Pause className="mr-2 h-4 w-4" />
-                  Pause Selected
+                  Pausar Selecionadas
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={handleResumeSelected}>
                   <Play className="mr-2 h-4 w-4" />
-                  Resume Selected
+                  Retomar Selecionadas
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={handleDeleteSelected}
                   className="text-red-500"
                 >
                   <FiTrash2 className="mr-2 h-4 w-4" />
-                  Delete Selected
+                  Excluir Selecionadas
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

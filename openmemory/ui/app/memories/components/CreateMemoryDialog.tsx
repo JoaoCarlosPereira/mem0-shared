@@ -26,14 +26,14 @@ export function CreateMemoryDialog() {
   const handleCreateMemory = async (text: string) => {
     try {
       await createMemory(text);
-      toast.success("Memory created successfully");
+      toast.success("Memória criada com sucesso");
       // close the dialog
       setOpen(false);
       // refetch memories
       await fetchMemories();
     } catch (error) {
       console.error(error);
-      toast.error("Failed to create memory");
+      toast.error("Falha ao criar memória");
     }
   };
 
@@ -46,30 +46,30 @@ export function CreateMemoryDialog() {
           className="bg-primary hover:bg-primary/90 text-white"
         >
           <GoPlus />
-          Create Memory
+          Criar Memória
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-[525px] bg-zinc-900 border-zinc-800">
         <DialogHeader>
-          <DialogTitle>Create New Memory</DialogTitle>
+          <DialogTitle>Criar Nova Memória</DialogTitle>
           <DialogDescription>
-            Add a new memory to your OpenMemory instance
+            Adicione uma nova memória à sua instância OpenMemory
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">
           <div className="grid gap-2">
-            <Label htmlFor="memory">Memory</Label>
+            <Label htmlFor="memory">Memória</Label>
             <Textarea
               ref={textRef}
               id="memory"
-              placeholder="e.g., Lives in San Francisco"
+              placeholder="ex.: Mora em São Paulo"
               className="bg-zinc-950 border-zinc-800 min-h-[150px]"
             />
           </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>
-            Cancel
+            Cancelar
           </Button>
           <Button
             disabled={isLoading}
@@ -78,7 +78,7 @@ export function CreateMemoryDialog() {
             {isLoading ? (
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
             ) : (
-              "Save Memory"
+              "Salvar Memória"
             )}
           </Button>
         </DialogFooter>

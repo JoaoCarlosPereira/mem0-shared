@@ -36,7 +36,7 @@ beforeEach(() => {
 describe("AdminSidebar", () => {
   it("renderiza os 5 itens de menu", () => {
     renderSidebar();
-    ["Overview", "Filas", "Projetos", "Governança", "Audit Log"].forEach(
+    ["Visão Geral", "Filas", "Projetos", "Governança", "Log de Auditoria"].forEach(
       (label) => {
         expect(screen.getByText(label)).toBeInTheDocument();
       },

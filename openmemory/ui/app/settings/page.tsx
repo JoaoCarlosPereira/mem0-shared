@@ -36,14 +36,13 @@ export default function SettingsPage() {
   const { fetchConfig, saveConfig, resetConfig, isLoading, error } = useConfig()
 
   useEffect(() => {
-    // Load config from API on component mount
     const loadConfig = async () => {
       try {
         await fetchConfig()
       } catch (error) {
         toast({
-          title: "Error",
-          description: "Failed to load configuration",
+          title: "Erro",
+          description: "Falha ao carregar configuração",
           variant: "destructive",
         })
       }
@@ -52,7 +51,6 @@ export default function SettingsPage() {
     loadConfig()
   }, [])
 
-  // Update local state when redux state changes
   useEffect(() => {
     setSettings(prev => ({
       ...prev,
@@ -68,13 +66,13 @@ export default function SettingsPage() {
         mem0: settings.mem0 
       })
       toast({
-        title: "Settings saved",
-        description: "Your configuration has been updated successfully.",
+        title: "Configurações salvas",
+        description: "Sua configuração foi atualizada com sucesso.",
       })
     } catch (error) {
       toast({
-        title: "Error",
-        description: "Failed to save configuration",
+        title: "Erro",
+        description: "Falha ao salvar configuração",
         variant: "destructive",
       })
     }
@@ -84,14 +82,14 @@ export default function SettingsPage() {
     try {
       await resetConfig()
       toast({
-        title: "Settings reset",
-        description: "Configuration has been reset to default values.",
+        title: "Configurações redefinidas",
+        description: "A configuração foi restaurada para os valores padrão.",
       })
       await fetchConfig()
     } catch (error) {
       toast({
-        title: "Error",
-        description: "Failed to reset configuration",
+        title: "Erro",
+        description: "Falha ao redefinir configuração",
         variant: "destructive",
       })
     }
@@ -102,29 +100,30 @@ export default function SettingsPage() {
       <div className="container mx-auto py-10 max-w-4xl">
         <div className="flex justify-between items-center mb-8">
           <div className="animate-fade-slide-down">
-            <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
-            <p className="text-muted-foreground mt-1">Manage your OpenMemory and Mem0 configuration</p>
+            <h1 className="text-3xl font-bold tracking-tight">Configurações</h1>
+            <p className="text-muted-foreground mt-1">Gerencie sua configuração do OpenMemory e do Mem0</p>
           </div>
           <div className="flex space-x-2">
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="outline" className="border-zinc-800 text-zinc-200 hover:bg-zinc-700 hover:text-zinc-50 animate-fade-slide-down" disabled={isLoading}>
                   <RotateCcw className="mr-2 h-4 w-4" />
-                  Reset Defaults
+                  Restaurar padrões
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Reset Configuration?</AlertDialogTitle>
+                  <AlertDialogTitle>Redefinir configuração?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    This will reset all settings to the system defaults. Any custom configuration will be lost.
-                    API keys will be set to use environment variables.
+                    Isso irá redefinir todas as configurações para os padrões do sistema.
+                    Qualquer configuração personalizada será perdida. As chaves de API
+                    serão definidas para usar variáveis de ambiente.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
                   <AlertDialogAction onClick={handleReset} className="bg-red-600 hover:bg-red-700">
-                    Reset
+                    Redefinir
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
@@ -132,15 +131,15 @@ export default function SettingsPage() {
             
             <Button onClick={handleSave} className="bg-primary hover:bg-primary/90 animate-fade-slide-down" disabled={isLoading}>
               <SaveIcon className="mr-2 h-4 w-4" />
-              {isLoading ? "Saving..." : "Save Configuration"}
+              {isLoading ? "Salvando..." : "Salvar configuração"}
             </Button>
           </div>
         </div>
 
         <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as "form" | "json")} className="w-full animate-fade-slide-down delay-1">
           <TabsList className="grid w-full grid-cols-2 mb-8">
-            <TabsTrigger value="form">Form View</TabsTrigger>
-            <TabsTrigger value="json">JSON Editor</TabsTrigger>
+            <TabsTrigger value="form">Formulário</TabsTrigger>
+            <TabsTrigger value="json">Editor JSON</TabsTrigger>
           </TabsList>
 
           <TabsContent value="form">
@@ -150,8 +149,8 @@ export default function SettingsPage() {
           <TabsContent value="json">
             <Card>
               <CardHeader>
-                <CardTitle>JSON Configuration</CardTitle>
-                <CardDescription>Edit the entire configuration directly as JSON</CardDescription>
+                <CardTitle>Configuração JSON</CardTitle>
+                <CardDescription>Edite toda a configuração diretamente em JSON</CardDescription>
               </CardHeader>
               <CardContent>
                 <JsonEditor value={settings} onChange={setSettings} />

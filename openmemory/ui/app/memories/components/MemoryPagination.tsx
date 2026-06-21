@@ -24,7 +24,7 @@ export function MemoryPagination({
           <ChevronLeft className="h-4 w-4" />
         </Button>
         <div className="text-sm">
-          Page {currentPage} of {totalPages}
+          Página {currentPage} de {totalPages}
         </div>
         <Button
           variant="outline"

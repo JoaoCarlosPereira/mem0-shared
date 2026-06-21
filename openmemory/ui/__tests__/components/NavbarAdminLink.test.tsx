@@ -26,15 +26,15 @@ describe("Navbar", () => {
     expect(adminLink).toHaveAttribute("href", "/admin");
   });
 
-  it("mantém os links existentes (Dashboard, Memories, Apps, Settings)", () => {
+  it("mantém os links existentes (Painel, Memórias, Apps, Configurações)", () => {
     render(
       <Provider store={store}>
         <Navbar />
       </Provider>,
     );
-    expect(screen.getByText("Dashboard")).toBeInTheDocument();
-    expect(screen.getByText("Memories")).toBeInTheDocument();
+    expect(screen.getByText("Painel")).toBeInTheDocument();
+    expect(screen.getByText("Memórias")).toBeInTheDocument();
     expect(screen.getByText("Apps")).toBeInTheDocument();
-    expect(screen.getByText("Settings")).toBeInTheDocument();
+    expect(screen.getByText("Configurações")).toBeInTheDocument();
   });
 });

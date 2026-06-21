@@ -33,9 +33,9 @@ import {
 import { Button } from "@/components/ui/button";
 
 const sortOptions = [
-  { value: "name", label: "Name" },
-  { value: "memories", label: "Memories Created" },
-  { value: "memories_accessed", label: "Memories Accessed" },
+  { value: "name", label: "Nome" },
+  { value: "memories", label: "Memórias Criadas" },
+  { value: "memories_accessed", label: "Memórias Acessadas" },
 ];
 
 export function AppFilters() {
@@ -83,7 +83,7 @@ export function AppFilters() {
       <div className="relative flex-1">
         <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
         <Input
-          placeholder="Search Apps..."
+          placeholder="Buscar apps..."
           className="pl-8 bg-zinc-950 border-zinc-800 max-w-[500px]"
           value={localSearch}
           onChange={handleSearchChange}
@@ -98,9 +98,9 @@ export function AppFilters() {
           <SelectValue placeholder="Status" />
         </SelectTrigger>
         <SelectContent className="border-zinc-700/50 bg-zinc-900 hover:bg-zinc-800">
-          <SelectItem value="all">All Status</SelectItem>
-          <SelectItem value="true">Active</SelectItem>
-          <SelectItem value="false">Inactive</SelectItem>
+          <SelectItem value="all">Todos os status</SelectItem>
+          <SelectItem value="true">Ativo</SelectItem>
+          <SelectItem value="false">Inativo</SelectItem>
         </SelectContent>
       </Select>
 
@@ -115,12 +115,12 @@ export function AppFilters() {
             ) : (
               <SortAsc className="h-4 w-4 mr-2" />
             )}
-            Sort: {sortOptions.find((o) => o.value === filters.sortBy)?.label}
+            Ordenar: {sortOptions.find((o) => o.value === filters.sortBy)?.label}
             <ChevronDown className="h-4 w-4 ml-2" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="w-56 bg-zinc-900 border-zinc-800 text-zinc-100">
-          <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+          <DropdownMenuLabel>Ordenar por</DropdownMenuLabel>
           <DropdownMenuSeparator className="bg-zinc-800" />
           <DropdownMenuGroup>
             {sortOptions.map((option) => (

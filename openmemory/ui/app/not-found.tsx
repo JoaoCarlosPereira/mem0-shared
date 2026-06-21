@@ -18,7 +18,7 @@ const getStatusCode = (message: string) => {
 
 export default function NotFound({
   statusCode,
-  message = "Page Not Found",
+  message = "Página não encontrada",
   title,
 }: NotFoundProps) {
   const potentialStatusCode = getStatusCode(message);
@@ -36,7 +36,7 @@ export default function NotFound({
             : potentialStatusCode
             ? `${potentialStatusCode}:`
             : "404"}
-          <small>{title || message || "Page Not Found"}</small>
+          <small>{title || message || "Página não encontrada"}</small>
         </h1>
       </div>
 
@@ -45,7 +45,7 @@ export default function NotFound({
           variant="outline"
           className="bg-primary text-white hover:bg-primary/80"
         >
-          <Link href="/">Go Home</Link>
+          <Link href="/">Ir para o início</Link>
         </Button>
       </div>
     </div>

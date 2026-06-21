@@ -39,7 +39,7 @@ export const useAdminApi = (options?: UseAdminApiOptions) => {
       const res = await axios.get(`${getApiUrl()}/admin/overview`);
       dispatch(setAdminOverview(res.data));
     } catch (err: any) {
-      dispatch(setAdminError(err?.message || "Failed to fetch overview"));
+      dispatch(setAdminError(err?.message || "Falha ao buscar visão geral"));
     }
   }, [dispatch]);
 

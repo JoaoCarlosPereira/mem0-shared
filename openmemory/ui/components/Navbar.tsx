@@ -107,7 +107,7 @@ export function Navbar() {
               }`}
             >
               <HiHome />
-              Dashboard
+              Painel
             </Button>
           </Link>
           <Link href="/memories">
@@ -119,7 +119,7 @@ export function Navbar() {
               }`}
             >
               <HiMiniRectangleStack />
-              Memories
+              Memórias
             </Button>
           </Link>
           <Link href="/apps">
@@ -143,7 +143,7 @@ export function Navbar() {
               }`}
             >
               <Settings />
-              Settings
+              Configurações
             </Button>
           </Link>
           <Link href="/admin">
@@ -167,7 +167,7 @@ export function Navbar() {
             className="border-zinc-700/50 bg-zinc-900 hover:bg-zinc-800"
           >
             <FiRefreshCcw className="transition-transform duration-300 group-hover:rotate-180" />
-            Refresh
+            Atualizar
           </Button>
           <CreateMemoryDialog />
         </div>

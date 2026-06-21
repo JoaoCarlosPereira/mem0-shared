@@ -108,7 +108,7 @@ export default function AuditPage() {
 
   return (
     <div>
-      <h1 className="mb-4 text-xl font-semibold text-zinc-100">Audit Log</h1>
+      <h1 className="mb-4 text-xl font-semibold text-zinc-100">Log de Auditoria</h1>
 
       <div className="mb-3 flex flex-wrap items-end gap-2">
         <div>

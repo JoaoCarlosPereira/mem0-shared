@@ -50,15 +50,15 @@ export function AppCard({ app }: AppCardProps) {
       <CardContent className="pb-4 my-1">
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <p className="text-zinc-400 text-sm mb-1">Memories Created</p>
+            <p className="text-zinc-400 text-sm mb-1">Memórias Criadas</p>
             <p className="text-xl font-medium">
-              {app.total_memories_created.toLocaleString()} Memories
+              {app.total_memories_created.toLocaleString()} Memórias
             </p>
           </div>
           <div>
-            <p className="text-zinc-400 text-sm mb-1">Memories Accessed</p>
+            <p className="text-zinc-400 text-sm mb-1">Memórias Acessadas</p>
             <p className="text-xl font-medium">
-              {app.total_memories_accessed.toLocaleString()} Memories
+              {app.total_memories_accessed.toLocaleString()} Memórias
             </p>
           </div>
         </div>
@@ -72,13 +72,13 @@ export function AppCard({ app }: AppCardProps) {
           } rounded-lg px-2 py-0.5 flex items-center text-sm`}
         >
           <span className="h-2 w-2 my-auto mr-1 rounded-full inline-block bg-current"></span>
-          {isActive ? "Active" : "Inactive"}
+          {isActive ? "Ativo" : "Inativo"}
         </div>
         <div
           onClick={() => router.push(`/apps/${app.id}`)}
           className="border hover:cursor-pointer border-zinc-700 bg-zinc-950 flex items-center px-3 py-1 text-sm rounded-lg text-white p-0 hover:bg-zinc-950/50 hover:text-white"
         >
-          View Details <ArrowRight className="ml-2 h-4 w-4" />
+          Ver Detalhes <ArrowRight className="ml-2 h-4 w-4" />
         </div>
       </CardFooter>
     </Card>
