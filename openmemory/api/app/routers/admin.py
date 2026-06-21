@@ -11,14 +11,36 @@ Migration control endpoints (start/flip/rollback, promote) are added to this sam
 router by task_07 / task_08.
 """
 
+import csv
+import io
+import math
 import os
+from datetime import datetime, timedelta
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Project
+from app.models import (
+    GovernanceJob,
+    GovernanceJobStatus,
+    Memory,
+    MemoryState,
+    Project,
+    WriteAuditLog,
+    WriteQueueJob,
+    WriteQueueStatus,
+)
+from app.schemas import (
+    AdminOverviewResponse,
+    PaginatedWriteAuditResponse,
+    PaginatedWriteQueueResponse,
+    WriteAuditLogResponse,
+    WriteQueueJobResponse,
+)
 from app.utils.backup import BackupService
 from app.utils.metrics import PROJECT_MEMORY_COUNT, PROJECT_SIZE_OVER_THRESHOLD
 from app.utils.migration_control import MigrationControl, MigrationError, default_count_fn
@@ -168,3 +190,198 @@ def backup_restore(
         raise HTTPException(status_code=404, detail=f"no backup under {req.key_prefix}")
     background.add_task(service.restore, req.key_prefix)
     return {"status": "accepted", "key_prefix": req.key_prefix}
+
+
+# --------------------------------------------------------------------------- #
+# Admin dashboard: overview, write-queue & write-audit (Interface Admin)
+# --------------------------------------------------------------------------- #
+@router.get("/overview", response_model=AdminOverviewResponse)
+def admin_overview(db: Session = Depends(get_db)) -> AdminOverviewResponse:
+    """Aggregate real-time queue and system counts in a single response."""
+    write_counts = dict(
+        db.query(WriteQueueJob.status, func.count())
+        .group_by(WriteQueueJob.status)
+        .all()
+    )
+    gov_counts = dict(
+        db.query(GovernanceJob.status, func.count())
+        .group_by(GovernanceJob.status)
+        .all()
+    )
+
+    def _wq(status: WriteQueueStatus) -> int:
+        return write_counts.get(status, 0)
+
+    def _gq(status: GovernanceJobStatus) -> int:
+        return gov_counts.get(status, 0)
+
+    total_projects = db.query(func.count(Project.name)).scalar() or 0
+    total_memories = (
+        db.query(func.count(Memory.id))
+        .filter(Memory.state == MemoryState.active)
+        .scalar()
+        or 0
+    )
+    cutoff = datetime.utcnow() - timedelta(hours=24)
+    memories_last_24h = (
+        db.query(func.count(Memory.id)).filter(Memory.created_at >= cutoff).scalar() or 0
+    )
+
+    return AdminOverviewResponse(
+        total_projects=total_projects,
+        total_memories=total_memories,
+        memories_last_24h=memories_last_24h,
+        write_queue_queued=_wq(WriteQueueStatus.queued),
+        write_queue_processing=_wq(WriteQueueStatus.processing),
+        write_queue_failed=_wq(WriteQueueStatus.failed),
+        governance_queue_queued=_gq(GovernanceJobStatus.queued),
+        governance_queue_processing=_gq(GovernanceJobStatus.processing),
+        governance_queue_failed=_gq(GovernanceJobStatus.failed),
+    )
+
+
+@router.get("/write-queue", response_model=PaginatedWriteQueueResponse)
+def write_queue(
+    db: Session = Depends(get_db),
+    status: str | None = Query(None),
+    project: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+) -> PaginatedWriteQueueResponse:
+    """List write-queue jobs with optional filters, paginated, newest first."""
+    status_filter = None
+    if status is not None:
+        try:
+            status_filter = WriteQueueStatus(status)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid status '{status}'") from exc
+
+    query = db.query(WriteQueueJob)
+    if project is not None:
+        query = query.filter(WriteQueueJob.project == project)
+    if status_filter is not None:
+        query = query.filter(WriteQueueJob.status == status_filter)
+
+    total = query.order_by(None).count()
+
+    # failed_count ignores the status filter but honours the project scope.
+    failed_query = db.query(func.count(WriteQueueJob.id)).filter(
+        WriteQueueJob.status == WriteQueueStatus.failed
+    )
+    if project is not None:
+        failed_query = failed_query.filter(WriteQueueJob.project == project)
+    failed_count = failed_query.scalar() or 0
+
+    rows = (
+        query.order_by(WriteQueueJob.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    items = [
+        WriteQueueJobResponse(
+            id=str(row.id),
+            project=row.project,
+            hostname=row.hostname,
+            client_name=row.client_name,
+            text_preview=(row.text or "")[:120],
+            status=row.status.value,
+            error=row.error,
+            attempts=row.attempts,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
+
+    pages = math.ceil(total / page_size) if total else 0
+    return PaginatedWriteQueueResponse(
+        items=items,
+        total=total,
+        page=page,
+        pages=pages,
+        failed_count=failed_count,
+    )
+
+
+@router.get("/write-audit", response_model=None)
+def write_audit(
+    request: Request,
+    db: Session = Depends(get_db),
+    project: str | None = Query(None),
+    hostname: str | None = Query(None),
+    from_date: datetime | None = Query(None),
+    to_date: datetime | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=200),
+):
+    """List write-audit logs, paginated, newest first; CSV export via Accept header."""
+    query = db.query(WriteAuditLog)
+    if project is not None:
+        query = query.filter(WriteAuditLog.project == project)
+    if hostname is not None:
+        query = query.filter(WriteAuditLog.hostname == hostname)
+    if from_date is not None:
+        query = query.filter(WriteAuditLog.created_at >= from_date)
+    if to_date is not None:
+        query = query.filter(WriteAuditLog.created_at <= to_date)
+
+    accept = request.headers.get("accept", "")
+    if "text/csv" in accept:
+        total = query.order_by(None).count()
+        if total > 10000:
+            raise HTTPException(
+                status_code=400, detail="more than 10000 records; refine filters"
+            )
+        rows = query.order_by(WriteAuditLog.created_at.desc()).limit(10000).all()
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(
+            ["id", "job_id", "project", "hostname", "client_name", "action", "created_at"]
+        )
+        for row in rows:
+            writer.writerow(
+                [
+                    str(row.id),
+                    str(row.job_id) if row.job_id else "",
+                    row.project,
+                    row.hostname,
+                    row.client_name or "",
+                    row.action,
+                    row.created_at.isoformat() if row.created_at else "",
+                ]
+            )
+        buffer.seek(0)
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=audit.csv"},
+        )
+
+    total = query.order_by(None).count()
+    rows = (
+        query.order_by(WriteAuditLog.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    items = [
+        WriteAuditLogResponse(
+            id=str(row.id),
+            job_id=str(row.job_id) if row.job_id else None,
+            project=row.project,
+            hostname=row.hostname,
+            client_name=row.client_name,
+            action=row.action,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
+    pages = math.ceil(total / page_size) if total else 0
+    return PaginatedWriteAuditResponse(
+        items=items,
+        total=total,
+        page=page,
+        pages=pages,
+    )

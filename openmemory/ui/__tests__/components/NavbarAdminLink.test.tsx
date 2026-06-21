@@ -1,0 +1,40 @@
+import React from "react";
+import { render, screen } from "@testing-library/react";
+import { Provider } from "react-redux";
+
+jest.mock("axios");
+jest.mock("next/navigation", () => ({
+  usePathname: () => "/",
+}));
+// Stub do dialog de criação para isolar o teste do link "Admin".
+jest.mock("@/app/memories/components/CreateMemoryDialog", () => ({
+  CreateMemoryDialog: () => null,
+}));
+
+import { store } from "@/store/store";
+import { Navbar } from "@/components/Navbar";
+
+describe("Navbar", () => {
+  it("contém o link 'Admin' apontando para /admin", () => {
+    render(
+      <Provider store={store}>
+        <Navbar />
+      </Provider>,
+    );
+    const adminLink = screen.getByRole("link", { name: /admin/i });
+    expect(adminLink).toBeInTheDocument();
+    expect(adminLink).toHaveAttribute("href", "/admin");
+  });
+
+  it("mantém os links existentes (Dashboard, Memories, Apps, Settings)", () => {
+    render(
+      <Provider store={store}>
+        <Navbar />
+      </Provider>,
+    );
+    expect(screen.getByText("Dashboard")).toBeInTheDocument();
+    expect(screen.getByText("Memories")).toBeInTheDocument();
+    expect(screen.getByText("Apps")).toBeInTheDocument();
+    expect(screen.getByText("Settings")).toBeInTheDocument();
+  });
+});

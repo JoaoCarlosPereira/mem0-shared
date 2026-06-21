@@ -33,6 +33,15 @@ Uso:
       --minio-secret-key '...' --auth-mode enforce --auth-tokens 'time-a:tok1,time-b:tok2'
   python install.py --data-dir /srv/mem0-data         # relocaliza os dados (Qdrant)
   python install.py --skip-models                     # mantém modelos do .env atual
+
+Atualização (preserva memórias):
+  python install.py --update                          # atualiza no lugar, mantém dados/.env
+  python install.py --update --no-pull                # rebuild sem 'git pull' (código atual)
+  python install.py --update --mode production        # força o modo (senão é autodetectado)
+
+  O --update faz: git pull (best-effort) → rebuild das imagens → migrations
+  aditivas (produção) → recria os containers no lugar. NUNCA remove volumes,
+  então Qdrant + SQLite/PostgreSQL e os segredos do .env permanecem intactos.
 """
 
 import argparse
@@ -536,6 +545,190 @@ def wait_for_pgbouncer(compose_file, attempts=60):
 
 
 # --------------------------------------------------------------------------- #
+# Atualização in-place (preserva memórias) — flag --update
+# --------------------------------------------------------------------------- #
+def _compose_has_running(compose_file, service=None):
+    """True se o projeto tem container(es) em execução para ``compose_file``.
+
+    Com ``service``, checa apenas aquele serviço. Usa ``ps -q`` (lista só os
+    containers em execução do projeto) e considera não-vazio = no ar.
+    """
+    cmd = ["docker", "compose", "-f", compose_file, "ps", "-q"]
+    if service:
+        cmd.append(service)
+    try:
+        r = subprocess.run(cmd, cwd=str(COMPOSE_DIR),
+                           capture_output=True, text=True, timeout=30)
+    except Exception:
+        return False
+    return r.returncode == 0 and bool(r.stdout.strip())
+
+
+def detect_installed_mode():
+    """Detecta o modo instalado pelos containers em execução.
+
+    Produção tem precedência (o stack de escala inclui serviços que o local não
+    tem). Retorna 'production', 'local' ou None se nada estiver no ar.
+    """
+    if _compose_has_running(SCALE_COMPOSE, "pgbouncer"):
+        return "production"
+    if _compose_has_running("docker-compose.yml", "openmemory-mcp"):
+        return "local"
+    # Fallback: qualquer container do projeto via scale/local compose.
+    if _compose_has_running(SCALE_COMPOSE):
+        return "production"
+    if _compose_has_running("docker-compose.yml"):
+        return "local"
+    return None
+
+
+def git_pull():
+    """Atualiza o código com 'git pull --ff-only' (best-effort).
+
+    Não é fatal: se não for um repositório git, não houver git, a árvore estiver
+    suja ou o fast-forward falhar, avisa e segue com o código já presente (o
+    usuário pode ter atualizado manualmente).
+    """
+    if not (ROOT / ".git").exists():
+        warn("Diretório não é um repositório git — pulando 'git pull' "
+             "(atualize o código manualmente se necessário).")
+        return
+    if not shutil.which("git"):
+        warn("git não encontrado no PATH — pulando 'git pull'.")
+        return
+    log("Atualizando o código (git pull --ff-only)")
+    r = run(["git", "pull", "--ff-only"], cwd=str(ROOT))
+    if r.returncode != 0:
+        warn("'git pull --ff-only' não aplicou (árvore com alterações locais, "
+             "sem upstream configurado ou divergência). Seguindo com o código "
+             "atual — atualize manualmente se quiser a versão mais nova.")
+    else:
+        ok("Código atualizado para a versão mais recente.")
+
+
+def run_update(args, mode):
+    """Atualiza uma instalação existente para a versão nova, PRESERVANDO os dados.
+
+    Garantias:
+      • Nenhum volume é removido (Qdrant, SQLite/PostgreSQL e segredos do .env
+        permanecem intactos) — nunca usamos 'down', '-v' nem 'volume rm'.
+      • O .env não é reescrito: modelos, storage e segredos atuais são mantidos.
+      • Reconstrói as imagens com o código novo e recria os containers no lugar.
+      • Produção: aplica migrations aditivas (alembic upgrade head) sem tocar nos
+        dados. Local: o schema novo é materializado no startup (create_all).
+    """
+    compose_file = SCALE_COMPOSE if mode == "production" else "docker-compose.yml"
+
+    def dc(*a, **k):
+        return run(["docker", "compose", "-f", compose_file, *a],
+                   cwd=str(COMPOSE_DIR), **k)
+
+    log(f"Atualização in-place (modo: {mode})")
+    ok("As memórias e segredos são preservados: nenhum volume será removido e o "
+       ".env atual é mantido.")
+
+    # 1. Código novo (opcional) ----------------------------------------------
+    if not args.no_pull:
+        git_pull()
+    else:
+        log("'git pull' pulado (--no-pull): usando o código já presente.")
+
+    # 2. Reconstrói as imagens com o código novo ------------------------------
+    log("Reconstruindo as imagens (docker compose build --pull)")
+    if dc("build", "--pull").returncode != 0:
+        die("Falha ao reconstruir as imagens. Nenhum dado foi alterado.")
+    ok("Imagens reconstruídas com a versão nova.")
+
+    # 3. Produção: infra base + migrations aditivas ---------------------------
+    if mode == "production":
+        log("Garantindo a infraestrutura base no ar (postgres, pgbouncer, redis, qdrant)")
+        if dc("up", "-d", "postgres", "pgbouncer", "redis", "mem0_store").returncode != 0:
+            die("Falha ao subir a infraestrutura base.")
+        log("Aguardando o PgBouncer aceitar conexões")
+        if not wait_for_pgbouncer(compose_file):
+            dc("logs", "--tail", "60", "postgres", "pgbouncer")
+            die("PgBouncer não ficou pronto a tempo.")
+        ok("PgBouncer pronto.")
+        log("Aplicando migrations novas (alembic upgrade head) — aditivo, preserva os dados")
+        if dc("run", "--rm", "--no-deps", "openmemory-mcp",
+              "alembic", "upgrade", "head").returncode != 0:
+            die("Falha ao aplicar as migrations. Os dados NÃO foram alterados.")
+        ok("Schema do PostgreSQL atualizado (dados preservados).")
+
+    # 4. Recria os containers com a versão nova (volumes preservados) ---------
+    log("Recriando os containers com a versão nova (docker compose up -d)")
+    if mode == "production":
+        # Stack completo (mesmo conjunto do install de produção).
+        if dc("up", "-d").returncode != 0:
+            die("Falha ao recriar os containers do stack de produção.")
+        port = int(args.proxy_port)
+    else:
+        # Local: recria os serviços atuais; só inclui a UI se já estava no ar
+        # (ou se --with-ui foi pedido), sem forçar quem não a usa.
+        services = ["mem0_store", "openmemory-mcp"]
+        if args.with_ui or _compose_has_running(compose_file, "openmemory-ui"):
+            services.append("openmemory-ui")
+        if dc("up", "-d", *services).returncode != 0:
+            die("Falha ao recriar os containers locais.")
+        port = int(args.api_port)
+
+    # 5. Validação ------------------------------------------------------------
+    if mode == "production":
+        log(f"Aguardando GET /health via proxy (até {args.timeout}s)")
+        healthy, detail = wait_for_health(port, args.timeout)
+        if not healthy:
+            warn(f"Última resposta de /health: {detail}")
+            dc("logs", "--tail", "60", "openmemory-mcp")
+            die("/health não respondeu saudável a tempo (os dados estão preservados).")
+        ok(f"/health saudável ({detail}).")
+    else:
+        log(f"Aguardando GET /discovery (até {args.timeout}s)")
+        if not wait_for_discovery(port, args.timeout):
+            dc("logs", "--tail", "40", "openmemory-mcp")
+            die("/discovery não respondeu a tempo (os dados estão preservados).")
+        ok("/discovery respondeu 200 com os campos esperados.")
+
+    log("Atualização concluída 🎉 — versão nova no ar, memórias intactas.")
+    if mode == "production":
+        print(f"""
+  Proxy MCP:  http://localhost:{port}
+  Health:     http://localhost:{port}/health
+  Dados preservados: Qdrant + PostgreSQL (volume mem0_pgdata) + segredos do .env.""")
+    else:
+        print(f"""
+  API/MCP:    http://localhost:{port}
+  Descoberta: http://localhost:{port}/discovery
+  Dados preservados: Qdrant + SQLite (conforme QDRANT_STORAGE/SQLITE_STORAGE do .env).""")
+    return 0
+
+
+def run_update_entry(args):
+    """Valida pré-requisitos, descobre o modo instalado e dispara run_update."""
+    log("Verificando pré-requisitos (atualização)")
+    if not shutil.which("docker"):
+        die("Docker não encontrado. Instale o Docker.")
+    if not have_docker_compose():
+        die("Docker Compose v2 não encontrado (use 'docker compose').")
+
+    api_env = COMPOSE_DIR / "api" / ".env"
+    compose_env = COMPOSE_DIR / ".env"
+    if not api_env.exists() and not compose_env.exists():
+        die("Nenhuma instalação anterior encontrada (openmemory/.env e api/.env "
+            "ausentes). Rode a instalação normal antes de usar --update.")
+
+    mode = args.mode or detect_installed_mode()
+    if mode is None:
+        die("Não detectei containers em execução para inferir o modo. "
+            "Informe --mode local|production junto com --update.")
+
+    needed = SCALE_COMPOSE if mode == "production" else "docker-compose.yml"
+    if not COMPOSE_DIR.is_dir() or not (COMPOSE_DIR / needed).is_file():
+        die(f"{needed} não encontrado em {COMPOSE_DIR}.")
+    ok(f"Pré-requisitos OK (modo: {mode}).")
+    return run_update(args, mode)
+
+
+# --------------------------------------------------------------------------- #
 # Resolução de modelos (compartilhada entre local-first e produção)
 # --------------------------------------------------------------------------- #
 def resolve_specs(args, llamacpp_container_url, ollama_explicit):
@@ -896,6 +1089,13 @@ def parse_args(argv):
                         "Vazio/omitido = volumes Docker gerenciados (padrão).")
     p.add_argument("--yes", "-y", action="store_true", help="Não-interativo (usa --llm/--embedder).")
     p.add_argument("--skip-models", action="store_true", help="Não mexe nos modelos do .env.")
+    # --- Atualização in-place (preserva memórias) -----------------------------
+    p.add_argument("--update", action="store_true",
+                   help="Atualiza a instalação existente para a versão nova "
+                        "(git pull + rebuild + migrations) PRESERVANDO as memórias "
+                        "e o .env. Não toca em volumes nem re-pergunta modelos/segredos.")
+    p.add_argument("--no-pull", action="store_true",
+                   help="No --update, não executa 'git pull' (usa o código já presente).")
     p.add_argument("--with-ui", action="store_true", help="Também sobe a UI (porta 3000) — só no modo local.")
     p.add_argument("--api-port", default=os.environ.get("API_PORT", "8765"))
     p.add_argument("--timeout", type=int, default=int(os.environ.get("TIMEOUT", "180")))
@@ -932,6 +1132,11 @@ def main(argv=None):
     # URL que o container usa p/ alcançar o backend no host (localhost não serve
     # de dentro do container): usa a informada ou o host.docker.internal.
     llamacpp_container_url = args.llamacpp_url if llamacpp_explicit else "http://host.docker.internal:8080"
+
+    # Atualização in-place: preserva memórias e .env, não pergunta nada do fluxo
+    # de instalação (modelos/segredos/storage). Curto-circuita aqui.
+    if args.update:
+        return run_update_entry(args)
 
     mode = select_mode(args)
 

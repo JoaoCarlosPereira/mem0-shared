@@ -63,3 +63,71 @@ class PaginatedMemoryResponse(BaseModel):
     page: int
     size: int
     pages: int
+
+
+class WriteQueueJobResponse(BaseModel):
+    id: str
+    project: str
+    hostname: str
+    client_name: Optional[str]
+    text_preview: str  # primeiros 120 chars do campo text
+    status: str  # WriteQueueStatus enum
+    error: Optional[str]
+    attempts: int
+    created_at: datetime
+
+
+class PaginatedWriteQueueResponse(BaseModel):
+    items: List[WriteQueueJobResponse]
+    total: int
+    page: int
+    pages: int
+    failed_count: int  # total de failed (sem filtro de página)
+
+
+class GovernanceJobResponse(BaseModel):
+    id: str
+    job_type: str
+    project: Optional[str]
+    status: str
+    attempts: int
+    error: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class PaginatedGovernanceJobResponse(BaseModel):
+    items: List[GovernanceJobResponse]
+    total: int
+    page: int
+    pages: int
+    failed_count: int
+
+
+class WriteAuditLogResponse(BaseModel):
+    id: str
+    job_id: Optional[str]
+    project: str
+    hostname: str
+    client_name: Optional[str]
+    action: str
+    created_at: datetime
+
+
+class PaginatedWriteAuditResponse(BaseModel):
+    items: List[WriteAuditLogResponse]
+    total: int
+    page: int
+    pages: int
+
+
+class AdminOverviewResponse(BaseModel):
+    total_projects: int
+    total_memories: int
+    memories_last_24h: int
+    write_queue_queued: int
+    write_queue_processing: int
+    write_queue_failed: int
+    governance_queue_queued: int
+    governance_queue_processing: int
+    governance_queue_failed: int

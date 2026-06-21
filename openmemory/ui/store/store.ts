@@ -5,6 +5,8 @@ import appsReducer from './appsSlice';
 import uiReducer from './uiSlice';
 import filtersReducer from './filtersSlice';
 import configReducer from './configSlice';
+import adminReducer from './adminSlice';
+import queuesReducer from './queuesSlice';
 
 export const store = configureStore({
   reducer: {
@@ -14,6 +16,8 @@ export const store = configureStore({
     ui: uiReducer,
     filters: filtersReducer,
     config: configReducer,
+    admin: adminReducer,
+    queues: queuesReducer,
   },
 });
 

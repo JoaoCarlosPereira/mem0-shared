@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Any, Dict, Optional
 from uuid import UUID
 
 from app.database import get_db
 from app.governance.quality_eval import get_last_quality
-from app.models import MemoryState, MemoryStatusHistory, Project
+from app.models import (
+    GovernanceJob,
+    GovernanceJobStatus,
+    GovernanceJobType,
+    MemoryState,
+    MemoryStatusHistory,
+    Project,
+)
+from app.schemas import GovernanceJobResponse, PaginatedGovernanceJobResponse
 from app.utils.governance_policy import (
     get_global_policy,
     list_policies,
@@ -20,6 +29,7 @@ from app.utils.governance_queue import governance_queue
 from app.utils.quarantine import QuarantineEngine
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/admin/governance", tags=["governance"])
@@ -75,6 +85,79 @@ def enqueue_job(job_type: str, body: EnqueueJobRequest) -> dict:
         payload={"limit": body.limit, "manual": True},
     )
     return {"job_id": job_id, "job_type": job_type, "status": "queued"}
+
+
+@router.get("/jobs", response_model=PaginatedGovernanceJobResponse)
+def list_governance_jobs(
+    db: Session = Depends(get_db),
+    status: Optional[str] = Query(None),
+    job_type: Optional[str] = Query(None),
+    project: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+) -> PaginatedGovernanceJobResponse:
+    """List governance jobs with optional filters, paginated, newest first."""
+    status_filter = None
+    if status is not None:
+        try:
+            status_filter = GovernanceJobStatus(status)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid status '{status}'") from exc
+
+    type_filter = None
+    if job_type is not None:
+        try:
+            type_filter = GovernanceJobType(job_type)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid job_type '{job_type}'") from exc
+
+    query = db.query(GovernanceJob)
+    if project is not None:
+        query = query.filter(GovernanceJob.project == project)
+    if type_filter is not None:
+        query = query.filter(GovernanceJob.job_type == type_filter)
+    if status_filter is not None:
+        query = query.filter(GovernanceJob.status == status_filter)
+
+    total = query.order_by(None).count()
+
+    # failed_count ignores the status filter but honours the project/job_type scope.
+    failed_query = db.query(func.count(GovernanceJob.id)).filter(
+        GovernanceJob.status == GovernanceJobStatus.failed
+    )
+    if project is not None:
+        failed_query = failed_query.filter(GovernanceJob.project == project)
+    if type_filter is not None:
+        failed_query = failed_query.filter(GovernanceJob.job_type == type_filter)
+    failed_count = failed_query.scalar() or 0
+
+    rows = (
+        query.order_by(GovernanceJob.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    items = [
+        GovernanceJobResponse(
+            id=str(row.id),
+            job_type=row.job_type.value,
+            project=row.project,
+            status=row.status.value,
+            attempts=row.attempts,
+            error=row.error,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+        for row in rows
+    ]
+    pages = math.ceil(total / page_size) if total else 0
+    return PaginatedGovernanceJobResponse(
+        items=items,
+        total=total,
+        page=page,
+        pages=pages,
+        failed_count=failed_count,
+    )
 
 
 @router.get("/audit")
