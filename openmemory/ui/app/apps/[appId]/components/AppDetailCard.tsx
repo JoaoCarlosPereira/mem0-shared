@@ -28,6 +28,9 @@ const AppDetailCard = ({
   const appConfig = currentApp
     ? constants[currentApp.name as keyof typeof constants] || constants.default
     : constants.default;
+  const displayName = currentApp
+    ? constants[currentApp.name as keyof typeof constants]?.name ?? currentApp.name
+    : appConfig.name;
 
   const handlePauseAccess = async () => {
     setIsLoading(true);
@@ -71,7 +74,7 @@ const AppDetailCard = ({
               </div>
             )}
           </div>
-          <h2 className="text-md font-semibold">{appConfig.name}</h2>
+          <h2 className="text-md font-semibold">{displayName}</h2>
         </div>
 
         <div className="space-y-4 p-3">
