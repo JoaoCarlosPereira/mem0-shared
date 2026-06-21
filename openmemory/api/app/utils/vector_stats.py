@@ -174,3 +174,43 @@ def list_shared_memories(
         "size": size,
         "pages": pages,
     }
+
+
+def get_shared_memory_by_id(memory_id: str) -> Optional[dict[str, Any]]:
+    """Fetch a single memory point from Qdrant by ID (MCP write path)."""
+    _, vs = _vector_store()
+    if vs is None:
+        return None
+    try:
+        records = vs.client.retrieve(
+            collection_name=vs.collection_name,
+            ids=[memory_id],
+            with_payload=True,
+            with_vectors=False,
+        )
+        if not records:
+            return None
+        rec = records[0]
+        payload = getattr(rec, "payload", {}) or {}
+        created = payload.get("created_at")
+        created_ts = 0
+        if created:
+            try:
+                created_ts = int(
+                    datetime.fromisoformat(str(created).replace("Z", "+00:00")).timestamp()
+                )
+            except ValueError:
+                created_ts = 0
+        return {
+            "id": str(getattr(rec, "id", memory_id)),
+            "text": payload.get("data") or "",
+            "created_at": created_ts,
+            "state": payload.get("state") or "active",
+            "app_id": None,
+            "app_name": payload.get("project") or "shared",
+            "categories": [],
+            "metadata_": payload,
+        }
+    except Exception:  # noqa: BLE001
+        logger.exception("failed to get shared memory %s", memory_id)
+        return None

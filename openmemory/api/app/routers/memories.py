@@ -339,17 +339,26 @@ async def get_memory(
     memory_id: UUID,
     db: Session = Depends(get_db)
 ):
-    memory = get_memory_or_404(db, memory_id)
-    return {
-        "id": memory.id,
-        "text": memory.content,
-        "created_at": int(memory.created_at.timestamp()),
-        "state": memory.state.value,
-        "app_id": memory.app_id,
-        "app_name": memory.app.name if memory.app else None,
-        "categories": [category.name for category in memory.categories],
-        "metadata_": memory.metadata_
-    }
+    memory = db.query(Memory).filter(Memory.id == memory_id).first()
+    if memory:
+        return {
+            "id": memory.id,
+            "text": memory.content,
+            "created_at": int(memory.created_at.timestamp()),
+            "state": memory.state.value,
+            "app_id": memory.app_id,
+            "app_name": memory.app.name if memory.app else None,
+            "categories": [category.name for category in memory.categories],
+            "metadata_": memory.metadata_
+        }
+
+    from app.utils.vector_stats import get_shared_memory_by_id
+
+    shared = get_shared_memory_by_id(str(memory_id))
+    if shared:
+        return shared
+
+    raise HTTPException(status_code=404, detail="Memory not found")
 
 
 class DeleteMemoriesRequest(BaseModel):
@@ -716,8 +725,14 @@ async def get_related_memories(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Get the source memory
-    memory = get_memory_or_404(db, memory_id)
+    # Get the source memory (SQL catalog or Qdrant shared store)
+    memory = db.query(Memory).filter(Memory.id == memory_id).first()
+    if not memory:
+        from app.utils.vector_stats import get_shared_memory_by_id
+
+        if get_shared_memory_by_id(str(memory_id)):
+            return Page.create([], total=0, params=params)
+        raise HTTPException(status_code=404, detail="Memory not found")
     
     # Extract category IDs from the source memory
     category_ids = [category.id for category in memory.categories]

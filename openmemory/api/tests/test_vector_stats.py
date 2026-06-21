@@ -121,3 +121,35 @@ class TestListSharedMemories:
         assert out["total"] == 1
         assert out["items"][0]["content"] == "match"
         client.vector_store.search.assert_called_once()
+
+
+class TestGetSharedMemoryById:
+    def test_returns_none_when_client_unavailable(self):
+        with patch.object(vector_stats, "_vector_store", return_value=(None, None)):
+            assert vector_stats.get_shared_memory_by_id("abc") is None
+
+    def test_returns_memory_payload_when_found(self):
+        mem_id = "a6a0dc5b-ebff-4156-add4-48c09f7ffa8a"
+        point = _point(mem_id, "hello world", "sysmovs", "2026-06-21T06:35:17.834714+00:00")
+        client, vs = _make_vs()
+        vs.client.retrieve.return_value = [point]
+        with patch.object(vector_stats, "_vector_store", return_value=(client, vs)):
+            out = vector_stats.get_shared_memory_by_id(mem_id)
+
+        assert out is not None
+        assert out["id"] == mem_id
+        assert out["text"] == "hello world"
+        assert out["app_name"] == "sysmovs"
+        assert out["state"] == "active"
+        vs.client.retrieve.assert_called_once_with(
+            collection_name="openmemory",
+            ids=[mem_id],
+            with_payload=True,
+            with_vectors=False,
+        )
+
+    def test_returns_none_when_not_found(self):
+        client, vs = _make_vs()
+        vs.client.retrieve.return_value = []
+        with patch.object(vector_stats, "_vector_store", return_value=(client, vs)):
+            assert vector_stats.get_shared_memory_by_id("missing") is None

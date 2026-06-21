@@ -199,3 +199,53 @@ class TestStatsRegression:
         client = _stats_client(db_factory)
         resp = client.get("/api/v1/stats/", params={"user_id": "missing"})
         assert resp.status_code == 404
+
+
+class TestGetMemoryQdrantFallback:
+    def test_get_memory_returns_qdrant_memory_when_not_in_sql(self, db_factory):
+        mem_id = str(uuid.uuid4())
+        qdrant_payload = {
+            "id": mem_id,
+            "text": "from qdrant",
+            "created_at": 1718951717,
+            "state": "active",
+            "app_id": None,
+            "app_name": "sysmovs",
+            "categories": [],
+            "metadata_": {"project": "sysmovs", "data": "from qdrant"},
+        }
+        client = _memories_client(db_factory)
+        with patch(
+            "app.utils.vector_stats.get_shared_memory_by_id",
+            return_value=qdrant_payload,
+        ) as mock_get:
+            resp = client.get(f"/api/v1/memories/{mem_id}", params={"user_id": "root"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["text"] == "from qdrant"
+        assert body["app_name"] == "sysmovs"
+        mock_get.assert_called_once_with(mem_id)
+
+    def test_get_memory_404_when_missing_everywhere(self, db_factory):
+        mem_id = str(uuid.uuid4())
+        client = _memories_client(db_factory)
+        with patch("app.utils.vector_stats.get_shared_memory_by_id", return_value=None):
+            resp = client.get(f"/api/v1/memories/{mem_id}", params={"user_id": "root"})
+        assert resp.status_code == 404
+
+    def test_related_memories_empty_for_qdrant_only_memory(self, db_factory):
+        mem_id = str(uuid.uuid4())
+        db = db_factory()
+        db.add(User(user_id="root", name="Root"))
+        db.commit()
+        db.close()
+
+        client = _memories_client(db_factory)
+        with patch("app.utils.vector_stats.get_shared_memory_by_id", return_value={"id": mem_id}):
+            resp = client.get(
+                f"/api/v1/memories/{mem_id}/related",
+                params={"user_id": "root"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 0
