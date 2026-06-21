@@ -7,7 +7,8 @@
 # Connect via the reverse proxy (default port 8765). API workers and write
 # workers are decoupled; metadata/queue live in PostgreSQL via PgBouncer.
 #
-# For SQLite dev/single-host, keep using docker-compose.yml instead.
+# This is the SINGLE supported deployment mode of the project. The UI (incl. the
+# /admin panel) is part of the default stack (port 3000). Use ``python install.py``.
 
 x-api-common: &api-common
   image: mem0/openmemory-mcp
@@ -158,9 +159,12 @@ services:
         condition: service_healthy
     command: python -m app.workers.migration_worker
 
+  # UI (painel + /admin) — parte padrão do stack de produção (modo único).
+  # NEXT_PUBLIC_API_URL é aplicado em runtime pelo entrypoint (sed no bundle):
+  # aponte-o para o proxy acessível na LAN (ex.: http://IP_DA_LAN:8765) para que
+  # navegadores remotos alcancem a API. O installer grava esse valor no .env.
   openmemory-ui:
     container_name: openmemory_ui
-    profiles: ["ui"]
     build:
       context: ui/
       dockerfile: Dockerfile
@@ -168,6 +172,9 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
+    depends_on:
+      openmemory-mcp:
+        condition: service_started
     environment:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8765}
       - NEXT_PUBLIC_USER_ID=${USER:-openmemory}

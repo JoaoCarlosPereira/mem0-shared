@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Instalador multiplataforma da Memória Central Compartilhada.
 
-Roda em Linux, macOS e Windows (só precisa de Python 3.8+ e Docker). Dois modos:
+Roda em Linux, macOS e Windows (só precisa de Python 3.8+ e Docker).
 
-  • local      — 1 máquina/dev: API/MCP + Qdrant + SQLite (docker-compose.yml).
-                 Operação simples; inferência local (Ollama/llama.cpp) ou API.
-  • production — stack de escala (docker-compose.scale.yml): PostgreSQL + PgBouncer
-                 + Redis + Qdrant + workers (write/governance) + Traefik + observa-
-                 bilidade (Prometheus/Grafana) + backup (MinIO). Pronto para um time.
+MODO ÚNICO — produção/escala (docker-compose.scale.yml): PostgreSQL + PgBouncer
++ Redis + Qdrant + workers (write/governance) + Traefik + observabilidade
+(Prometheus/Grafana) + backup (MinIO) + UI (painel + /admin na porta 3000).
+Pronto para um time. (O antigo modo "local-first" foi removido.)
 
-Faz, ponta a ponta (modo produção):
+Faz, ponta a ponta:
   1. Pré-requisitos (Docker + Docker Compose v2) e arquivos .env.
   2. Resolve LLM + embedder INDEPENDENTES (Ollama local e/ou API remota), testando
      a conexão das APIs; ajusta MEM0_LOCAL_ONLY conforme o egress.
@@ -18,16 +17,14 @@ Faz, ponta a ponta (modo produção):
      e valida GET /health via proxy.
 
 Uso:
-  python install.py                                   # interativo (pergunta o modo)
-  python install.py --mode production                 # produção, interativo
-  python install.py --mode local --ollama-url http://192.168.0.10:11434
+  python install.py                                   # interativo (produção)
   python install.py --llm llama3.1:latest --embedder nomic-embed-text --yes
   # LLM no Ollama + embedder numa API remota (papéis independentes):
   python install.py --yes --llm llama3.1:latest --llm-backend ollama \\
       --embedder text-embedding-3-small --embedder-backend api \\
       --embedder-api-url https://api.openai.com/v1 --embedder-api-key SEU_TOKEN
-  # produção não-interativa com segredos:
-  python install.py --mode production --yes \\
+  # não-interativa com segredos:
+  python install.py --yes \\
       --llm llama3.1:8b --embedder nomic-embed-text \\
       --postgres-password '...' --grafana-password '...' \\
       --minio-secret-key '...' --auth-mode enforce --auth-tokens 'time-a:tok1,time-b:tok2'
@@ -37,7 +34,6 @@ Uso:
 Atualização (preserva memórias):
   python install.py --update                          # atualiza no lugar, mantém dados/.env
   python install.py --update --no-pull                # rebuild sem 'git pull' (código atual)
-  python install.py --update --mode production        # força o modo (senão é autodetectado)
 
   O --update faz: git pull (best-effort) → rebuild das imagens → migrations
   aditivas (produção) → recria os containers no lugar. NUNCA remove volumes,
@@ -370,18 +366,6 @@ def spec_from_flags(role, args, llamacpp_container_url, ollama_explicit):
     return _local_spec(backend, model, args, llamacpp_container_url, ollama_explicit)
 
 
-def write_role_env(compose_env, prefix, spec):
-    """Grava as variáveis de UM papel (prefix = 'LLM' ou 'EMBEDDER') no .env."""
-    set_env(compose_env, f"{prefix}_MODEL", spec["model"])
-    set_env(compose_env, f"{prefix}_PROVIDER", spec["provider"])
-    if spec["provider"] == "openai":
-        # provider openai exige key não-vazia — placeholder quando não há token.
-        set_env(compose_env, f"{prefix}_BASE_URL", (spec["base_url"] or "").rstrip("/"))
-        set_env(compose_env, f"{prefix}_API_KEY", spec["api_key"] or "sk-no-key")
-    else:  # ollama
-        set_env(compose_env, f"{prefix}_API_KEY", spec["api_key"] or "")
-
-
 def host_is_local(url):
     """Espelha o guard MEM0_LOCAL_ONLY do servidor (app/utils/memory.py).
 
@@ -433,46 +417,6 @@ def read_env(file_path, key):
         if s.startswith(prefix):
             return s[len(prefix):]
     return None
-
-
-def configure_storage(data_dir, interactive, compose_env):
-    """Decide onde Qdrant + SQLite persistem e grava no .env do compose (task_11).
-
-    ``data_dir`` vazio/None mantém o padrão (volumes Docker gerenciados); um
-    caminho relocaliza ambos os stores sob ``<dir>/qdrant`` e ``<dir>/db``. No
-    modo interativo (``interactive``), pergunta quando nenhum caminho foi dado —
-    Enter mantém o padrão. Retorna o caminho-base absoluto ou ``None`` (padrão).
-    """
-    if not data_dir and interactive:
-        resp = input(
-            "  Onde salvar as memórias (Qdrant + SQLite)?\n"
-            "  [Enter] = volumes Docker gerenciados (padrão) | ou informe um caminho: "
-        ).strip()
-        data_dir = resp or None
-
-    if not data_dir:
-        # Padrão: volumes nomeados gerenciados pelo Docker; SQLite em ./api.
-        set_env(compose_env, "QDRANT_STORAGE", "mem0_storage")
-        set_env(compose_env, "SQLITE_STORAGE", "mem0_db")
-        set_env(compose_env, "DATABASE_URL", "sqlite:////usr/src/openmemory/openmemory.db")
-        ok("Armazenamento: volumes Docker gerenciados (padrão).")
-        return None
-
-    base = Path(data_dir).expanduser().resolve()
-    qdrant_dir = base / "qdrant"
-    db_dir = base / "db"
-    for d in (qdrant_dir, db_dir):
-        try:
-            d.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            die(f"Não foi possível criar {d}: {e}")
-    # .as_posix() mantém o caminho compatível com a interpolação do compose
-    # (inclusive drive-letter no Windows, ex.: C:/dados/qdrant).
-    set_env(compose_env, "QDRANT_STORAGE", qdrant_dir.as_posix())
-    set_env(compose_env, "SQLITE_STORAGE", db_dir.as_posix())
-    set_env(compose_env, "DATABASE_URL", "sqlite:////data/openmemory.db")
-    ok(f"Armazenamento: {base} (Qdrant em ./qdrant, SQLite em ./db).")
-    return str(base)
 
 
 def wait_for_discovery(api_port, timeout):
@@ -547,41 +491,6 @@ def wait_for_pgbouncer(compose_file, attempts=60):
 # --------------------------------------------------------------------------- #
 # Atualização in-place (preserva memórias) — flag --update
 # --------------------------------------------------------------------------- #
-def _compose_has_running(compose_file, service=None):
-    """True se o projeto tem container(es) em execução para ``compose_file``.
-
-    Com ``service``, checa apenas aquele serviço. Usa ``ps -q`` (lista só os
-    containers em execução do projeto) e considera não-vazio = no ar.
-    """
-    cmd = ["docker", "compose", "-f", compose_file, "ps", "-q"]
-    if service:
-        cmd.append(service)
-    try:
-        r = subprocess.run(cmd, cwd=str(COMPOSE_DIR),
-                           capture_output=True, text=True, timeout=30)
-    except Exception:
-        return False
-    return r.returncode == 0 and bool(r.stdout.strip())
-
-
-def detect_installed_mode():
-    """Detecta o modo instalado pelos containers em execução.
-
-    Produção tem precedência (o stack de escala inclui serviços que o local não
-    tem). Retorna 'production', 'local' ou None se nada estiver no ar.
-    """
-    if _compose_has_running(SCALE_COMPOSE, "pgbouncer"):
-        return "production"
-    if _compose_has_running("docker-compose.yml", "openmemory-mcp"):
-        return "local"
-    # Fallback: qualquer container do projeto via scale/local compose.
-    if _compose_has_running(SCALE_COMPOSE):
-        return "production"
-    if _compose_has_running("docker-compose.yml"):
-        return "local"
-    return None
-
-
 def git_pull():
     """Atualiza o código com 'git pull --ff-only' (best-effort).
 
@@ -627,24 +536,21 @@ def _rebuild_with_retry(dc):
     return dc("build").returncode == 0
 
 
-def run_update(args, mode):
-    """Atualiza uma instalação existente para a versão nova, PRESERVANDO os dados.
+def run_update(args):
+    """Atualiza a instalação de produção para a versão nova, PRESERVANDO os dados.
 
     Garantias:
-      • Nenhum volume é removido (Qdrant, SQLite/PostgreSQL e segredos do .env
+      • Nenhum volume é removido (Qdrant + PostgreSQL e segredos do .env
         permanecem intactos) — nunca usamos 'down', '-v' nem 'volume rm'.
       • O .env não é reescrito: modelos, storage e segredos atuais são mantidos.
-      • Reconstrói as imagens com o código novo e recria os containers no lugar.
-      • Produção: aplica migrations aditivas (alembic upgrade head) sem tocar nos
-        dados. Local: o schema novo é materializado no startup (create_all).
+      • Reconstrói as imagens (API + workers + UI) com o código novo e recria os
+        containers no lugar; aplica migrations aditivas (alembic upgrade head).
     """
-    compose_file = SCALE_COMPOSE if mode == "production" else "docker-compose.yml"
-
     def dc(*a, **k):
-        return run(["docker", "compose", "-f", compose_file, *a],
+        return run(["docker", "compose", "-f", SCALE_COMPOSE, *a],
                    cwd=str(COMPOSE_DIR), **k)
 
-    log(f"Atualização in-place (modo: {mode})")
+    log("Atualização in-place (produção — único modo)")
     ok("As memórias e segredos são preservados: nenhum volume será removido e o "
        ".env atual é mantido.")
 
@@ -654,12 +560,12 @@ def run_update(args, mode):
     else:
         log("'git pull' pulado (--no-pull): usando o código já presente.")
 
-    # Parar os containers antes de reconstruir as imagens. Isso evita erros de tag em
-    # uso/bloqueio (ex: "AlreadyExists") com o containerd image store do Docker.
+    # Parar os containers antes de reconstruir as imagens evita erros de tag em
+    # uso/bloqueio (ex.: "AlreadyExists") no image store containerd do Docker.
     log("Parando os containers em execução para liberar as imagens para rebuild")
     dc("stop")
 
-    # 2. Reconstrói as imagens com o código novo ------------------------------
+    # 2. Reconstrói as imagens (API + workers + UI) com o código novo ---------
     log("Reconstruindo as imagens (docker compose build --pull)")
     if not _rebuild_with_retry(dc):
         die("Falha ao reconstruir as imagens (nenhum dado foi alterado). Se o erro "
@@ -667,74 +573,49 @@ def run_update(args, mode):
             "desative 'Use containerd for pulling and storing images' em Settings.")
     ok("Imagens reconstruídas com a versão nova.")
 
-    # 3. Produção: infra base + migrations aditivas ---------------------------
-    if mode == "production":
-        log("Garantindo a infraestrutura base no ar (postgres, pgbouncer, redis, qdrant)")
-        if dc("up", "-d", "postgres", "pgbouncer", "redis", "mem0_store").returncode != 0:
-            die("Falha ao subir a infraestrutura base.")
-        log("Aguardando o PgBouncer aceitar conexões")
-        if not wait_for_pgbouncer(compose_file):
-            dc("logs", "--tail", "60", "postgres", "pgbouncer")
-            die("PgBouncer não ficou pronto a tempo.")
-        ok("PgBouncer pronto.")
-        log("Aplicando migrations novas (alembic upgrade head) — aditivo, preserva os dados")
-        if dc("run", "--rm", "--no-deps", "openmemory-mcp",
-              "alembic", "upgrade", "head").returncode != 0:
-            die("Falha ao aplicar as migrations. Os dados NÃO foram alterados.")
-        ok("Schema do PostgreSQL atualizado (dados preservados).")
+    # 3. Infra base + migrations aditivas -------------------------------------
+    log("Garantindo a infraestrutura base no ar (postgres, pgbouncer, redis, qdrant)")
+    if dc("up", "-d", "postgres", "pgbouncer", "redis", "mem0_store").returncode != 0:
+        die("Falha ao subir a infraestrutura base.")
+    log("Aguardando o PgBouncer aceitar conexões")
+    if not wait_for_pgbouncer(SCALE_COMPOSE):
+        dc("logs", "--tail", "60", "postgres", "pgbouncer")
+        die("PgBouncer não ficou pronto a tempo.")
+    ok("PgBouncer pronto.")
+    log("Aplicando migrations novas (alembic upgrade head) — aditivo, preserva os dados")
+    if dc("run", "--rm", "--no-deps", "openmemory-mcp",
+          "alembic", "upgrade", "head").returncode != 0:
+        die("Falha ao aplicar as migrations. Os dados NÃO foram alterados.")
+    ok("Schema do PostgreSQL atualizado (dados preservados).")
 
-    # 4. Recria os containers com a versão nova (volumes preservados) ---------
-    log("Recriando os containers com a versão nova (docker compose up -d)")
-    if mode == "production":
-        # Stack completo (mesmo conjunto do install de produção).
-        if dc("up", "-d").returncode != 0:
-            die("Falha ao recriar os containers do stack de produção.")
-        if args.with_ui or _compose_has_running(compose_file, "openmemory-ui"):
-            if dc("--profile", "ui", "up", "-d", "openmemory-ui").returncode != 0:
-                die("Falha ao recriar a UI de produção.")
-        port = int(args.proxy_port)
-    else:
-        # Local: recria os serviços atuais; só inclui a UI se já estava no ar
-        # (ou se --with-ui foi pedido), sem forçar quem não a usa.
-        services = ["mem0_store", "openmemory-mcp"]
-        if args.with_ui or _compose_has_running(compose_file, "openmemory-ui"):
-            services.append("openmemory-ui")
-        if dc("up", "-d", *services).returncode != 0:
-            die("Falha ao recriar os containers locais.")
-        port = int(args.api_port)
+    # 4. Recria o stack completo (inclui a UI) — volumes preservados ----------
+    # --force-recreate: garante que NENHUM container fique na imagem antiga;
+    # --remove-orphans: remove serviços que saíram do compose. Volumes intactos.
+    log("Recriando TODOS os containers na versão nova (force-recreate, sem tocar em volumes)")
+    if dc("up", "-d", "--force-recreate", "--remove-orphans").returncode != 0:
+        die("Falha ao recriar os containers do stack de produção.")
+    port = int(args.proxy_port)
 
     # 5. Validação ------------------------------------------------------------
-    if mode == "production":
-        log(f"Aguardando GET /health via proxy (até {args.timeout}s)")
-        healthy, detail = wait_for_health(port, args.timeout)
-        if not healthy:
-            warn(f"Última resposta de /health: {detail}")
-            dc("logs", "--tail", "60", "openmemory-mcp")
-            die("/health não respondeu saudável a tempo (os dados estão preservados).")
-        ok(f"/health saudável ({detail}).")
-    else:
-        log(f"Aguardando GET /discovery (até {args.timeout}s)")
-        if not wait_for_discovery(port, args.timeout):
-            dc("logs", "--tail", "40", "openmemory-mcp")
-            die("/discovery não respondeu a tempo (os dados estão preservados).")
-        ok("/discovery respondeu 200 com os campos esperados.")
+    log(f"Aguardando GET /health via proxy (até {args.timeout}s)")
+    healthy, detail = wait_for_health(port, args.timeout)
+    if not healthy:
+        warn(f"Última resposta de /health: {detail}")
+        dc("logs", "--tail", "60", "openmemory-mcp")
+        die("/health não respondeu saudável a tempo (os dados estão preservados).")
+    ok(f"/health saudável ({detail}).")
 
     log("Atualização concluída 🎉 — versão nova no ar, memórias intactas.")
-    if mode == "production":
-        print(f"""
+    print(f"""
+  UI/Admin:   http://localhost:3000   (painel em /admin)
   Proxy MCP:  http://localhost:{port}
   Health:     http://localhost:{port}/health
   Dados preservados: Qdrant + PostgreSQL (volume mem0_pgdata) + segredos do .env.""")
-    else:
-        print(f"""
-  API/MCP:    http://localhost:{port}
-  Descoberta: http://localhost:{port}/discovery
-  Dados preservados: Qdrant + SQLite (conforme QDRANT_STORAGE/SQLITE_STORAGE do .env).""")
     return 0
 
 
 def run_update_entry(args):
-    """Valida pré-requisitos, descobre o modo instalado e dispara run_update."""
+    """Valida pré-requisitos e dispara a atualização (produção — único modo)."""
     log("Verificando pré-requisitos (atualização)")
     if not shutil.which("docker"):
         die("Docker não encontrado. Instale o Docker.")
@@ -747,16 +628,10 @@ def run_update_entry(args):
         die("Nenhuma instalação anterior encontrada (openmemory/.env e api/.env "
             "ausentes). Rode a instalação normal antes de usar --update.")
 
-    mode = args.mode or detect_installed_mode()
-    if mode is None:
-        die("Não detectei containers em execução para inferir o modo. "
-            "Informe --mode local|production junto com --update.")
-
-    needed = SCALE_COMPOSE if mode == "production" else "docker-compose.yml"
-    if not COMPOSE_DIR.is_dir() or not (COMPOSE_DIR / needed).is_file():
-        die(f"{needed} não encontrado em {COMPOSE_DIR}.")
-    ok(f"Pré-requisitos OK (modo: {mode}).")
-    return run_update(args, mode)
+    if not COMPOSE_DIR.is_dir() or not (COMPOSE_DIR / SCALE_COMPOSE).is_file():
+        die(f"{SCALE_COMPOSE} não encontrado em {COMPOSE_DIR}.")
+    ok("Pré-requisitos OK (modo: produção — único).")
+    return run_update(args)
 
 
 # --------------------------------------------------------------------------- #
@@ -983,6 +858,12 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
     set_env(compose_env, "OPENMEMORY_DISCOVERY_BASE_URL", discovery_url)
     ok(f"URL de descoberta/provision: {discovery_url}")
 
+    # NEXT_PUBLIC_API_URL: a UI (porta 3000) chama a API via o proxy. Apontamos
+    # para a MESMA URL de descoberta (IP da LAN:proxy_port) para que navegadores
+    # remotos alcancem a API — o entrypoint da UI aplica esse valor no bundle.
+    set_env(compose_env, "NEXT_PUBLIC_API_URL", discovery_url)
+    ui_url = discovery_url.replace(f":{args.proxy_port}", ":3000")
+
     # Segredos ----------------------------------------------------------------
     secrets = collect_secrets(args, compose_env, interactive=not args.yes)
     if args.auth_tokens:
@@ -1038,13 +919,9 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
     if dc("run", "--rm", "--no-deps", "openmemory-mcp", "alembic", "upgrade", "head").returncode != 0:
         die("Falha ao aplicar as migrations no PostgreSQL.")
     ok("Schema do PostgreSQL criado/atualizado.")
-    log("Subindo o stack completo")
+    log("Subindo o stack completo (inclui a UI na porta 3000)")
     if dc("up", "-d", "--build").returncode != 0:
         die("Falha ao subir o stack completo (docker compose up).")
-    if args.with_ui:
-        log("Subindo a UI (porta 3000)")
-        if dc("--profile", "ui", "up", "-d", "--build", "openmemory-ui").returncode != 0:
-            die("Falha ao subir a UI de produção.")
 
     log(f"Aguardando GET /health via proxy (até {args.timeout}s)")
     healthy, detail = wait_for_health(args.proxy_port, args.timeout)
@@ -1055,39 +932,24 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
         die("/health não respondeu saudável a tempo (veja a resposta e os logs acima).")
     ok(f"/health saudável ({detail}).")
 
-    log("Instalação de PRODUÇÃO concluída 🎉")
+    log("Instalação concluída 🎉")
     print(f"""
-  Proxy MCP:  http://localhost:{args.proxy_port}
-  Descoberta: http://localhost:{args.proxy_port}/discovery
-  Health:     http://localhost:{args.proxy_port}/health
+  UI/Admin:   {ui_url}   (painel em {ui_url}/admin)
+  Proxy MCP:  {discovery_url}
+  Descoberta: {discovery_url}/discovery
+  Health:     {discovery_url}/health
   Qdrant:     http://localhost:6333
   Prometheus: http://localhost:9090
-  Grafana:    http://localhost:3001  (admin / senha configurada)""")
-    if args.with_ui:
-        print("  UI:         http://localhost:3000")
-    print(f"""
+  Grafana:    http://localhost:3001  (admin / senha configurada)
+
   Stack: PostgreSQL + PgBouncer + Redis + Qdrant + workers (write/governance)
-         + Traefik + observabilidade + backup (MinIO).
+         + Traefik + observabilidade + backup (MinIO) + UI.
   Auth de equipe: AUTH_MODE={secrets['AUTH_MODE']} (defina tokens com --auth-tokens).
 
   Rota MCP (preencha hostname e project):
     /mcp/{{client_name}}/sse/{{hostname}}      (SSE)
     /mcp/{{client_name}}/http/{{hostname}}     (Streamable HTTP)""")
     return 0
-
-
-def select_mode(args):
-    """Decide entre instalação local-first e produção (escala)."""
-    if args.mode in ("local", "production"):
-        return args.mode
-    if args.yes:
-        return "local"  # compatibilidade: não-interativo sem --mode = local-first
-    print("\n  Tipo de instalação:")
-    print("    1. Local-first — 1 máquina/dev: SQLite + Qdrant (simples)")
-    print("    2. Produção    — escala p/ time: PostgreSQL + Redis + workers + "
-          "proxy + observabilidade + backup")
-    c = input("  Selecione [1]: ").strip().lower()
-    return "production" if c in ("2", "production", "prod", "producao", "produção") else "local"
 
 
 # --------------------------------------------------------------------------- #
@@ -1133,13 +995,8 @@ def parse_args(argv):
                         "e o .env. Não toca em volumes nem re-pergunta modelos/segredos.")
     p.add_argument("--no-pull", action="store_true",
                    help="No --update, não executa 'git pull' (usa o código já presente).")
-    p.add_argument("--with-ui", action="store_true", help="Também sobe a UI (porta 3000).")
     p.add_argument("--api-port", default=os.environ.get("API_PORT", "8765"))
     p.add_argument("--timeout", type=int, default=int(os.environ.get("TIMEOUT", "180")))
-    # --- Modo de instalação ---------------------------------------------------
-    p.add_argument("--mode", choices=("local", "production"), default=None,
-                   help="local (SQLite+Qdrant, 1 máquina) ou production (stack de "
-                        "escala completo). Omitido = pergunta (ou local com --yes).")
     p.add_argument("--proxy-port", default=os.environ.get("PROXY_PORT", "8765"),
                    help="Porta do reverse proxy (Traefik) no modo produção.")
     p.add_argument("--discovery-url", default=os.environ.get("OPENMEMORY_DISCOVERY_BASE_URL"),
@@ -1175,18 +1032,15 @@ def main(argv=None):
     if args.update:
         return run_update_entry(args)
 
-    mode = select_mode(args)
-
     # 1. Pré-requisitos -------------------------------------------------------
     log("Verificando pré-requisitos")
     if not shutil.which("docker"):
         die("Docker não encontrado. Instale o Docker.")
     if not have_docker_compose():
         die("Docker Compose v2 não encontrado (use 'docker compose').")
-    needed = SCALE_COMPOSE if mode == "production" else "docker-compose.yml"
-    if not COMPOSE_DIR.is_dir() or not (COMPOSE_DIR / needed).is_file():
-        die(f"{needed} não encontrado em {COMPOSE_DIR}.")
-    ok(f"Docker e Docker Compose v2 disponíveis (modo: {mode}).")
+    if not COMPOSE_DIR.is_dir() or not (COMPOSE_DIR / SCALE_COMPOSE).is_file():
+        die(f"{SCALE_COMPOSE} não encontrado em {COMPOSE_DIR}.")
+    ok("Docker e Docker Compose v2 disponíveis (modo: produção — único).")
 
     # 2. Arquivos .env --------------------------------------------------------
     log("Preparando arquivos de ambiente")
@@ -1209,69 +1063,8 @@ def main(argv=None):
     else:
         llm_spec, emb_spec = resolve_specs(args, llamacpp_container_url, ollama_explicit)
 
-    # 5. Produção: stack de escala completo (orquestração dedicada) ----------
-    if mode == "production":
-        return run_production(args, compose_env, api_env, llm_spec, emb_spec)
-
-    # 5'. Local-first: grava a seleção e sobe o conjunto simples -------------
-    if llm_spec and emb_spec:
-        log(f"Gravando a seleção em {compose_env.relative_to(ROOT)}")
-        write_role_env(compose_env, "LLM", llm_spec)
-        write_role_env(compose_env, "EMBEDDER", emb_spec)
-        # OLLAMA_BASE_URL é global: grava a URL explícita de qualquer papel Ollama.
-        ollama_url = llm_spec.get("ollama_url") or emb_spec.get("ollama_url")
-        if ollama_url:
-            set_env(compose_env, "OLLAMA_BASE_URL", ollama_url)
-        ok(f"LLM={llm_spec['label']}/{llm_spec['model']} | "
-           f"embedder={emb_spec['label']}/{emb_spec['model']}")
-
-    # USER / NEXT_PUBLIC_API_URL: ajudam a UI e silenciam avisos do compose.
-    try:
-        user = os.environ.get("USER") or os.environ.get("USERNAME") or getpass.getuser()
-    except Exception:
-        user = "openmemory"
-    set_env(compose_env, "USER", user)
-    discovery_url = discovery_base_url(args.api_port, args.discovery_url)
-    set_env(compose_env, "OPENMEMORY_DISCOVERY_BASE_URL", discovery_url)
-    ok(f"URL de descoberta/provision: {discovery_url}")
-    set_env(compose_env, "NEXT_PUBLIC_API_URL", f"http://localhost:{args.api_port}")
-
-    # Local de salvamento das memórias (Qdrant + SQLite) ---------------------
-    log("Definindo o local de salvamento das memórias")
-    configure_storage(args.data_dir, interactive=not args.yes, compose_env=compose_env)
-
-    # Subir o conjunto --------------------------------------------------------
-    services = ["mem0_store", "openmemory-mcp"]
-    if args.with_ui:
-        services.append("openmemory-ui")
-    log("Subindo containers: " + " ".join(services))
-    r = run(["docker", "compose", "up", "-d", "--build", *services], cwd=str(COMPOSE_DIR))
-    if r.returncode != 0:
-        die("Falha ao subir os containers (docker compose up).")
-
-    # Validar a auto-descoberta ----------------------------------------------
-    log(f"Aguardando GET /discovery (até {args.timeout}s)")
-    if not wait_for_discovery(args.api_port, args.timeout):
-        run(["docker", "compose", "logs", "--tail", "40", "openmemory-mcp"],
-            cwd=str(COMPOSE_DIR))
-        die("/discovery não respondeu a tempo.")
-    ok("/discovery respondeu 200 com os campos esperados.")
-
-    # Pronto ------------------------------------------------------------------
-    log("Instalação local-first concluída 🎉")
-    print(f"""
-  API/MCP:    http://localhost:{args.api_port}
-  Descoberta: http://localhost:{args.api_port}/discovery
-  Qdrant:     http://localhost:6333""")
-    if args.with_ui:
-        print("  UI:         http://localhost:3000")
-    print("""
-  Rota MCP (preencha hostname e project):
-    /mcp/{client_name}/sse/{hostname}      (SSE)
-    /mcp/{client_name}/http/{hostname}     (Streamable HTTP)
-
-  Os agentes na rede local podem se autoconfigurar via GET /discovery.""")
-    return 0
+    # 5. Sobe o stack de produção completo (orquestração dedicada) -----------
+    return run_production(args, compose_env, api_env, llm_spec, emb_spec)
 
 
 if __name__ == "__main__":
