@@ -10,6 +10,7 @@ import {
 import { usePolling } from "@/hooks/usePolling";
 import {
   PaginatedWriteAudit,
+  ProjectMemoriesResponse,
   ProjectSizesResponse,
   WriteAuditFilter,
 } from "@/types/admin";
@@ -69,9 +70,27 @@ export const useAdminApi = (options?: UseAdminApiOptions) => {
       return res.data;
     }, []);
 
+  // Lê as memórias de um projeto direto do store vetorial (Qdrant) — fonte do
+  // caminho MCP compartilhado, indexada por projeto (não a tabela SQL).
+  const fetchProjectMemories = useCallback(
+    async (project: string, search?: string): Promise<ProjectMemoriesResponse> => {
+      const res = await axios.get<ProjectMemoriesResponse>(
+        `${URL}/admin/projects/${encodeURIComponent(project)}/memories`,
+        { params: { search: search || undefined } },
+      );
+      return res.data;
+    },
+    [],
+  );
+
   usePolling(fetchAdminOverview, intervalMs, poll);
 
-  return { fetchAdminOverview, fetchWriteAudit, fetchProjectSizes };
+  return {
+    fetchAdminOverview,
+    fetchWriteAudit,
+    fetchProjectSizes,
+    fetchProjectMemories,
+  };
 };
 
 export default useAdminApi;

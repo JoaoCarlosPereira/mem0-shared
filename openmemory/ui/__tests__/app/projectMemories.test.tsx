@@ -1,114 +1,72 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Memory } from "@/components/types";
 
 jest.mock("next/navigation", () => ({
   useParams: () => ({ project: "proj-a" }),
 }));
 
-const fetchMemories = jest.fn();
-const createMemory = jest.fn();
-const deleteMemories = jest.fn();
-const updateMemoryState = jest.fn();
-
-jest.mock("@/hooks/useMemoriesApi", () => ({
-  useMemoriesApi: jest.fn(() => ({
-    fetchMemories,
-    createMemory,
-    deleteMemories,
-    updateMemoryState,
-  })),
-}));
-jest.mock("sonner", () => ({
-  toast: { success: jest.fn(), error: jest.fn() },
+const fetchProjectMemories = jest.fn();
+jest.mock("@/hooks/useAdminApi", () => ({
+  useAdminApi: jest.fn(() => ({ fetchProjectMemories })),
 }));
 
 import ProjectMemoriesPage from "@/app/admin/projects/[project]/page";
+import type { ProjectMemoriesResponse } from "@/types/admin";
 
-const sampleMemories: Memory[] = [
-  {
-    id: "m1",
-    memory: "conteúdo da memória um",
-    metadata: {},
-    client: "api",
-    categories: [],
-    created_at: 1700000000000,
-    app_name: "openmemory",
-    state: "active",
-  },
-];
-
-function renderPage() {
-  return render(<ProjectMemoriesPage />);
-}
+const page: ProjectMemoriesResponse = {
+  project: "proj-a",
+  items: [
+    {
+      id: "m1",
+      memory: "conteúdo da memória um",
+      created_at: "2026-01-01T10:00:00Z",
+      project: "proj-a",
+    },
+  ],
+  total: 1,
+};
 
 beforeEach(() => {
-  fetchMemories.mockReset().mockResolvedValue({
-    memories: sampleMemories,
-    total: 1,
-    pages: 1,
-  });
-  createMemory.mockReset().mockResolvedValue(undefined);
-  deleteMemories.mockReset().mockResolvedValue(undefined);
-  updateMemoryState.mockReset().mockResolvedValue(undefined);
+  fetchProjectMemories.mockReset().mockResolvedValue(page);
 });
 
-describe("ProjectMemoriesPage", () => {
-  it("exibe a lista de memórias do projeto", async () => {
-    renderPage();
-    expect(await screen.findByText("conteúdo da memória um")).toBeInTheDocument();
+describe("ProjectMemoriesPage (leitura por projeto / Qdrant)", () => {
+  it("exibe o cabeçalho do projeto e a lista de memórias", async () => {
+    render(<ProjectMemoriesPage />);
     expect(screen.getByText("Memórias — proj-a")).toBeInTheDocument();
-  });
-
-  it("busca chama fetchMemories com o search_query digitado", async () => {
-    renderPage();
-    const input = await screen.findByPlaceholderText("Buscar memórias…");
-    await userEvent.type(input, "reunião");
-    await waitFor(() =>
-      expect(fetchMemories).toHaveBeenLastCalledWith(
-        "reunião",
-        1,
-        10,
-        expect.anything(),
-      ),
-    );
-  });
-
-  it("selecionar checkbox exibe botão 'Deletar selecionados'", async () => {
-    renderPage();
-    const cb = await screen.findByLabelText("Selecionar m1");
-    await userEvent.click(cb);
     expect(
-      screen.getByText(/Deletar selecionados/i),
+      await screen.findByText("conteúdo da memória um"),
     ).toBeInTheDocument();
   });
 
-  it("delete pede confirmação antes de executar e remove após confirmar", async () => {
-    renderPage();
-    await screen.findByText("conteúdo da memória um");
-    await userEvent.click(screen.getByLabelText("Deletar"));
-
-    // Dialog de confirmação aparece e nada foi deletado ainda
-    expect(screen.getByText("Confirmar exclusão")).toBeInTheDocument();
-    expect(deleteMemories).not.toHaveBeenCalled();
-
-    await userEvent.click(screen.getByRole("button", { name: "Sim, deletar" }));
+  it("carrega memórias do projeto via fetchProjectMemories ao montar", async () => {
+    render(<ProjectMemoriesPage />);
     await waitFor(() =>
-      expect(deleteMemories).toHaveBeenCalledWith(["m1"]),
-    );
-    await waitFor(() =>
-      expect(
-        screen.queryByText("conteúdo da memória um"),
-      ).not.toBeInTheDocument(),
+      expect(fetchProjectMemories).toHaveBeenCalledWith("proj-a", undefined),
     );
   });
 
-  it("modal de criação abre ao clicar em 'Nova Memória' e não cria sozinho", async () => {
-    renderPage();
+  it("busca aciona fetchProjectMemories com o termo digitado", async () => {
+    render(<ProjectMemoriesPage />);
     await screen.findByText("conteúdo da memória um");
-    await userEvent.click(screen.getByRole("button", { name: "Nova Memória" }));
-    expect(screen.getByText("Nova Memória em proj-a")).toBeInTheDocument();
-    expect(createMemory).not.toHaveBeenCalled();
+    const input = screen.getByPlaceholderText(/Buscar memórias/i);
+    await userEvent.type(input, "reunião");
+    await userEvent.click(screen.getByRole("button", { name: "Buscar" }));
+    await waitFor(() =>
+      expect(fetchProjectMemories).toHaveBeenLastCalledWith("proj-a", "reunião"),
+    );
+  });
+
+  it("exibe estado vazio quando não há memórias", async () => {
+    fetchProjectMemories.mockResolvedValue({
+      project: "proj-a",
+      items: [],
+      total: 0,
+    });
+    render(<ProjectMemoriesPage />);
+    expect(
+      await screen.findByText("Nenhuma memória encontrada neste projeto"),
+    ).toBeInTheDocument();
   });
 });

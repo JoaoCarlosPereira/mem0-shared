@@ -16,6 +16,7 @@ import io
 import math
 import os
 from datetime import datetime, timedelta
+from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -100,6 +101,73 @@ def project_sizes(db: Session = Depends(get_db)) -> dict:
 
     PROJECT_SIZE_OVER_THRESHOLD.set(over)
     return {"threshold": threshold, "over_threshold_count": over, "projects": items}
+
+
+@router.get("/projects/{project}/memories")
+def project_memories(
+    project: str,
+    search: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    """Lista as memórias de UM projeto lendo o store vetorial (Qdrant) — a MESMA
+    fonte usada pelo MCP (list_memories/search_memory).
+
+    O caminho de memória compartilhada grava via ``client.add(..., project=…)`` no
+    Qdrant indexado por projeto; ele NÃO popula a tabela SQL ``memories`` (essa só
+    recebe o que é criado pela UI/API por user_id). Por isso a leitura aqui é
+    direta no vector store, por projeto, espelhando o ``list_memories`` do MCP.
+
+    Imports do client de memória são lazy (puxam o mem0) para manter este módulo
+    leve no import — os testes que path-load este arquivo não pagam esse custo.
+    """
+    from app.utils.memory import get_memory_client_safe
+    from app.utils.partitioning import bind_active_collection, resolve_and_bind
+
+    client = get_memory_client_safe()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Memory system unavailable")
+
+    filters = {"project": project}
+    try:
+        if search:
+            route = resolve_and_bind(client, project)
+            vectors = client.embedding_model.embed(search, "search")
+            hits = client.vector_store.search(
+                query=search, vectors=vectors, top_k=limit,
+                filters=filters, shard_key_selector=route.shard_key,
+            )
+            items = [
+                {
+                    "id": str(getattr(h, "id", "")),
+                    "memory": (getattr(h, "payload", {}) or {}).get("data"),
+                    "created_at": (getattr(h, "payload", {}) or {}).get("created_at"),
+                    "project": (getattr(h, "payload", {}) or {}).get("project"),
+                    "score": getattr(h, "score", None),
+                }
+                for h in hits
+            ]
+        else:
+            bind_active_collection(client)
+            raw = client.vector_store.list(filters=filters, top_k=limit)
+            # vector_store.list pode retornar (points, next_offset) ou lista flat.
+            points = raw
+            if isinstance(raw, (tuple, list)) and raw and isinstance(raw[0], (list, tuple)):
+                points = raw[0]
+            items = [
+                {
+                    "id": str(getattr(p, "id", "")),
+                    "memory": (getattr(p, "payload", {}) or {}).get("data"),
+                    "created_at": (getattr(p, "payload", {}) or {}).get("created_at"),
+                    "project": (getattr(p, "payload", {}) or {}).get("project"),
+                }
+                for p in points
+            ]
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500, detail=f"erro lendo memórias do projeto: {exc}"
+        ) from exc
+
+    return {"project": project, "items": items, "total": len(items)}
 
 
 # --------------------------------------------------------------------------- #

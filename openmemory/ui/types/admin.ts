@@ -123,6 +123,22 @@ export type ProjectSizesResponse = {
   projects: ProjectSize[];
 };
 
+// Memória de um projeto lida do store vetorial (Qdrant) via
+// GET /admin/projects/{project}/memories — fonte do MCP, indexada por projeto.
+export type ProjectMemory = {
+  id: string;
+  memory: string | null;
+  created_at: string | null;
+  project: string | null;
+  score?: number | null;
+};
+
+export type ProjectMemoriesResponse = {
+  project: string;
+  items: ProjectMemory[];
+  total: number;
+};
+
 // Filtros da página de audit (estado local, não-Redux)
 export type WriteAuditFilter = {
   project?: string;
