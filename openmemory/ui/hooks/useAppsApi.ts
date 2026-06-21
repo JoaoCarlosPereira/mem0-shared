@@ -20,7 +20,7 @@ import {
   setAccessedMemoriesError,
   setSelectedAppError,
 } from '@/store/appsSlice';
-import { API_URL } from "@/lib/api-url";
+import { getApiUrl } from "@/lib/api-url";
 
 interface ApiResponse {
   total: number;
@@ -93,7 +93,7 @@ export const useAppsApi = (): UseAppsApiReturn => {
       if (sort_direction) queryParams.append('sort_direction', sort_direction);
 
       const response = await axios.get<ApiResponse>(
-        `${API_URL}/api/v1/apps/?${queryParams.toString()}`
+        `${getApiUrl()}/api/v1/apps/?${queryParams.toString()}`
       );
 
       setIsLoading(false);
@@ -116,7 +116,7 @@ export const useAppsApi = (): UseAppsApiReturn => {
     dispatch(setSelectedAppLoading());
     try {
       const response = await axios.get<AppDetails>(
-        `${API_URL}/api/v1/apps/${appId}`
+        `${getApiUrl()}/api/v1/apps/${appId}`
       );
       dispatch(setSelectedAppDetails(response.data));
       setIsLoading(false);
@@ -134,7 +134,7 @@ export const useAppsApi = (): UseAppsApiReturn => {
     dispatch(setCreatedMemoriesLoading());
     try {
       const response = await axios.get<MemoriesResponse>(
-        `${API_URL}/api/v1/apps/${appId}/memories?page=${page}&page_size=${pageSize}`
+        `${getApiUrl()}/api/v1/apps/${appId}/memories?page=${page}&page_size=${pageSize}`
       );
       dispatch(setCreatedMemoriesSuccess({
         items: response.data.memories,
@@ -155,7 +155,7 @@ export const useAppsApi = (): UseAppsApiReturn => {
     dispatch(setAccessedMemoriesLoading());
     try {
       const response = await axios.get<AccessedMemoriesResponse>(
-        `${API_URL}/api/v1/apps/${appId}/accessed?page=${page}&page_size=${pageSize}`
+        `${getApiUrl()}/api/v1/apps/${appId}/accessed?page=${page}&page_size=${pageSize}`
       );
       dispatch(setAccessedMemoriesSuccess({
         items: response.data.memories,
@@ -175,7 +175,7 @@ export const useAppsApi = (): UseAppsApiReturn => {
     setIsLoading(true);
     try {
       const response = await axios.put(
-        `${API_URL}/api/v1/apps/${appId}?is_active=${details.is_active}`
+        `${getApiUrl()}/api/v1/apps/${appId}?is_active=${details.is_active}`
       );
       setIsLoading(false);
       return response.data;

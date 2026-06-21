@@ -4,7 +4,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '@/store/store';
 import { setApps, setTotalApps } from '@/store/profileSlice';
 import { setTotalMemories } from '@/store/profileSlice';
-import { API_URL } from "@/lib/api-url";
+import { getApiUrl } from "@/lib/api-url";
 
 // Define the new simplified memory type
 export interface SimpleMemory {
@@ -42,7 +42,7 @@ export const useStats = (): UseMemoriesApiReturn => {
     setError(null);
     try {
       const response = await axios.get<APIStatsResponse>(
-        `${API_URL}/api/v1/stats/?user_id=${user_id}`
+        `${getApiUrl()}/api/v1/stats/?user_id=${user_id}`
       );
       dispatch(setTotalMemories(response.data.total_memories));
       dispatch(setTotalApps(response.data.total_apps));

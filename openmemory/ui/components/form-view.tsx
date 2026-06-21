@@ -13,7 +13,7 @@ import { Textarea } from "./ui/textarea"
 import { useRef, useState as useReactState } from "react"
 import { useSelector } from "react-redux"
 import { RootState } from "@/store/store"
-import { API_URL } from "@/lib/api-url";
+import { getApiUrl } from "@/lib/api-url";
 
 interface FormViewProps {
   settings: any
@@ -369,7 +369,7 @@ export function FormView({ settings, onChange }: FormViewProps) {
                 className="bg-zinc-800 hover:bg-zinc-700"
                 onClick={async () => {
                   try {
-                    const res = await fetch(`${API_URL}/api/v1/backup/export`, {
+                    const res = await fetch(`${getApiUrl()}/api/v1/backup/export`, {
                       method: "POST",
                       headers: { "Content-Type": "application/json", Accept: "application/zip" },
                       body: JSON.stringify({ user_id: userId }),
@@ -436,7 +436,7 @@ export function FormView({ settings, onChange }: FormViewProps) {
                       const form = new FormData()
                       form.append("file", file)
                       form.append("user_id", String(userId))
-                      const res = await fetch(`${API_URL}/api/v1/backup/import`, { method: "POST", body: form })
+                      const res = await fetch(`${getApiUrl()}/api/v1/backup/import`, { method: "POST", body: form })
                       if (!res.ok) throw new Error(`Import failed with status ${res.status}`)
                       await res.json()
                       if (fileInputRef.current) fileInputRef.current.value = ""

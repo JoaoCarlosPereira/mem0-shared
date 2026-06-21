@@ -27,7 +27,7 @@ import {
   WriteAuditFilter,
   WriteAuditLog,
 } from "@/types/admin";
-import { API_URL } from "@/lib/api-url";
+import { getApiUrl } from "@/lib/api-url";
 
 const ALL = "all";
 const PAGE_SIZE = 100;
@@ -77,7 +77,7 @@ export default function AuditPage() {
     setExporting(true);
     setExportError(null);
     try {
-      const response = await axios.get(`${API_URL}/admin/write-audit`, {
+      const response = await axios.get(`${getApiUrl()}/admin/write-audit`, {
         headers: { Accept: "text/csv" },
         params: {
           project: filters.project || undefined,

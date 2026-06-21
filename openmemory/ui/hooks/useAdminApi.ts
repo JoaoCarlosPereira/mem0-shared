@@ -14,7 +14,7 @@ import {
   ProjectSizesResponse,
   WriteAuditFilter,
 } from "@/types/admin";
-import { API_URL } from "@/lib/api-url";
+import { getApiUrl } from "@/lib/api-url";
 
 
 interface UseAdminApiOptions {
@@ -36,7 +36,7 @@ export const useAdminApi = (options?: UseAdminApiOptions) => {
   const fetchAdminOverview = useCallback(async (): Promise<void> => {
     dispatch(setAdminLoading());
     try {
-      const res = await axios.get(`${API_URL}/admin/overview`);
+      const res = await axios.get(`${getApiUrl()}/admin/overview`);
       dispatch(setAdminOverview(res.data));
     } catch (err: any) {
       dispatch(setAdminError(err?.message || "Failed to fetch overview"));
@@ -46,7 +46,7 @@ export const useAdminApi = (options?: UseAdminApiOptions) => {
   const fetchWriteAudit = useCallback(
     async (filters: WriteAuditFilter): Promise<PaginatedWriteAudit> => {
       const res = await axios.get<PaginatedWriteAudit>(
-        `${API_URL}/admin/write-audit`,
+        `${getApiUrl()}/admin/write-audit`,
         {
           params: {
             project: filters.project || undefined,
@@ -65,7 +65,7 @@ export const useAdminApi = (options?: UseAdminApiOptions) => {
   const fetchProjectSizes =
     useCallback(async (): Promise<ProjectSizesResponse> => {
       const res = await axios.get<ProjectSizesResponse>(
-        `${API_URL}/admin/projects/sizes`,
+        `${getApiUrl()}/admin/projects/sizes`,
       );
       return res.data;
     }, []);
@@ -75,7 +75,7 @@ export const useAdminApi = (options?: UseAdminApiOptions) => {
   const fetchProjectMemories = useCallback(
     async (project: string, search?: string): Promise<ProjectMemoriesResponse> => {
       const res = await axios.get<ProjectMemoriesResponse>(
-        `${API_URL}/admin/projects/${encodeURIComponent(project)}/memories`,
+        `${getApiUrl()}/admin/projects/${encodeURIComponent(project)}/memories`,
         { params: { search: search || undefined } },
       );
       return res.data;

@@ -26,7 +26,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { GovernanceJob, ProjectSize } from "@/types/admin";
-import { API_URL } from "@/lib/api-url";
+import { getApiUrl } from "@/lib/api-url";
 
 
 const JOB_TYPES: { type: string; label: string; destructive?: boolean }[] = [
@@ -68,7 +68,7 @@ export default function GovernancePage() {
       .then((res) => setProjects(res.projects))
       .catch(() => {});
     axios
-      .get(`${API_URL}/admin/governance/policies`)
+      .get(`${getApiUrl()}/admin/governance/policies`)
       .then((res) => setPolicies(res.data))
       .catch(() => {});
   }, [fetchProjectSizes]);
@@ -77,7 +77,7 @@ export default function GovernancePage() {
     if (!dialogJob) return;
     setDispatching(true);
     try {
-      await axios.post(`${API_URL}/admin/governance/jobs/${dialogJob.type}`, {
+      await axios.post(`${getApiUrl()}/admin/governance/jobs/${dialogJob.type}`, {
         project: selectedProject || null,
       });
       toast.success(`Job ${dialogJob.label} enfileirado`);

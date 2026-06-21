@@ -11,7 +11,7 @@ import {
   setSelectedApps,
   setSelectedCategories
 } from '@/store/filtersSlice';
-import { API_URL } from "@/lib/api-url";
+import { getApiUrl } from "@/lib/api-url";
 
 interface CategoriesResponse {
   categories: Category[];
@@ -39,7 +39,7 @@ export const useFiltersApi = (): UseFiltersApiReturn => {
     dispatch(setCategoriesLoading());
     try {
       const response = await axios.get<CategoriesResponse>(
-        `${API_URL}/api/v1/memories/categories?user_id=${user_id}`
+        `${getApiUrl()}/api/v1/memories/categories?user_id=${user_id}`
       );
 
       dispatch(setCategoriesSuccess({
