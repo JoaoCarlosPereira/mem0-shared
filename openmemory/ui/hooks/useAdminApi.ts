@@ -14,8 +14,8 @@ import {
   ProjectSizesResponse,
   WriteAuditFilter,
 } from "@/types/admin";
+import { API_URL } from "@/lib/api-url";
 
-const URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8765";
 
 interface UseAdminApiOptions {
   // Quando false, desativa o auto-refresh do overview (ex.: página de audit).
@@ -36,7 +36,7 @@ export const useAdminApi = (options?: UseAdminApiOptions) => {
   const fetchAdminOverview = useCallback(async (): Promise<void> => {
     dispatch(setAdminLoading());
     try {
-      const res = await axios.get(`${URL}/admin/overview`);
+      const res = await axios.get(`${API_URL}/admin/overview`);
       dispatch(setAdminOverview(res.data));
     } catch (err: any) {
       dispatch(setAdminError(err?.message || "Failed to fetch overview"));
@@ -46,7 +46,7 @@ export const useAdminApi = (options?: UseAdminApiOptions) => {
   const fetchWriteAudit = useCallback(
     async (filters: WriteAuditFilter): Promise<PaginatedWriteAudit> => {
       const res = await axios.get<PaginatedWriteAudit>(
-        `${URL}/admin/write-audit`,
+        `${API_URL}/admin/write-audit`,
         {
           params: {
             project: filters.project || undefined,
@@ -65,7 +65,7 @@ export const useAdminApi = (options?: UseAdminApiOptions) => {
   const fetchProjectSizes =
     useCallback(async (): Promise<ProjectSizesResponse> => {
       const res = await axios.get<ProjectSizesResponse>(
-        `${URL}/admin/projects/sizes`,
+        `${API_URL}/admin/projects/sizes`,
       );
       return res.data;
     }, []);
@@ -75,7 +75,7 @@ export const useAdminApi = (options?: UseAdminApiOptions) => {
   const fetchProjectMemories = useCallback(
     async (project: string, search?: string): Promise<ProjectMemoriesResponse> => {
       const res = await axios.get<ProjectMemoriesResponse>(
-        `${URL}/admin/projects/${encodeURIComponent(project)}/memories`,
+        `${API_URL}/admin/projects/${encodeURIComponent(project)}/memories`,
         { params: { search: search || undefined } },
       );
       return res.data;

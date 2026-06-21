@@ -13,6 +13,7 @@ import { Textarea } from "./ui/textarea"
 import { useRef, useState as useReactState } from "react"
 import { useSelector } from "react-redux"
 import { RootState } from "@/store/store"
+import { API_URL } from "@/lib/api-url";
 
 interface FormViewProps {
   settings: any
@@ -26,8 +27,7 @@ export function FormView({ settings, onChange }: FormViewProps) {
   const [isUploading, setIsUploading] = useReactState(false)
   const [selectedImportFileName, setSelectedImportFileName] = useReactState("")
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8765"
-  const userId = useSelector((state: RootState) => state.profile.userId)
+    const userId = useSelector((state: RootState) => state.profile.userId)
 
   const handleOpenMemoryChange = (key: string, value: any) => {
     onChange({

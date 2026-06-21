@@ -61,6 +61,7 @@ describe("useMemoriesApi regression", () => {
       expect.stringContaining("/api/v1/memories/shared-filter"),
       expect.objectContaining({ source: "shared", user_id: "user" }),
     );
+    expect(mockedAxios.post.mock.calls[0][0]).toMatch(/^\/api-proxy|http/);
   });
 });
 

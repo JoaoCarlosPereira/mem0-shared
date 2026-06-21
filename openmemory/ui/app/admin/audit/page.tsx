@@ -27,8 +27,8 @@ import {
   WriteAuditFilter,
   WriteAuditLog,
 } from "@/types/admin";
+import { API_URL } from "@/lib/api-url";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8765";
 const ALL = "all";
 const PAGE_SIZE = 100;
 

@@ -10,8 +10,8 @@ import {
 } from "@/store/queuesSlice";
 import { usePolling } from "@/hooks/usePolling";
 import { PaginatedWriteQueue, PaginatedGovernanceQueue } from "@/types/admin";
+import { API_URL } from "@/lib/api-url";
 
-const URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8765";
 
 interface UseQueuesApiOptions {
   poll?: boolean;
@@ -39,7 +39,7 @@ export const useQueuesApi = (options?: UseQueuesApiOptions) => {
     dispatch(setQueuesLoading());
     try {
       const res = await axios.get<PaginatedWriteQueue>(
-        `${URL}/admin/write-queue`,
+        `${API_URL}/admin/write-queue`,
         {
           params: {
             status: writeFilter.status || undefined,
@@ -58,7 +58,7 @@ export const useQueuesApi = (options?: UseQueuesApiOptions) => {
     dispatch(setQueuesLoading());
     try {
       const res = await axios.get<PaginatedGovernanceQueue>(
-        `${URL}/admin/governance/jobs`,
+        `${API_URL}/admin/governance/jobs`,
         {
           params: {
             status: govFilter.status || undefined,

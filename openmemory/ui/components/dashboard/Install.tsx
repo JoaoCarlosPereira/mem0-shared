@@ -5,6 +5,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Copy, Check } from "lucide-react";
 import Image from "next/image";
+import { API_URL, getMcpBaseUrl } from "@/lib/api-url";
 
 const clientTabs = [
   { key: "claude", label: "Claude", icon: "/images/claude.webp" },
@@ -40,13 +41,12 @@ const allTabs = [{ key: "mcp", label: "MCP Link", icon: "🔗" }, ...clientTabs]
 export const Install = () => {
   const [copiedTab, setCopiedTab] = useState<string | null>(null);
   const user = process.env.NEXT_PUBLIC_USER_ID || "user";
-
-  const URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8765";
+  const mcpBase = getMcpBaseUrl();
 
   const handleCopy = async (tab: string, isMcp: boolean = false) => {
     const text = isMcp
-      ? `${URL}/mcp/openmemory/sse/${user}`
-      : `npx @openmemory/install local ${URL}/mcp/${tab}/sse/${user} --client ${tab}`;
+      ? `${mcpBase}/mcp/openmemory/sse/${user}`
+      : `npx @openmemory/install local ${mcpBase}/mcp/${tab}/sse/${user} --client ${tab}`;
 
     try {
       // Try using the Clipboard API first
@@ -126,7 +126,7 @@ export const Install = () => {
               <div className="relative">
                 <pre className="bg-zinc-800 px-4 py-3 rounded-md overflow-x-auto text-sm">
                   <code className="text-gray-300">
-                    {URL}/mcp/openmemory/sse/{user}
+                    {mcpBase}/mcp/openmemory/sse/{user}
                   </code>
                 </pre>
                 <div>
@@ -162,7 +162,7 @@ export const Install = () => {
                 <div className="relative">
                   <pre className="bg-zinc-800 px-4 py-3 rounded-md overflow-x-auto text-sm">
                     <code className="text-gray-300">
-                      {`npx @openmemory/install local ${URL}/mcp/${key}/sse/${user} --client ${key}`}
+                      {`npx @openmemory/install local ${API_URL}/mcp/${key}/sse/${user} --client ${key}`}
                     </code>
                   </pre>
                   <div>
