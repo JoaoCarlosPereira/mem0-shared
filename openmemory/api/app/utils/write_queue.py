@@ -11,6 +11,7 @@ Persistence is SQLite-backed through the existing SQLAlchemy stack
 """
 
 import uuid
+from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -185,6 +186,39 @@ class WriteQueue:
             )
             for row in rows:
                 row.status = WriteQueueStatus.queued
+            if rows:
+                db.commit()
+            return len(rows)
+        finally:
+            db.close()
+
+
+    def recover_failed_jobs(self, older_than_minutes: int) -> int:
+        """Re-queue terminal ``failed`` jobs after a cooldown (infra recovery).
+
+        Jobs that have been ``failed`` for at least ``older_than_minutes`` are
+        moved back to ``queued`` with ``attempts`` reset so the worker can try
+        again (e.g. after LLM/DB came back). Returns the number recovered.
+        """
+        if older_than_minutes <= 0:
+            return 0
+        db = self._session()
+        try:
+            cutoff = datetime.utcnow() - timedelta(minutes=older_than_minutes)
+            rows = (
+                db.query(WriteQueueModel)
+                .filter(
+                    WriteQueueModel.status == WriteQueueStatus.failed,
+                    WriteQueueModel.updated_at <= cutoff,
+                )
+                .all()
+            )
+            for row in rows:
+                row.status = WriteQueueStatus.queued
+                row.attempts = 0
+                row.error = (
+                    f"auto-recovered after {older_than_minutes}m cooldown"
+                )
             if rows:
                 db.commit()
             return len(rows)

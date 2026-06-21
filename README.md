@@ -338,8 +338,7 @@ O agente vai:
 
 | Ferramenta | Descrição |
 |------------|-----------|
-| `add_memories(text, project)` | Enfileira escrita assíncrona. Retorna `{"status":"queued","job_id":"..."}` imediatamente — não bloqueia. |
-| `get_job_status(job_id)` | Consulta status de um job (`queued / processing / done / failed`) e o erro, se houver. |
+| `add_memories(text, project)` | Enfileira escrita assíncrona. Retorna `{"status":"accepted",...}` imediatamente — fire-and-forget; o agente não deve consultar status. |
 | `search_memory(query, project)` | Busca semântica por similaridade. Retorna memórias **ativas** do projeto compartilhado. |
 | `list_memories(project)` | Lista memórias do projeto (inclui quarentenadas — uso operacional/admin). |
 | `delete_memories(memory_ids)` | Remove memórias específicas por ID. |

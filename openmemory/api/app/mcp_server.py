@@ -83,10 +83,10 @@ mcp_router = APIRouter(prefix="/mcp")
 # Initialize SSE transport
 sse = SseServerTransport("/mcp/messages/")
 
-@mcp.tool(description="Enqueue content for asynchronous memory extraction in a project. Call this whenever the user shares durable facts or preferences, or asks you to remember something. `project` is REQUIRED and scopes the memory (memories are shared across all machines on the local network). Returns immediately with a job id — the LLM fact extraction runs in the background, so this call does not block.")
+@mcp.tool(description="Save content for asynchronous memory extraction in a project. Call this whenever the user shares durable facts or preferences, or asks you to remember something. `project` is REQUIRED and scopes the memory (memories are shared across all machines on the local network). Returns immediately with status accepted — processing is fire-and-forget on the server. Do NOT poll for job status or wait for completion; use search_memory later if needed.")
 async def add_memories(text: str, project: str) -> str:
     # task_07 / ADR-004: non-blocking write. We validate the input, enqueue the
-    # job and return an immediate ack with a job_id. The slow LLM extraction and
+    # job and return an immediate accepted ack (no job_id exposed to agents). The slow LLM extraction and
     # persistence are performed out of band by the background worker (task_06),
     # so the LLM/memory client is intentionally NOT touched on this request path.
     #
@@ -133,20 +133,15 @@ async def add_memories(text: str, project: str) -> str:
         hostname,
         client_name,
     )
-    return json.dumps({"status": "queued", "job_id": job_id})
+    return json.dumps({
+        "status": "accepted",
+        "message": (
+            "Memory received successfully. The server will process and store it "
+            "in the background — no further action needed."
+        ),
+        "project": project,
+    })
 
-
-@mcp.tool(description="Check the processing status of a previously enqueued write job. Returns status (queued/processing/done/failed), attempt count, and any error details. Use this after add_memories to confirm a write completed.")
-async def get_job_status(job_id: str) -> str:
-    if not job_id or not job_id.strip():
-        return "Error: job_id not provided"
-    try:
-        info = write_queue.get_job(job_id.strip())
-    except Exception as e:
-        return f"Error: invalid job_id — {e}"
-    if info is None:
-        return json.dumps({"error": "job not found", "job_id": job_id})
-    return json.dumps(info)
 
 
 def _record_write_audit(*, job_id, project, hostname, client_name):

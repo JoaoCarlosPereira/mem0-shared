@@ -34,12 +34,13 @@ x-api-common: &api-common
     LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
     LLM_MODEL: ${LLM_MODEL:-}
     LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434}
+    LLM_API_KEY: ${LLM_API_KEY:-}
     OLLAMA_LLM_URL: ${OLLAMA_LLM_URL:-http://host.docker.internal:11434}
     EMBEDDER_PROVIDER: ${EMBEDDER_PROVIDER:-ollama}
     EMBEDDER_MODEL: ${EMBEDDER_MODEL:-}
     EMBEDDER_BASE_URL: ${EMBEDDER_BASE_URL:-http://host.docker.internal:11434}
     OLLAMA_EMBED_URL: ${OLLAMA_EMBED_URL:-http://host.docker.internal:11434}
-    OPENMEMORY_DISCOVERY_BASE_URL: ${OPENMEMORY_DISCOVERY_BASE_URL:-http://localhost:${PROXY_PORT:-8765}}
+    OPENMEMORY_DISCOVERY_BASE_URL: ${OPENMEMORY_DISCOVERY_BASE_URL:-}
     RUN_EMBEDDED_WORKER: "false"
     WRITE_WORKER_MAX_CONCURRENCY: ${WRITE_WORKER_MAX_CONCURRENCY:-4}
     # Autenticação por equipe (task_11 / ADR-006): warn (default) -> enforce.
@@ -94,7 +95,7 @@ services:
       - traefik.http.services.openmemory.loadbalancer.sticky.cookie.name=mem0_sse_affinity
       - traefik.http.middlewares.openmemory-ratelimit.ratelimit.average=100
       - traefik.http.middlewares.openmemory-ratelimit.ratelimit.burst=50
-      - traefik.http.middlewares.openmemory-cb.circuitbreaker.expression=ResponseCodeRatio(500,600,0) > 0.50
+      - traefik.http.middlewares.openmemory-cb.circuitbreaker.expression=ResponseCodeRatio(500, 600, 0, 600) > 0.50
       - traefik.http.routers.openmemory.middlewares=openmemory-ratelimit,openmemory-cb
     depends_on:
       mem0_store:
@@ -119,7 +120,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: python -m app.workers.write_worker
+    command: python -m app.workers
 
   # Governança (Fase 3 / ADR-005): consome a fila de governança e roda o
   # processamento "inteligente" off-peak — dedup, consolidação (dream), ttl,

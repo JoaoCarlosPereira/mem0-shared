@@ -1,7 +1,7 @@
 # Reverse proxy: LB, sticky SSE sessions, rate limiting (ADR-004).
 services:
   traefik:
-    image: traefik:v3.3
+    image: traefik:v3.6.1
     restart: unless-stopped
     # DOCKER_API_VERSION: o cliente docker embutido no Traefik fala API 1.24 por
     # padrão; daemons recentes recusam (< 1.44) e o provider não descobre rotas

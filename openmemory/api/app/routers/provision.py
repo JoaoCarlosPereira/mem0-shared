@@ -16,9 +16,9 @@ idempotent (replace mem0 entries, never append). ``GET /provision/protocol``
 returns a plain-text behavioral protocol for clients without lifecycle hooks.
 """
 
-import os
-
 from fastapi import APIRouter, Request
+
+from app.utils.discovery_url import resolve_discovery_base_url
 
 router = APIRouter(prefix="/provision", tags=["provision"])
 
@@ -47,14 +47,6 @@ MODES = [
         "settings": {"auto_search": False, "auto_save": False},
     },
 ]
-
-
-def _base_url(request: Request) -> str:
-    """Resolve this server's base URL (env override, else the request URL)."""
-    override = os.getenv("OPENMEMORY_DISCOVERY_BASE_URL")
-    if override:
-        return override.rstrip("/")
-    return str(request.base_url).rstrip("/")
 
 
 def _mcp_config(host: str, base_url: str) -> dict:
@@ -130,7 +122,7 @@ def _recipe(host: str) -> list:
 
 
 def _payload(request: Request, host: str) -> dict:
-    base_url = _base_url(request)
+    base_url = resolve_discovery_base_url(request)
     return {
         "version": PROVISION_VERSION,
         "host": host,
@@ -177,7 +169,7 @@ ferramentas MCP do mem0 assim:
 - No INÍCIO de uma tarefa não-trivial: chame `search_memories` com o contexto
   atual (escopo por `project`) e use o que voltar.
 - Ao concluir algo durável (decisão, preferência, aprendizado): chame
-  `add_memory` com 1 frase objetiva.
+  `add_memory` com 1 frase objetiva (retorno imediato de aceite — não consulte status do job).
 - Nunca envie dados para fora do servidor local. Todo acesso é via MCP.
 """
 

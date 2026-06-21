@@ -44,6 +44,10 @@ from app.utils.write_queue import write_queue as _default_write_queue
 
 logger = logging.getLogger(__name__)
 
+
+class EmptyExtractionError(RuntimeError):
+    """Raised when LLM extraction produced no persistable memories."""
+
 # Default bound on concurrent LLM inferences. Kept small so the local LLM is not
 # saturated by a burst of queued writes; overridable via the constructor.
 DEFAULT_MAX_CONCURRENCY = 2
@@ -58,6 +62,25 @@ DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_BATCH_SIZE = 8
 DEFAULT_IDLE_SLEEP = 1.0
 
+# Re-queue terminal ``failed`` jobs after this many minutes (0 = disabled).
+DEFAULT_FAILED_RETRY_AFTER_MINUTES = 15
+
+
+
+
+def _persisted_result_count(result) -> int:
+    """Count non-DELETE memories persisted by a successful ``add()`` call."""
+    if not isinstance(result, dict):
+        return 0
+    count = 0
+    for item in result.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        if (item.get("event") or "ADD").upper() == "DELETE":
+            continue
+        if item.get("id"):
+            count += 1
+    return count
 
 def _default_client_provider():
     """Lazily import the memory client accessor.
@@ -93,6 +116,7 @@ class WriteWorker:
         batch_size: int = DEFAULT_BATCH_SIZE,
         idle_sleep: float = DEFAULT_IDLE_SLEEP,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        failed_retry_after_minutes: int = DEFAULT_FAILED_RETRY_AFTER_MINUTES,
     ):
         self._queue = queue if queue is not None else _default_write_queue
         self._client_provider = client_provider or _default_client_provider
@@ -101,6 +125,7 @@ class WriteWorker:
         self._batch_size = max(1, int(batch_size))
         self._idle_sleep = idle_sleep
         self._max_attempts = max(1, int(max_attempts))
+        self._failed_retry_after_minutes = max(0, int(failed_retry_after_minutes))
 
         self._semaphore = asyncio.Semaphore(self._max_concurrency)
         # Projects already cataloged in this process; avoids a redundant DB
@@ -147,6 +172,10 @@ class WriteWorker:
                         )
 
                     result = await self._run_add(client, job)
+                    if _persisted_result_count(result) == 0:
+                        raise EmptyExtractionError(
+                            "LLM extraction produced no memories (extracted=0)"
+                        )
                     self._maybe_dual_write(client, result)
                     self._catalog_project(job)
                     read_cache.invalidate_search(job.project)
@@ -267,11 +296,30 @@ class WriteWorker:
     # --------------------------------------------------------------------- #
     # Long-running loop + lifecycle
     # --------------------------------------------------------------------- #
+
+    def _recover_failed_jobs(self) -> None:
+        """Re-queue ``failed`` jobs that exceeded the cooldown."""
+        minutes = self._failed_retry_after_minutes
+        if minutes <= 0:
+            return
+        try:
+            recovered = self._queue.recover_failed_jobs(minutes)
+        except Exception:  # noqa: BLE001
+            logger.exception("failed-job recovery pass errored; continuing")
+            return
+        if recovered:
+            logger.info(
+                "recovered %s failed jobs -> queued (cooldown=%sm)",
+                recovered,
+                minutes,
+            )
+
     async def run(self) -> None:
         """Run the consume loop until :meth:`stop` is requested."""
         recovered = self._queue.recover_stale_processing()
         if recovered:
             logger.info("recovered %s stale processing jobs -> queued", recovered)
+        self._recover_failed_jobs()
         logger.info(
             "write worker started (max_concurrency=%s, batch_size=%s)",
             self._max_concurrency,
@@ -289,6 +337,7 @@ class WriteWorker:
                 logger.exception("write worker pass failed; continuing")
                 processed = 0
             if processed == 0:
+                self._recover_failed_jobs()
                 # Idle: wait for the poll interval or an early stop signal.
                 try:
                     await asyncio.wait_for(

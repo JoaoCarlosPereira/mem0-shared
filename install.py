@@ -79,6 +79,31 @@ def have_docker_compose():
     return r.returncode == 0
 
 
+def detect_lan_ip():
+    """Return the primary private IPv4 of this host, or None."""
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+        if ipaddress.ip_address(ip).is_private:
+            return ip
+    except OSError:
+        pass
+    return None
+
+
+def discovery_base_url(port, explicit=None):
+    """Build the URL advertised to remote agents (/discovery, /provision)."""
+    if explicit:
+        return explicit.rstrip("/")
+    ip = detect_lan_ip()
+    if ip:
+        return f"http://{ip}:{port}"
+    warn("Não detectei IP LAN; usando localhost (agentes em outras máquinas precisarão ajustar).")
+    return f"http://localhost:{port}"
+
+
 def set_env(file_path, key, value):
     """Idempotently set KEY=VALUE in a .env file (replace or append)."""
     lines = []
@@ -730,6 +755,10 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
     # Porta do proxy / descoberta --------------------------------------------
     set_env(compose_env, "PROXY_PORT", str(args.proxy_port))
 
+    discovery_url = discovery_base_url(args.proxy_port, args.discovery_url)
+    set_env(compose_env, "OPENMEMORY_DISCOVERY_BASE_URL", discovery_url)
+    ok(f"URL de descoberta/provision: {discovery_url}")
+
     # Segredos ----------------------------------------------------------------
     secrets = collect_secrets(args, compose_env, interactive=not args.yes)
     if args.auth_tokens:
@@ -876,6 +905,8 @@ def parse_args(argv):
                         "escala completo). Omitido = pergunta (ou local com --yes).")
     p.add_argument("--proxy-port", default=os.environ.get("PROXY_PORT", "8765"),
                    help="Porta do reverse proxy (Traefik) no modo produção.")
+    p.add_argument("--discovery-url", default=os.environ.get("OPENMEMORY_DISCOVERY_BASE_URL"),
+                   help="URL base anunciada em /discovery e /provision (default: IP LAN desta máquina).")
     # Segredos de produção (prompt quando interativo; senão usa flag/env/default).
     p.add_argument("--postgres-user", default=os.environ.get("POSTGRES_USER"))
     p.add_argument("--postgres-password", default=os.environ.get("POSTGRES_PASSWORD"))
@@ -958,6 +989,9 @@ def main(argv=None):
     except Exception:
         user = "openmemory"
     set_env(compose_env, "USER", user)
+    discovery_url = discovery_base_url(args.api_port, args.discovery_url)
+    set_env(compose_env, "OPENMEMORY_DISCOVERY_BASE_URL", discovery_url)
+    ok(f"URL de descoberta/provision: {discovery_url}")
     set_env(compose_env, "NEXT_PUBLIC_API_URL", f"http://localhost:{args.api_port}")
 
     # Local de salvamento das memórias (Qdrant + SQLite) ---------------------

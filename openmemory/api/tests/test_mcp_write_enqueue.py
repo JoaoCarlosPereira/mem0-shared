@@ -1,12 +1,12 @@
 """Tests for the non-blocking MCP write tool ``add_memories`` (task_07 / ADR-004).
 
 ``add_memories`` no longer extracts synchronously: it validates the input,
-enqueues a :class:`WriteJob` and returns an immediate ack ``{"status":
-"queued", "job_id": ...}``. The slow LLM extraction is done out of band by the
+enqueues a :class:`WriteJob` and returns an immediate fire-and-forget ack
+``{"status": "accepted", ...}`` (no job_id — agents must not poll). The slow LLM extraction is done out of band by the
 worker (task_06), so the memory client must NOT be touched on this path.
 
 Covered:
-- a valid call enqueues exactly one job and returns the queued ack;
+- a valid call enqueues exactly one job and returns the accepted ack;
 - the enqueued job carries the resolved hostname (attribution, task_04) and the
   originating client_name;
 - a missing/blank ``project`` returns a descriptive error and enqueues nothing;
@@ -87,8 +87,9 @@ class TestEnqueueAck:
         out = await add_memories("remember X", project="alpha")
         data = json.loads(out)
 
-        assert data["status"] == "queued"
-        assert data["job_id"] == FAKE_JOB_ID
+        assert data["status"] == "accepted"
+        assert "job_id" not in data
+        assert data["project"] == "alpha"
         assert len(fake_queue.jobs) == 1
 
     @pytest.mark.asyncio
@@ -192,25 +193,39 @@ class TestIntegrationWithQueue:
             _set_ctx(uid="maqA", client="cursor")
             out = await add_memories("remember X", project="alpha")
 
-        job_id = json.loads(out)["job_id"]
+        data = json.loads(out)
+        assert data["status"] == "accepted"
+        assert data["project"] == "alpha"
 
-        # The job is persisted as queued and dequeuable (worker-consumable).
+        # The job is persisted as queued before the worker dequeues it.
         db = factory()
         try:
-            row = db.query(WriteQueueModel).filter(
-                WriteQueueModel.id == uuid.UUID(job_id)
-            ).first()
-            assert row is not None
+            rows = db.query(WriteQueueModel).all()
+            assert len(rows) == 1
+            row = rows[0]
+            job_id = str(row.id)
             assert row.status == WriteQueueStatus.queued
             assert row.project == "alpha"
             assert row.hostname == "maqA"
             assert row.client_name == "cursor"
+            assert row.text == "remember X"
         finally:
             db.close()
 
         dequeued = real_queue.dequeue(limit=1)
         assert len(dequeued) == 1
+        assert dequeued[0].id == job_id
         assert dequeued[0].text == "remember X"
+
+        # dequeue marks the row processing so a crash does not re-deliver it.
+        db = factory()
+        try:
+            row = db.query(WriteQueueModel).filter(
+                WriteQueueModel.id == uuid.UUID(job_id)
+            ).first()
+            assert row.status == WriteQueueStatus.processing
+        finally:
+            db.close()
 
         # A durable audit row was recorded with the hostname attribution.
         db = factory()
@@ -236,7 +251,8 @@ class TestWriteAudit:
     async def test_enqueue_records_audit_with_hostname(self, fake_queue):
         _set_ctx(uid="maqZ", client="claude")
         out = await add_memories("remember X", project="alpha")
-        job_id = json.loads(out)["job_id"]
+        assert json.loads(out)["status"] == "accepted"
+        job_id = FAKE_JOB_ID
 
         db = mcp_server.SessionLocal()
         try:

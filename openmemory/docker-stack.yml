@@ -48,12 +48,12 @@ services:
         - traefik.http.services.openmemory.loadbalancer.server.port=8765
         - traefik.http.services.openmemory.loadbalancer.sticky.cookie=true
         - traefik.http.middlewares.openmemory-ratelimit.ratelimit.average=100
-        - traefik.http.middlewares.openmemory-cb.circuitbreaker.expression=ResponseCodeRatio(500,600,0) > 0.50
+        - traefik.http.middlewares.openmemory-cb.circuitbreaker.expression=ResponseCodeRatio(500, 600, 0, 600) > 0.50
         - traefik.http.routers.openmemory.middlewares=openmemory-ratelimit,openmemory-cb
 
   openmemory-write-worker:
     image: mem0/openmemory-mcp
-    command: python -m app.workers.write_worker
+    command: python -m app.workers
     environment:
       DATABASE_URL: postgresql://mem0:mem0@pgbouncer:5432/openmemory
       REDIS_URL: redis://redis:6379/0

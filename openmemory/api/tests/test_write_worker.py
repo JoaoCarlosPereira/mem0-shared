@@ -145,7 +145,9 @@ class TestConsumeSuccess:
     async def test_sync_client_add_is_supported(self, queue, db_path):
         # A plain (sync) client.add — the OpenMemory default is sync.
         client = MagicMock()
-        client.add = MagicMock(return_value={"results": []})
+        client.add = MagicMock(return_value={
+            "results": [{"id": "mem-1", "event": "ADD"}]
+        })
         worker = WriteWorker(queue=queue, client_provider=lambda: client,
                              upsert_project=lambda *a, **k: None)
         job_id = queue.enqueue(_job())
@@ -199,6 +201,22 @@ class TestFailureHandling:
 # Retry (bounded retentativa) — task_06 / ADR-004
 # --------------------------------------------------------------------------- #
 class TestRetry:
+
+    @pytest.mark.asyncio
+    async def test_empty_extraction_requeues_for_retry(self, queue, db_path):
+        client = MagicMock()
+        client.add = MagicMock(return_value={"results": []})
+        worker = WriteWorker(queue=queue, client_provider=lambda: client,
+                             upsert_project=lambda *a, **k: None,
+                             max_attempts=3)
+        job_id = queue.enqueue(_job())
+
+        await worker.process_once()
+        row = _status(db_path, job_id)
+        assert row.status == WriteQueueStatus.queued
+        assert row.attempts == 1
+        assert "extracted=0" in (row.error or "")
+
     @pytest.mark.asyncio
     async def test_transient_failure_requeues_for_retry(self, queue, db_path):
         client = MagicMock()
@@ -492,7 +510,8 @@ class TestAsyncAddPath:
         async def real_add(text, **kwargs):
             captured["text"] = text
             captured["project"] = kwargs.get("metadata", {}).get("project")
-            return {"results": []}
+            return {"results": [{"id": str(uuid.uuid4()), "memory": text,
+                                 "event": "ADD"}]}
 
         client = MagicMock()
         client.add = real_add  # not wrapped: a genuine coroutine function
