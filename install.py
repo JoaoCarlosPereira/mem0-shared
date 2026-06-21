@@ -606,6 +606,27 @@ def git_pull():
         ok("Código atualizado para a versão mais recente.")
 
 
+def _rebuild_with_retry(dc):
+    """Reconstrói as imagens contornando o bug 'AlreadyExists' do image store do
+    Docker/containerd (a imagem é construída, mas a re-tag de :latest falha).
+
+    Em caso de falha, remove as tags conflitantes e tenta mais uma vez. O ``rmi``
+    age SOMENTE na imagem (untag/rebuild) — NUNCA toca em volumes ou dados; as
+    memórias do Qdrant/SQLite/PostgreSQL permanecem intactas.
+    """
+    if dc("build", "--pull").returncode == 0:
+        return True
+    warn("O build falhou ao re-taggar a imagem (bug conhecido do image store do "
+         "Docker/containerd). Removendo as tags conflitantes e tentando de novo "
+         "(não afeta volumes/memórias).")
+    for img in ("mem0/openmemory-mcp:latest", "mem0/openmemory-ui:latest"):
+        run(["docker", "rmi", "-f", img],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    run(["docker", "builder", "prune", "-f"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return dc("build").returncode == 0
+
+
 def run_update(args, mode):
     """Atualiza uma instalação existente para a versão nova, PRESERVANDO os dados.
 
@@ -635,8 +656,10 @@ def run_update(args, mode):
 
     # 2. Reconstrói as imagens com o código novo ------------------------------
     log("Reconstruindo as imagens (docker compose build --pull)")
-    if dc("build", "--pull").returncode != 0:
-        die("Falha ao reconstruir as imagens. Nenhum dado foi alterado.")
+    if not _rebuild_with_retry(dc):
+        die("Falha ao reconstruir as imagens (nenhum dado foi alterado). Se o erro "
+            "for 'AlreadyExists' do image store, reinicie o Docker Desktop ou "
+            "desative 'Use containerd for pulling and storing images' em Settings.")
     ok("Imagens reconstruídas com a versão nova.")
 
     # 3. Produção: infra base + migrations aditivas ---------------------------
