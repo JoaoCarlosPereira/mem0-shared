@@ -654,6 +654,11 @@ def run_update(args, mode):
     else:
         log("'git pull' pulado (--no-pull): usando o código já presente.")
 
+    # Parar os containers antes de reconstruir as imagens. Isso evita erros de tag em
+    # uso/bloqueio (ex: "AlreadyExists") com o containerd image store do Docker.
+    log("Parando os containers em execução para liberar as imagens para rebuild")
+    dc("stop")
+
     # 2. Reconstrói as imagens com o código novo ------------------------------
     log("Reconstruindo as imagens (docker compose build --pull)")
     if not _rebuild_with_retry(dc):
@@ -684,6 +689,9 @@ def run_update(args, mode):
         # Stack completo (mesmo conjunto do install de produção).
         if dc("up", "-d").returncode != 0:
             die("Falha ao recriar os containers do stack de produção.")
+        if args.with_ui or _compose_has_running(compose_file, "openmemory-ui"):
+            if dc("--profile", "ui", "up", "-d", "openmemory-ui").returncode != 0:
+                die("Falha ao recriar a UI de produção.")
         port = int(args.proxy_port)
     else:
         # Local: recria os serviços atuais; só inclui a UI se já estava no ar
@@ -1033,6 +1041,10 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
     log("Subindo o stack completo")
     if dc("up", "-d", "--build").returncode != 0:
         die("Falha ao subir o stack completo (docker compose up).")
+    if args.with_ui:
+        log("Subindo a UI (porta 3000)")
+        if dc("--profile", "ui", "up", "-d", "--build", "openmemory-ui").returncode != 0:
+            die("Falha ao subir a UI de produção.")
 
     log(f"Aguardando GET /health via proxy (até {args.timeout}s)")
     healthy, detail = wait_for_health(args.proxy_port, args.timeout)
@@ -1050,8 +1062,10 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
   Health:     http://localhost:{args.proxy_port}/health
   Qdrant:     http://localhost:6333
   Prometheus: http://localhost:9090
-  Grafana:    http://localhost:3001  (admin / senha configurada)
-
+  Grafana:    http://localhost:3001  (admin / senha configurada)""")
+    if args.with_ui:
+        print("  UI:         http://localhost:3000")
+    print(f"""
   Stack: PostgreSQL + PgBouncer + Redis + Qdrant + workers (write/governance)
          + Traefik + observabilidade + backup (MinIO).
   Auth de equipe: AUTH_MODE={secrets['AUTH_MODE']} (defina tokens com --auth-tokens).
@@ -1119,7 +1133,7 @@ def parse_args(argv):
                         "e o .env. Não toca em volumes nem re-pergunta modelos/segredos.")
     p.add_argument("--no-pull", action="store_true",
                    help="No --update, não executa 'git pull' (usa o código já presente).")
-    p.add_argument("--with-ui", action="store_true", help="Também sobe a UI (porta 3000) — só no modo local.")
+    p.add_argument("--with-ui", action="store_true", help="Também sobe a UI (porta 3000).")
     p.add_argument("--api-port", default=os.environ.get("API_PORT", "8765"))
     p.add_argument("--timeout", type=int, default=int(os.environ.get("TIMEOUT", "180")))
     # --- Modo de instalação ---------------------------------------------------

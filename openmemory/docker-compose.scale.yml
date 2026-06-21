@@ -158,5 +158,20 @@ services:
         condition: service_healthy
     command: python -m app.workers.migration_worker
 
+  openmemory-ui:
+    container_name: openmemory_ui
+    profiles: ["ui"]
+    build:
+      context: ui/
+      dockerfile: Dockerfile
+    image: mem0/openmemory-ui:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8765}
+      - NEXT_PUBLIC_USER_ID=${USER:-openmemory}
+
 volumes:
   mem0_storage:
+
