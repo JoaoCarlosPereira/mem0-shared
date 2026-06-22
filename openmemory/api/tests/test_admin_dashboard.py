@@ -94,6 +94,8 @@ def test_overview_empty_db_all_zeros(factory, monkeypatch):
         "memories_last_24h",
         "write_queue_queued",
         "write_queue_processing",
+        "write_queue_done",
+        "write_queue_skipped",
         "write_queue_failed",
         "governance_queue_queued",
         "governance_queue_processing",

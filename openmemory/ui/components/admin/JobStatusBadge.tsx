@@ -7,6 +7,7 @@ const STATUS_CLASSES: Record<AnyStatus, string> = {
   queued: "bg-zinc-700 text-zinc-100",
   processing: "bg-blue-600 text-white",
   done: "bg-green-600 text-white",
+  skipped: "bg-amber-600 text-white",
   failed: "bg-red-600 text-white",
 };
 

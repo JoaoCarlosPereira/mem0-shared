@@ -11,6 +11,7 @@ export const JOB_STATUS_LABELS: Record<string, string> = {
   queued: "Na fila",
   processing: "Processando",
   done: "Concluído",
+  skipped: "Ignorado",
   failed: "Falhou",
 };
 

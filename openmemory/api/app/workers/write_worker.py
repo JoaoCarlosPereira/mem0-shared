@@ -45,8 +45,9 @@ from app.utils.write_queue import write_queue as _default_write_queue
 logger = logging.getLogger(__name__)
 
 
-class EmptyExtractionError(RuntimeError):
-    """Raised when LLM extraction produced no persistable memories."""
+SKIPPED_NO_MEMORIES_REASON = (
+    "Nenhuma memória nova (já existe ou conteúdo sem fatos extraíveis)"
+)
 
 # Default bound on concurrent LLM inferences. Kept small so the local LLM is not
 # saturated by a burst of queued writes; overridable via the constructor.
@@ -173,9 +174,10 @@ class WriteWorker:
 
                     result = await self._run_add(client, job)
                     if _persisted_result_count(result) == 0:
-                        raise EmptyExtractionError(
-                            "LLM extraction produced no memories (extracted=0)"
-                        )
+                        self._catalog_project(job)
+                        self._queue.mark_skipped(job.id, SKIPPED_NO_MEMORIES_REASON)
+                        WRITE_WORKER_SUCCESS.inc()
+                        return
                     self._maybe_dual_write(client, result)
                     self._catalog_project(job)
                     read_cache.invalidate_search(job.project)

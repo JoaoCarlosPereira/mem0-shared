@@ -127,6 +127,8 @@ class AdminOverviewResponse(BaseModel):
     memories_last_24h: int
     write_queue_queued: int
     write_queue_processing: int
+    write_queue_done: int
+    write_queue_skipped: int
     write_queue_failed: int
     governance_queue_queued: int
     governance_queue_processing: int

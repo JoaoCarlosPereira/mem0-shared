@@ -44,18 +44,23 @@ function StatusCounters({
   queued,
   processing,
   done,
+  skipped,
   failed,
 }: {
   queued: number;
   processing: number;
   done: number;
+  skipped: number;
   failed: number;
 }) {
   return (
-    <div className="mb-3 flex gap-4 text-sm text-zinc-400">
+    <div className="mb-3 flex flex-wrap gap-4 text-sm text-zinc-400">
       <span>na fila: {queued}</span>
       <span>processando: {processing}</span>
       <span>concluído: {done}</span>
+      <span className={skipped > 0 ? "text-amber-400" : ""}>
+        ignorado: {skipped}
+      </span>
       <span className={failed > 0 ? "text-red-400" : ""}>falhou: {failed}</span>
     </div>
   );
@@ -132,10 +137,19 @@ export default function QueuesPage() {
     { key: "attempts", header: "Tentativas", render: (r) => r.attempts },
     {
       key: "error",
-      header: "Erro",
+      header: "Detalhe",
       render: (r) =>
         r.error ? (
-          <span className="block max-w-xs truncate text-red-400" title={r.error}>
+          <span
+            className={`block max-w-xs truncate ${
+              r.status === "failed"
+                ? "text-red-400"
+                : r.status === "skipped"
+                  ? "text-amber-400"
+                  : "text-zinc-400"
+            }`}
+            title={r.error}
+          >
             {r.error}
           </span>
         ) : (
@@ -194,7 +208,8 @@ export default function QueuesPage() {
           <StatusCounters
             queued={overview?.write_queue_queued ?? 0}
             processing={overview?.write_queue_processing ?? 0}
-            done={0}
+            done={overview?.write_queue_done ?? 0}
+            skipped={overview?.write_queue_skipped ?? 0}
             failed={overview?.write_queue_failed ?? 0}
           />
           <div className="mb-3 flex gap-2">
@@ -218,6 +233,7 @@ export default function QueuesPage() {
                 <SelectItem value="queued">queued</SelectItem>
                 <SelectItem value="processing">processing</SelectItem>
                 <SelectItem value="done">done</SelectItem>
+                <SelectItem value="skipped">skipped</SelectItem>
                 <SelectItem value="failed">failed</SelectItem>
               </SelectContent>
             </Select>

@@ -203,7 +203,7 @@ class TestFailureHandling:
 class TestRetry:
 
     @pytest.mark.asyncio
-    async def test_empty_extraction_requeues_for_retry(self, queue, db_path):
+    async def test_empty_extraction_marks_skipped(self, queue, db_path):
         client = MagicMock()
         client.add = MagicMock(return_value={"results": []})
         worker = WriteWorker(queue=queue, client_provider=lambda: client,
@@ -213,9 +213,10 @@ class TestRetry:
 
         await worker.process_once()
         row = _status(db_path, job_id)
-        assert row.status == WriteQueueStatus.queued
-        assert row.attempts == 1
-        assert "extracted=0" in (row.error or "")
+        assert row.status == WriteQueueStatus.skipped
+        assert row.attempts == 0
+        assert "Nenhuma memória nova" in (row.error or "")
+        client.add.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_transient_failure_requeues_for_retry(self, queue, db_path):

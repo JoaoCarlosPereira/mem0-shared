@@ -6,7 +6,12 @@
 // `string | null` (espelhando `Optional[...]` do backend); enums são union
 // literals de string (não `enum` TS), consistente com o restante do projeto.
 
-export type WriteQueueStatus = "queued" | "processing" | "done" | "failed";
+export type WriteQueueStatus =
+  | "queued"
+  | "processing"
+  | "done"
+  | "skipped"
+  | "failed";
 
 export type GovernanceJobStatus = "queued" | "processing" | "done" | "failed";
 
@@ -61,6 +66,8 @@ export type AdminOverview = {
   memories_last_24h: number;
   write_queue_queued: number;
   write_queue_processing: number;
+  write_queue_done: number;
+  write_queue_skipped: number;
   write_queue_failed: number;
   governance_queue_queued: number;
   governance_queue_processing: number;

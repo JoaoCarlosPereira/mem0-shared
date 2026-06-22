@@ -114,6 +114,10 @@ class WriteQueue:
         """Transition a job to ``done``."""
         self._set_status(job_id, WriteQueueStatus.done)
 
+    def mark_skipped(self, job_id: str, reason: str) -> None:
+        """Transition a job to ``skipped`` (processed, but nothing new to persist)."""
+        self._set_status(job_id, WriteQueueStatus.skipped, error=reason)
+
     def mark_failed(self, job_id: str, error: str, attempts: Optional[int] = None) -> None:
         """Transition a job to ``failed`` (terminal) and record the ``error``.
 

@@ -156,6 +156,23 @@ class TestStatusTransitions:
         finally:
             db.close()
 
+    def test_mark_skipped_records_reason(self, queue, db_path):
+        job_id = queue.enqueue(_job())
+        queue.dequeue(limit=1)
+
+        queue.mark_skipped(job_id, "sem memória nova")
+
+        _, factory = _make_factory(db_path)
+        db = factory()
+        try:
+            row = db.query(WriteQueueModel).filter(
+                WriteQueueModel.id == uuid.UUID(job_id)
+            ).first()
+            assert row.status == WriteQueueStatus.skipped
+            assert row.error == "sem memória nova"
+        finally:
+            db.close()
+
     def test_mark_failed_records_error(self, queue, db_path):
         job_id = queue.enqueue(_job())
         queue.dequeue(limit=1)

@@ -38,6 +38,8 @@ describe("tipos admin", () => {
       memories_last_24h: 0,
       write_queue_queued: 0,
       write_queue_processing: 0,
+      write_queue_done: 0,
+      write_queue_skipped: 0,
       write_queue_failed: 0,
       governance_queue_queued: 0,
       governance_queue_processing: 0,

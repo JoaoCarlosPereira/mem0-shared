@@ -40,6 +40,7 @@ class WriteQueueStatus(enum.Enum):
     queued = "queued"
     processing = "processing"
     done = "done"
+    skipped = "skipped"
     failed = "failed"
 
 
