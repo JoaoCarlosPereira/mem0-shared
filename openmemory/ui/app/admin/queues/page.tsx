@@ -273,6 +273,7 @@ export default function QueuesPage() {
             queued={overview?.governance_queue_queued ?? 0}
             processing={overview?.governance_queue_processing ?? 0}
             done={0}
+            skipped={0}
             failed={overview?.governance_queue_failed ?? 0}
           />
           <div className="mb-3 flex gap-2">
