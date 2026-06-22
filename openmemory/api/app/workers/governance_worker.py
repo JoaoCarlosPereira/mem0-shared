@@ -13,12 +13,14 @@ from app.database import SessionLocal
 from app.governance.cold_tier import run_cold_tier_job
 from app.governance.consolidation import run_consolidate_job
 from app.governance.dedup import run_dedup_job
+from app.governance.project_merge import run_merge_projects_job
 from app.governance.purge import run_purge_job
 from app.governance.quality_eval import run_quality_eval_job
 from app.governance.quota import run_enforce_quota_job
 from app.governance.ttl_prune import run_ttl_prune_job
 from app.models import GovernanceJobType, GovernanceSchedule, Project
 from app.utils.governance_policy import GLOBAL_SCOPE, resolve_policy
+from app.utils.governance_schedule import is_governance_schedule_active
 from app.utils.governance_queue import GovernanceJob, governance_queue
 from app.utils.metrics import (
     GOVERNANCE_JOB_ERRORS,
@@ -168,9 +170,8 @@ class GovernanceWorker:
 
     @staticmethod
     def _in_off_peak_window() -> bool:
-        hour = datetime.now(UTC).hour
         policy = resolve_policy("")
-        return hour in policy.off_peak_hours_utc
+        return is_governance_schedule_active(policy)
 
     def _in_active_window(self) -> bool:
         """Whether SCHEDULED jobs may run now (off-peak curfew).
@@ -303,6 +304,7 @@ def _default_handlers() -> Dict[str, Handler]:
         "purge": run_purge_job,
         "enforce_quota": run_enforce_quota_job,
         "cold_tier": run_cold_tier_job,
+        "merge_projects": run_merge_projects_job,
     }
 
 

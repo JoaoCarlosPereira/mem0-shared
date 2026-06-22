@@ -1,11 +1,16 @@
 from typing import Any, Dict, Optional
 
+import logging
+
 from app.database import get_db
 from app.models import Config as ConfigModel
+from app.models import get_current_utc_time
 from app.utils.memory import reset_memory_client
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/config", tags=["config"])
 
@@ -15,6 +20,10 @@ class LLMConfig(BaseModel):
     max_tokens: int = Field(..., description="Maximum tokens to generate")
     api_key: Optional[str] = Field(None, description="API key or 'env:API_KEY' to use environment variable")
     ollama_base_url: Optional[str] = Field(None, description="Base URL for Ollama server (e.g., http://host.docker.internal:11434)")
+    openai_base_url: Optional[str] = Field(
+        None,
+        description="OpenAI-compatible API base URL for local llama.cpp/LM Studio (e.g., http://host.docker.internal:8000/v1)",
+    )
 
 class LLMProvider(BaseModel):
     provider: str = Field(..., description="LLM provider name")
@@ -24,6 +33,10 @@ class EmbedderConfig(BaseModel):
     model: str = Field(..., description="Embedder model name")
     api_key: Optional[str] = Field(None, description="API key or 'env:API_KEY' to use environment variable")
     ollama_base_url: Optional[str] = Field(None, description="Base URL for Ollama server (e.g., http://host.docker.internal:11434)")
+    openai_base_url: Optional[str] = Field(
+        None,
+        description="OpenAI-compatible embedding API base URL (local llama.cpp/LM Studio)",
+    )
 
 class EmbedderProvider(BaseModel):
     provider: str = Field(..., description="Embedder provider name")
@@ -45,6 +58,13 @@ class Mem0Config(BaseModel):
 class ConfigSchema(BaseModel):
     openmemory: Optional[OpenMemoryConfig] = None
     mem0: Optional[Mem0Config] = None
+
+
+def _model_dump(model: BaseModel, **kwargs) -> Dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump(**kwargs)
+    return model.dict(**kwargs)
+
 
 def get_default_configuration():
     """Get the default configuration with sensible defaults for LLM and embedder.
@@ -116,42 +136,63 @@ def get_config_from_db(db: Session, key: str = "main"):
 def save_config_to_db(db: Session, config: Dict[str, Any], key: str = "main"):
     """Save configuration to database."""
     db_config = db.query(ConfigModel).filter(ConfigModel.key == key).first()
-    
+
     if db_config:
         db_config.value = config
-        db_config.updated_at = None  # Will trigger the onupdate to set current time
+        db_config.updated_at = get_current_utc_time()
     else:
         db_config = ConfigModel(key=key, value=config)
         db.add(db_config)
-        
+
     db.commit()
     db.refresh(db_config)
     return db_config.value
 
+
+@router.get("", response_model=ConfigSchema)
 @router.get("/", response_model=ConfigSchema)
 async def get_configuration(db: Session = Depends(get_db)):
     """Get the current configuration."""
     config = get_config_from_db(db)
     return config
 
+
+@router.put("", response_model=ConfigSchema)
 @router.put("/", response_model=ConfigSchema)
 async def update_configuration(config: ConfigSchema, db: Session = Depends(get_db)):
     """Update the configuration."""
-    current_config = get_config_from_db(db)
-    
-    # Convert to dict for processing
-    updated_config = current_config.copy()
-    
-    # Update openmemory settings if provided
-    if config.openmemory is not None:
-        if "openmemory" not in updated_config:
-            updated_config["openmemory"] = {}
-        updated_config["openmemory"].update(config.openmemory.dict(exclude_none=True))
-    
-    # Update mem0 settings
-    updated_config["mem0"] = config.mem0.dict(exclude_none=True)
-    
+    try:
+        current_config = get_config_from_db(db)
 
+        updated_config = current_config.copy()
+
+        if config.openmemory is not None:
+            if "openmemory" not in updated_config:
+                updated_config["openmemory"] = {}
+            updated_config["openmemory"].update(_model_dump(config.openmemory, exclude_none=True))
+
+        if config.mem0 is not None:
+            mem0_update = _model_dump(config.mem0, exclude_none=True)
+            if "mem0" not in updated_config:
+                updated_config["mem0"] = {}
+            # Merge section-by-section so UI saves (llm/embedder only) keep vector_store.
+            for key, value in mem0_update.items():
+                updated_config["mem0"][key] = value
+
+        save_config_to_db(db, updated_config)
+        reset_memory_client()
+        return updated_config
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("failed to update configuration")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save configuration: {exc}",
+        ) from exc
+
+
+@router.patch("", response_model=ConfigSchema)
 @router.patch("/", response_model=ConfigSchema)
 async def patch_configuration(config_update: ConfigSchema, db: Session = Depends(get_db)):
     """Update parts of the configuration."""
@@ -165,7 +206,7 @@ async def patch_configuration(config_update: ConfigSchema, db: Session = Depends
                 source[key] = value
         return source
 
-    update_data = config_update.dict(exclude_unset=True)
+    update_data = _model_dump(config_update, exclude_unset=True)
     updated_config = deep_update(current_config, update_data)
 
     save_config_to_db(db, updated_config)
@@ -207,7 +248,7 @@ async def update_llm_configuration(llm_config: LLMProvider, db: Session = Depend
         current_config["mem0"] = {}
     
     # Update the LLM configuration
-    current_config["mem0"]["llm"] = llm_config.dict(exclude_none=True)
+    current_config["mem0"]["llm"] = _model_dump(llm_config, exclude_none=True)
     
     # Save the configuration to database
     save_config_to_db(db, current_config)
@@ -231,7 +272,7 @@ async def update_embedder_configuration(embedder_config: EmbedderProvider, db: S
         current_config["mem0"] = {}
     
     # Update the Embedder configuration
-    current_config["mem0"]["embedder"] = embedder_config.dict(exclude_none=True)
+    current_config["mem0"]["embedder"] = _model_dump(embedder_config, exclude_none=True)
     
     # Save the configuration to database
     save_config_to_db(db, current_config)
@@ -255,7 +296,7 @@ async def update_vector_store_configuration(vector_store_config: VectorStoreProv
         current_config["mem0"] = {}
     
     # Update the Vector Store configuration
-    current_config["mem0"]["vector_store"] = vector_store_config.dict(exclude_none=True)
+    current_config["mem0"]["vector_store"] = _model_dump(vector_store_config, exclude_none=True)
     
     # Save the configuration to database
     save_config_to_db(db, current_config)
@@ -279,7 +320,7 @@ async def update_openmemory_configuration(openmemory_config: OpenMemoryConfig, d
         current_config["openmemory"] = {}
     
     # Update the OpenMemory configuration
-    current_config["openmemory"].update(openmemory_config.dict(exclude_none=True))
+    current_config["openmemory"].update(_model_dump(openmemory_config, exclude_none=True))
     
     # Save the configuration to database
     save_config_to_db(db, current_config)

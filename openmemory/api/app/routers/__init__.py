@@ -1,5 +1,7 @@
 from .governance import router as governance_router
+from .governance_schedule import router as governance_schedule_router
 from .admin import router as admin_router
+from .admin_write_queue import router as admin_write_queue_router
 from .apps import router as apps_router
 from .backup import router as backup_router
 from .compat_v3 import router as compat_v3_router
@@ -13,6 +15,7 @@ from .stats import router as stats_router
 
 __all__ = [
     "admin_router",
+    "admin_write_queue_router",
     "memories_router",
     "apps_router",
     "stats_router",
@@ -24,4 +27,6 @@ __all__ = [
     "health_router",
     "ops_metrics_router",
     "governance_router",
+    "governance_project_merge_router",
+    "governance_schedule_router",
 ]

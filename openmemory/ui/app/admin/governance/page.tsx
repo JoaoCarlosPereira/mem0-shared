@@ -25,8 +25,47 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { GovernanceJob, ProjectSize } from "@/types/admin";
 import { getApiUrl } from "@/lib/api-url";
+
+type ProjectMergePreviewGroup = {
+  canonical: string;
+  aliases: string[];
+  confidence: number;
+  reason: string;
+  memory_counts: Record<string, number>;
+};
+
+type ProjectMergePreviewResponse = {
+  groups: ProjectMergePreviewGroup[];
+  count: number;
+};
+
+type ScheduleConfig = {
+  schedule_timezone: string;
+  schedule_weekdays: number[];
+  schedule_start_time: string;
+  schedule_end_time: string;
+};
+
+const WEEKDAYS: { value: number; label: string }[] = [
+  { value: 0, label: "Seg" },
+  { value: 1, label: "Ter" },
+  { value: 2, label: "Qua" },
+  { value: 3, label: "Qui" },
+  { value: 4, label: "Sex" },
+  { value: 5, label: "Sáb" },
+  { value: 6, label: "Dom" },
+];
+
+const TIMEZONES = [
+  "America/Sao_Paulo",
+  "America/Manaus",
+  "America/Fortaleza",
+  "UTC",
+];
 
 
 const JOB_TYPES: { type: string; label: string; destructive?: boolean }[] = [
@@ -62,6 +101,13 @@ export default function GovernancePage() {
   } | null>(null);
   const [selectedProject, setSelectedProject] = useState<string>("");
   const [dispatching, setDispatching] = useState(false);
+  const [mergePreview, setMergePreview] = useState<ProjectMergePreviewGroup[] | null>(
+    null,
+  );
+  const [mergeLoading, setMergeLoading] = useState(false);
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+  const [schedule, setSchedule] = useState<ScheduleConfig | null>(null);
+  const [scheduleSaving, setScheduleSaving] = useState(false);
 
   useEffect(() => {
     fetchProjectSizes()
@@ -70,6 +116,10 @@ export default function GovernancePage() {
     axios
       .get(`${getApiUrl()}/admin/governance/policies`)
       .then((res) => setPolicies(res.data))
+      .catch(() => {});
+    axios
+      .get<ScheduleConfig>(`${getApiUrl()}/admin/governance/schedule`)
+      .then((res) => setSchedule(res.data))
       .catch(() => {});
   }, [fetchProjectSizes]);
 
@@ -90,6 +140,76 @@ export default function GovernancePage() {
       setDispatching(false);
     }
   }, [dialogJob, selectedProject, fetchGovernanceJobs]);
+
+  const handleAnalyzeDuplicates = useCallback(async () => {
+    setMergeLoading(true);
+    setMergeDialogOpen(true);
+    setMergePreview(null);
+    try {
+      const res = await axios.get<ProjectMergePreviewResponse>(
+        `${getApiUrl()}/admin/governance/projects/merge-preview`,
+      );
+      setMergePreview(res.data.groups);
+      if (res.data.count === 0) {
+        toast.info("Nenhum projeto duplicado detectado pelo LLM.");
+      }
+    } catch {
+      toast.error("Falha ao analisar projetos duplicados");
+      setMergeDialogOpen(false);
+    } finally {
+      setMergeLoading(false);
+    }
+  }, []);
+
+  const handleMergeProjects = useCallback(async () => {
+    setMergeLoading(true);
+    try {
+      await axios.post(`${getApiUrl()}/admin/governance/projects/merge`, {
+        dry_run: false,
+      });
+      toast.success("Unificação de projetos enfileirada");
+      setMergeDialogOpen(false);
+      setMergePreview(null);
+      await fetchGovernanceJobs();
+    } catch {
+      toast.error("Falha ao enfileirar unificação de projetos");
+    } finally {
+      setMergeLoading(false);
+    }
+  }, [fetchGovernanceJobs]);
+
+  const toggleWeekday = useCallback((day: number, checked: boolean) => {
+    setSchedule((prev) => {
+      if (!prev) return prev;
+      const set = new Set(prev.schedule_weekdays);
+      if (checked) set.add(day);
+      else set.delete(day);
+      return {
+        ...prev,
+        schedule_weekdays: Array.from(set).sort((a, b) => a - b),
+      };
+    });
+  }, []);
+
+  const handleSaveSchedule = useCallback(async () => {
+    if (!schedule || schedule.schedule_weekdays.length === 0) {
+      toast.error("Selecione pelo menos um dia da semana");
+      return;
+    }
+    setScheduleSaving(true);
+    try {
+      const res = await axios.put<ScheduleConfig>(
+        `${getApiUrl()}/admin/governance/schedule`,
+        schedule,
+      );
+      setSchedule(res.data);
+      toast.success("Agendamento de governança salvo");
+    } catch {
+      toast.error("Falha ao salvar agendamento");
+    } finally {
+      setScheduleSaving(false);
+    }
+  }, [schedule]);
 
   const columns: QueueColumn<GovernanceJob>[] = [
     { key: "job_type", header: "Tipo", render: (r) => r.job_type },
@@ -134,6 +254,28 @@ export default function GovernancePage() {
 
       <section className="mb-6">
         <h2 className="mb-2 text-sm font-medium text-zinc-400">
+          Unificação de projetos (LLM)
+        </h2>
+        <p className="mb-3 max-w-2xl text-sm text-zinc-500">
+          Detecta projetos MCP que representam o mesmo workspace (ex.:{" "}
+          <code className="text-zinc-400">sysmovs</code>,{" "}
+          <code className="text-zinc-400">dsv-delphi-sysmovs</code>) e move
+          todas as memórias para um nome canônico.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={mergeLoading}
+            onClick={handleAnalyzeDuplicates}
+          >
+            Analisar Duplicatas
+          </Button>
+        </div>
+      </section>
+
+      <section className="mb-6">
+        <h2 className="mb-2 text-sm font-medium text-zinc-400">
           Jobs de governança
         </h2>
         <QueueTable
@@ -144,6 +286,107 @@ export default function GovernancePage() {
           onPageChange={() => {}}
           emptyMessage="Nenhum job de governança"
         />
+      </section>
+
+      <section className="mb-6">
+        <h2 className="mb-2 text-sm font-medium text-zinc-400">
+          Agendamento automático
+        </h2>
+        <p className="mb-3 max-w-2xl text-sm text-zinc-500">
+          Jobs agendados (dedup, TTL, consolidação, etc.) só rodam nesta janela.
+          Disparos manuais ignoram o agendamento.
+        </p>
+        {schedule ? (
+          <div className="max-w-xl space-y-4 rounded-md border border-zinc-800 bg-zinc-900/50 p-4">
+            <div>
+              <label className="mb-2 block text-sm text-zinc-400">
+                Dias da semana
+              </label>
+              <div className="flex flex-wrap gap-3">
+                {WEEKDAYS.map((day) => (
+                  <label
+                    key={day.value}
+                    className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300"
+                  >
+                    <Checkbox
+                      checked={schedule.schedule_weekdays.includes(day.value)}
+                      onCheckedChange={(checked) =>
+                        toggleWeekday(day.value, checked === true)
+                      }
+                      aria-label={day.label}
+                    />
+                    {day.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-sm text-zinc-400">
+                  Início
+                </label>
+                <Input
+                  type="time"
+                  value={schedule.schedule_start_time}
+                  onChange={(e) =>
+                    setSchedule((prev) =>
+                      prev
+                        ? { ...prev, schedule_start_time: e.target.value }
+                        : prev,
+                    )
+                  }
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm text-zinc-400">Fim</label>
+                <Input
+                  type="time"
+                  value={schedule.schedule_end_time}
+                  onChange={(e) =>
+                    setSchedule((prev) =>
+                      prev
+                        ? { ...prev, schedule_end_time: e.target.value }
+                        : prev,
+                    )
+                  }
+                />
+              </div>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm text-zinc-400">
+                Fuso horário
+              </label>
+              <Select
+                value={schedule.schedule_timezone}
+                onValueChange={(value) =>
+                  setSchedule((prev) =>
+                    prev ? { ...prev, schedule_timezone: value } : prev,
+                  )
+                }
+              >
+                <SelectTrigger aria-label="Fuso horário">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {TIMEZONES.map((tz) => (
+                    <SelectItem key={tz} value={tz}>
+                      {tz}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              size="sm"
+              disabled={scheduleSaving}
+              onClick={handleSaveSchedule}
+            >
+              {scheduleSaving ? "Salvando…" : "Salvar agendamento"}
+            </Button>
+          </div>
+        ) : (
+          <p className="text-sm text-zinc-500">Carregando agendamento…</p>
+        )}
       </section>
 
       <section>
@@ -212,6 +455,72 @@ export default function GovernancePage() {
               onClick={handleDispatch}
             >
               Confirmar disparo
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={mergeDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setMergeDialogOpen(false);
+            setMergePreview(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Projetos duplicados sugeridos</DialogTitle>
+          </DialogHeader>
+          {mergeLoading && mergePreview === null ? (
+            <p className="text-sm text-zinc-400">Analisando com LLM…</p>
+          ) : mergePreview && mergePreview.length > 0 ? (
+            <div className="max-h-80 space-y-3 overflow-auto">
+              {mergePreview.map((group) => (
+                <div
+                  key={group.canonical}
+                  className="rounded-md border border-zinc-800 bg-zinc-900 p-3 text-sm"
+                >
+                  <p className="font-medium text-zinc-200">
+                    Canônico: {group.canonical}
+                  </p>
+                  <p className="text-zinc-400">
+                    Unificar: {group.aliases.join(", ")}
+                  </p>
+                  <p className="text-zinc-500">
+                    Confiança: {(group.confidence * 100).toFixed(0)}% —{" "}
+                    {group.reason}
+                  </p>
+                  <p className="text-xs text-zinc-600">
+                    Memórias:{" "}
+                    {Object.entries(group.memory_counts)
+                      .map(([name, count]) => `${name}: ${count}`)
+                      .join(" · ")}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-zinc-400">
+              Nenhum grupo de merge sugerido.
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setMergeDialogOpen(false);
+                setMergePreview(null);
+              }}
+            >
+              Fechar
+            </Button>
+            <Button
+              disabled={mergeLoading || !mergePreview || mergePreview.length === 0}
+              onClick={handleMergeProjects}
+            >
+              Unificar Projetos
             </Button>
           </DialogFooter>
         </DialogContent>

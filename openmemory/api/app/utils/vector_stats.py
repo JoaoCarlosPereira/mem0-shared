@@ -8,7 +8,7 @@ match what operators see via MCP.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -55,38 +55,60 @@ def count_project_memories(project: str) -> int:
 
 
 def count_memories_last_24h() -> int:
-    """Approximate count of points created in the last 24 hours (scroll sample)."""
-    _, vs = _vector_store()
-    if vs is None:
-        return 0
-    cutoff = datetime.now(UTC).timestamp() - 86400
-    count = 0
-    offset = None
+    """Count write enqueues in the last 24 hours via the SQL audit log.
+
+    The overview dashboard only needs a fast approximate signal; scrolling the
+    entire Qdrant collection is O(n) and blocked the admin UI on LAN scale.
+    """
+    from sqlalchemy import func
+
+    from app.database import SessionLocal
+    from app.models import WriteAuditLog
+
+    cutoff = datetime.now(UTC) - timedelta(hours=24)
+    db = SessionLocal()
     try:
-        while True:
-            records, offset = vs.client.scroll(
-                collection_name=vs.collection_name,
-                limit=256,
-                offset=offset,
-                with_payload=True,
-                with_vectors=False,
+        return (
+            db.query(func.count(WriteAuditLog.id))
+            .filter(
+                WriteAuditLog.created_at >= cutoff,
+                WriteAuditLog.action == "enqueue",
             )
-            for rec in records or []:
-                payload = getattr(rec, "payload", {}) or {}
-                created = payload.get("created_at")
-                if not created:
-                    continue
-                try:
-                    ts = datetime.fromisoformat(str(created).replace("Z", "+00:00")).timestamp()
-                except ValueError:
-                    continue
-                if ts >= cutoff:
-                    count += 1
-            if offset is None:
-                break
+            .scalar()
+            or 0
+        )
     except Exception:  # noqa: BLE001
-        logger.exception("failed to count recent memories")
-    return count
+        logger.exception("failed to count recent memories from audit log")
+        return 0
+    finally:
+        db.close()
+
+
+def _scroll_points(vs, *, filters: dict[str, str], search: Optional[str] = None) -> list:
+    """Scroll Qdrant points, optionally filtering payload text (case-insensitive)."""
+    needle = search.strip().casefold() if search and search.strip() else None
+    scroll_filter = vs._create_filter(filters) if filters else None
+    points: list = []
+    offset = None
+    while True:
+        records, offset = vs.client.scroll(
+            collection_name=vs.collection_name,
+            scroll_filter=scroll_filter,
+            limit=256,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False,
+        )
+        for rec in records or []:
+            if needle is not None:
+                payload = getattr(rec, "payload", {}) or {}
+                data = (payload.get("data") or "").casefold()
+                if needle not in data:
+                    continue
+            points.append(rec)
+        if offset is None:
+            break
+    return points
 
 
 def list_shared_memories(
@@ -98,7 +120,7 @@ def list_shared_memories(
     sort_direction: str = "desc",
 ) -> dict[str, Any]:
     """List memories from Qdrant with in-memory pagination (fast for LAN scale)."""
-    client, vs = _vector_store()
+    _, vs = _vector_store()
     if vs is None:
         return {"items": [], "total": 0, "page": page, "size": size, "pages": 0}
 
@@ -109,35 +131,7 @@ def list_shared_memories(
         filters["project"] = project
 
     try:
-        if search:
-            from app.utils.partitioning import resolve_and_bind
-
-            route = resolve_and_bind(client, project or "default")
-            vectors = client.embedding_model.embed(search, "search")
-            hits = client.vector_store.search(
-                query=search,
-                vectors=vectors,
-                top_k=500,
-                filters=filters or None,
-                shard_key_selector=route.shard_key,
-            )
-            points = hits
-        else:
-            points = []
-            offset = None
-            scroll_filter = vs._create_filter(filters) if filters else None
-            while True:
-                records, offset = vs.client.scroll(
-                    collection_name=vs.collection_name,
-                    scroll_filter=scroll_filter,
-                    limit=256,
-                    offset=offset,
-                    with_payload=True,
-                    with_vectors=False,
-                )
-                points.extend(records or [])
-                if offset is None:
-                    break
+        points = _scroll_points(vs, filters=filters, search=search)
     except Exception as exc:  # noqa: BLE001
         logger.exception("list_shared_memories failed")
         raise RuntimeError(str(exc)) from exc

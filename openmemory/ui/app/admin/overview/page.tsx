@@ -20,9 +20,26 @@ function workerHint(processing: number, queued: number): string {
 }
 
 export default function OverviewPage() {
-  // Monta o hook → inicia o polling de 15s do overview.
-  useAdminApi();
+  const { fetchAdminOverview } = useAdminApi();
   const overview = useSelector((state: RootState) => state.admin.overview);
+  const error = useSelector((state: RootState) => state.admin.error);
+  const loading = useSelector((state: RootState) => state.admin.loading);
+
+  if (error && !overview) {
+    return (
+      <div>
+        <h1 className="mb-4 text-xl font-semibold text-zinc-100">Visão Geral</h1>
+        <p className="mb-3 text-sm text-red-400">{error}</p>
+        <button
+          type="button"
+          onClick={() => void fetchAdminOverview()}
+          className="rounded-md bg-zinc-800 px-3 py-1.5 text-sm text-zinc-100 hover:bg-zinc-700"
+        >
+          Tentar novamente
+        </button>
+      </div>
+    );
+  }
 
   if (!overview) {
     return (
@@ -33,6 +50,9 @@ export default function OverviewPage() {
             <Skeleton key={i} className="h-28 w-full rounded-lg" />
           ))}
         </div>
+        {loading ? (
+          <p className="mt-3 text-xs text-zinc-500">Carregando métricas…</p>
+        ) : null}
       </div>
     );
   }

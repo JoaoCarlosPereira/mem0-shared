@@ -40,6 +40,16 @@ export function FormView({ settings, onChange }: FormViewProps) {
   }
 
   const handleLlmProviderChange = (value: string) => {
+    const prev = settings.mem0?.llm?.config || {}
+    const config = { ...prev }
+    if (value === "openai" || value === "lmstudio") {
+      if (!config.openai_base_url) {
+        config.openai_base_url = "http://host.docker.internal:8000/v1"
+      }
+      if (!config.api_key) {
+        config.api_key = "llama.cpp"
+      }
+    }
     onChange({
       ...settings,
       mem0: {
@@ -47,6 +57,7 @@ export function FormView({ settings, onChange }: FormViewProps) {
         llm: {
           ...settings.mem0.llm,
           provider: value,
+          config,
         },
       },
     })
@@ -97,10 +108,16 @@ export function FormView({ settings, onChange }: FormViewProps) {
     })
   }
 
-  const needsLlmApiKey = settings.mem0?.llm?.provider?.toLowerCase() !== "ollama"
-  const needsEmbedderApiKey = settings.mem0?.embedder?.provider?.toLowerCase() !== "ollama"
-  const isLlmOllama = settings.mem0?.llm?.provider?.toLowerCase() === "ollama"
-  const isEmbedderOllama = settings.mem0?.embedder?.provider?.toLowerCase() === "ollama"
+  const llmProvider = settings.mem0?.llm?.provider?.toLowerCase() || ""
+  const embedderProvider = settings.mem0?.embedder?.provider?.toLowerCase() || ""
+  const needsLlmApiKey = llmProvider !== "ollama"
+  const needsEmbedderApiKey = embedderProvider !== "ollama"
+  const isLlmOllama = llmProvider === "ollama"
+  const isEmbedderOllama = embedderProvider === "ollama"
+  const usesLlmOpenAiCompatibleUrl =
+    llmProvider === "openai" || llmProvider === "lmstudio"
+  const usesEmbedderOpenAiCompatibleUrl =
+    embedderProvider === "openai" || embedderProvider === "lmstudio"
 
   const LLM_PROVIDERS = {
     "OpenAI": "openai",
@@ -205,6 +222,22 @@ export function FormView({ settings, onChange }: FormViewProps) {
               />
               <p className="text-xs text-muted-foreground mt-1">
                 Deixe em branco para usar o padrão: http://host.docker.internal:11434
+              </p>
+            </div>
+          )}
+
+          {usesLlmOpenAiCompatibleUrl && (
+            <div className="space-y-2">
+              <Label htmlFor="llm-openai-url">URL base da API</Label>
+              <Input
+                id="llm-openai-url"
+                placeholder="http://host.docker.internal:8000/v1"
+                value={settings.mem0?.llm?.config?.openai_base_url || ""}
+                onChange={(e) => handleLlmConfigChange("openai_base_url", e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Servidor local compatível com OpenAI (llama.cpp, LM Studio). Obrigatório com{" "}
+                <strong>MEM0_LOCAL_ONLY</strong> — sem esta URL o LLM é bloqueado como nuvem.
               </p>
             </div>
           )}
@@ -319,6 +352,21 @@ export function FormView({ settings, onChange }: FormViewProps) {
               />
               <p className="text-xs text-muted-foreground mt-1">
                 Deixe em branco para usar o padrão: http://host.docker.internal:11434
+              </p>
+            </div>
+          )}
+
+          {usesEmbedderOpenAiCompatibleUrl && (
+            <div className="space-y-2">
+              <Label htmlFor="embedder-openai-url">URL base da API</Label>
+              <Input
+                id="embedder-openai-url"
+                placeholder="http://host.docker.internal:8000/v1"
+                value={settings.mem0?.embedder?.config?.openai_base_url || ""}
+                onChange={(e) => handleEmbedderConfigChange("openai_base_url", e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Endpoint de embeddings OpenAI-compatível (llama.cpp / LM Studio).
               </p>
             </div>
           )}

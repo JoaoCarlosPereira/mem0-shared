@@ -86,9 +86,26 @@ export const useQueuesApi = (options?: UseQueuesApiOptions) => {
     await Promise.allSettled([fetchWriteQueue(), fetchGovernanceJobs()]);
   }, [fetchWriteQueue, fetchGovernanceJobs]);
 
+  const retryFailedWriteJobs = useCallback(
+    async (project?: string): Promise<{ requeued: number; projects: string[] }> => {
+      const res = await axios.post<{ requeued: number; projects: string[] }>(
+        `${getApiUrl()}/admin/write-queue/retry-failed`,
+        null,
+        { params: { project: project || undefined } },
+      );
+      return res.data;
+    },
+    [],
+  );
+
   usePolling(refreshAll, intervalMs, poll);
 
-  return { fetchWriteQueue, fetchGovernanceJobs, refreshAll };
+  return {
+    fetchWriteQueue,
+    fetchGovernanceJobs,
+    refreshAll,
+    retryFailedWriteJobs,
+  };
 };
 
 export default useQueuesApi;

@@ -69,16 +69,13 @@ class TestCountHelpers:
             assert vector_stats.count_project_memories("sysmovs") == 42
         vs._create_filter.assert_called_once_with({"project": "sysmovs"})
 
-    def test_count_memories_last_24h_counts_recent_payloads_only(self):
-        recent = datetime.now(UTC).isoformat()
-        old = (datetime.now(UTC) - timedelta(days=2)).isoformat()
-        client, vs = _make_vs(
-            scroll_batches=[
-                ([_point("1", "a", "p", recent), _point("2", "b", "p", old)], None),
-            ]
-        )
-        with patch.object(vector_stats, "_vector_store", return_value=(client, vs)):
-            assert vector_stats.count_memories_last_24h() == 1
+    def test_count_memories_last_24h_counts_recent_audit_enqueues(self):
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.scalar.return_value = 7
+
+        with patch("app.database.SessionLocal", return_value=mock_db):
+            assert vector_stats.count_memories_last_24h() == 7
+        mock_db.close.assert_called_once()
 
 
 class TestListSharedMemories:
@@ -106,21 +103,29 @@ class TestListSharedMemories:
         assert page1["items"][0]["app_name"] == "sysmovs"
         assert page2["items"][0]["content"] == "third"
 
-    def test_list_shared_memories_search_uses_vector_search(self):
-        hit = SimpleNamespace(
-            id="x",
-            score=0.9,
-            payload={"data": "match", "project": "sysmovs", "created_at": "2026-06-21T00:00:00+00:00"},
-        )
+    def test_list_shared_memories_search_filters_by_text_substring(self):
+        points = [
+            _point("1", "Fhelipe enjoys playing Counter-Strike", "default"),
+            _point("2", "Database reconciliation rules", "sysmovs"),
+        ]
         client, vs = _make_vs()
-        client.vector_store.search.return_value = [hit]
+        vs.client.scroll.return_value = (points, None)
         with patch.object(vector_stats, "_vector_store", return_value=(client, vs)):
-            with patch("app.utils.partitioning.resolve_and_bind", return_value=SimpleNamespace(shard_key=None)):
-                out = vector_stats.list_shared_memories(search="match", page=1, size=10)
+            out = vector_stats.list_shared_memories(search="fhelipe", page=1, size=10)
 
         assert out["total"] == 1
-        assert out["items"][0]["content"] == "match"
-        client.vector_store.search.assert_called_once()
+        assert "Fhelipe" in out["items"][0]["content"]
+        client.embedding_model.embed.assert_not_called()
+        client.vector_store.search.assert_not_called()
+
+    def test_list_shared_memories_search_is_case_insensitive(self):
+        points = [_point("1", "Hello WORLD", "sysmovs")]
+        client, vs = _make_vs()
+        vs.client.scroll.return_value = (points, None)
+        with patch.object(vector_stats, "_vector_store", return_value=(client, vs)):
+            out = vector_stats.list_shared_memories(search="world", page=1, size=10)
+
+        assert out["total"] == 1
 
 
 class TestGetSharedMemoryById:

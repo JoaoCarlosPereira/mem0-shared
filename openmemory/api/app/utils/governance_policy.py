@@ -11,6 +11,8 @@ from app.models import GovernancePolicy
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
+from app.utils.governance_schedule import normalize_weekdays, parse_hhmm
+
 
 GOVERNANCE_CONFIG_KEY = "governance"
 GLOBAL_SCOPE = "__global__"
@@ -36,7 +38,13 @@ DEFAULT_POLICY: Dict[str, Any] = {
         "consolidate": "weekly",
         "purge": "daily",
         "quality_eval": "weekly",
+        "merge_projects": "weekly",
     },
+    # Janela de execução dos jobs agendados (timezone IANA + dias + faixa horária local).
+    "schedule_timezone": "UTC",
+    "schedule_weekdays": [0, 1, 2, 3, 4, 5, 6],
+    "schedule_start_time": "02:00",
+    "schedule_end_time": "05:00",
     "off_peak_hours_utc": [2, 3, 4, 5],
     "batch_limit": 500,
 }
@@ -54,8 +62,25 @@ class GovernancePolicySchema(BaseModel):
     max_memories_action: str = "alert"
     cold_tier_idle_days: int = Field(default=180, ge=1)
     schedules: Dict[str, str] = Field(default_factory=dict)
+    schedule_timezone: str = "UTC"
+    schedule_weekdays: Tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6)
+    schedule_start_time: str = "02:00"
+    schedule_end_time: str = "05:00"
     off_peak_hours_utc: Tuple[int, ...] = (2, 3, 4, 5)
     batch_limit: int = Field(default=500, ge=1)
+
+    @field_validator("schedule_weekdays", mode="before")
+    @classmethod
+    def validate_schedule_weekdays(cls, value):
+        if value is None:
+            return (0, 1, 2, 3, 4, 5, 6)
+        return normalize_weekdays(value)
+
+    @field_validator("schedule_start_time", "schedule_end_time")
+    @classmethod
+    def validate_schedule_times(cls, value: str) -> str:
+        parse_hhmm(value)
+        return value.strip()
 
     @field_validator("contradiction_tiebreak")
     @classmethod
@@ -85,6 +110,10 @@ class EffectivePolicy:
     max_memories_action: str = "alert"
     cold_tier_idle_days: int = 180
     schedules: Dict[str, str] = field(default_factory=dict)
+    schedule_timezone: str = "UTC"
+    schedule_weekdays: Tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6)
+    schedule_start_time: str = "02:00"
+    schedule_end_time: str = "05:00"
     off_peak_hours_utc: Tuple[int, ...] = (2, 3, 4, 5)
     batch_limit: int = 500
 
@@ -110,6 +139,14 @@ def _to_effective(data: Dict[str, Any]) -> EffectivePolicy:
         max_memories_action=validated["max_memories_action"],
         cold_tier_idle_days=validated["cold_tier_idle_days"],
         schedules=dict(validated.get("schedules") or DEFAULT_POLICY["schedules"]),
+        schedule_timezone=validated.get("schedule_timezone") or DEFAULT_POLICY["schedule_timezone"],
+        schedule_weekdays=tuple(
+            validated.get("schedule_weekdays") or DEFAULT_POLICY["schedule_weekdays"]
+        ),
+        schedule_start_time=validated.get("schedule_start_time")
+        or DEFAULT_POLICY["schedule_start_time"],
+        schedule_end_time=validated.get("schedule_end_time")
+        or DEFAULT_POLICY["schedule_end_time"],
         off_peak_hours_utc=tuple(
             validated.get("off_peak_hours_utc") or DEFAULT_POLICY["off_peak_hours_utc"]
         ),

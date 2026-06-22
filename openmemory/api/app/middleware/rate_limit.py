@@ -22,6 +22,9 @@ from app.utils.identity import resolve_hostname
 logger = logging.getLogger(__name__)
 
 _SKIP_PREFIXES = ("/health", "/metrics", "/docs", "/openapi", "/redoc")
+_UI_CLIENT = "openmemory-ui"
+# POST bodies that only read state (dashboard list/filter) — not MCP writes.
+_READ_POST_SUFFIXES = ("/api/v1/memories/shared-filter", "/api/v1/memories/filter")
 
 
 class RedisSlidingWindowLimiter:
@@ -92,6 +95,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _scope(request: Request) -> Tuple[str, str]:
+        client_name = request.headers.get("x-client-name", "").strip()
+        if client_name == _UI_CLIENT:
+            return "default", f"ui:{client_name}"
+
         hostname = request.headers.get("x-hostname")
         if not hostname:
             parts = [p for p in request.url.path.split("/") if p]
@@ -102,7 +109,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return project, hostname
 
     def _limit_for(self, request: Request) -> Tuple[str, int]:
+        path = request.url.path.rstrip("/") or "/"
         if request.method in ("GET", "HEAD"):
+            return "search", self._search_per_min
+        if any(path.endswith(suffix) for suffix in _READ_POST_SUFFIXES):
             return "search", self._search_per_min
         return "write", self._write_per_min
 
@@ -115,7 +125,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         category, limit = self._limit_for(request)
 
         # Burst por hostname (protege contra rajadas independentemente do project).
-        ok_burst, retry_b = self._limiter.allow(f"burst:{hostname}", self._burst, self._burst_window)
+        burst_limit = (
+            _env_int("RL_UI_BURST", 120)
+            if hostname.startswith("ui:")
+            else self._burst
+        )
+        ok_burst, retry_b = self._limiter.allow(f"burst:{hostname}", burst_limit, self._burst_window)
         if not ok_burst:
             return _too_many(retry_b)
 

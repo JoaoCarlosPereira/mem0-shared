@@ -61,18 +61,23 @@ export default function SettingsPage() {
 
   const handleSave = async () => {
     try {
-      await saveConfig({ 
+      await saveConfig({
         openmemory: settings.openmemory,
-        mem0: settings.mem0 
+        mem0: settings.mem0,
       })
+      await fetchConfig()
       toast({
         title: "Configurações salvas",
         description: "Sua configuração foi atualizada com sucesso.",
       })
-    } catch (error) {
+    } catch (error: any) {
+      const detail =
+        error?.response?.data?.detail ||
+        error?.message ||
+        "Falha ao salvar configuração"
       toast({
         title: "Erro",
-        description: "Falha ao salvar configuração",
+        description: typeof detail === "string" ? detail : "Falha ao salvar configuração",
         variant: "destructive",
       })
     }

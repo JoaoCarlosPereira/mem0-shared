@@ -6,6 +6,7 @@ export interface LLMConfig {
   max_tokens: number;
   api_key?: string;
   ollama_base_url?: string;
+  openai_base_url?: string;
 }
 
 export interface LLMProvider {
@@ -17,6 +18,7 @@ export interface EmbedderConfig {
   model: string;
   api_key?: string;
   ollama_base_url?: string;
+  openai_base_url?: string;
 }
 
 export interface EmbedderProvider {
@@ -74,11 +76,13 @@ const configSlice = createSlice({
       state.status = 'loading';
       state.error = null;
     },
-    setConfigSuccess: (state, action: PayloadAction<{ openmemory?: OpenMemoryConfig; mem0: Mem0Config }>) => {
+    setConfigSuccess: (state, action: PayloadAction<{ openmemory?: OpenMemoryConfig; mem0?: Mem0Config }>) => {
       if (action.payload.openmemory) {
         state.openmemory = action.payload.openmemory;
       }
-      state.mem0 = action.payload.mem0;
+      if (action.payload.mem0) {
+        state.mem0 = action.payload.mem0;
+      }
       state.status = 'succeeded';
       state.error = null;
     },

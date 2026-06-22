@@ -64,10 +64,20 @@ export function MemoryFilters() {
     }
   };
 
-  // add debounce
-  const handleSearch = debounce(async (query: string) => {
-    router.push(`/memories?search=${query}`);
-  }, 500);
+  const handleSearch = debounce((query: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    const trimmed = query.trim();
+    if (trimmed) {
+      params.set("search", trimmed);
+    } else {
+      params.delete("search");
+    }
+    params.set("page", "1");
+    if (!params.has("size")) {
+      params.set("size", "10");
+    }
+    router.push(`/memories?${params.toString()}`);
+  }, 300);
 
   useEffect(() => {
     // if the url has a search param, set the input value to the search param

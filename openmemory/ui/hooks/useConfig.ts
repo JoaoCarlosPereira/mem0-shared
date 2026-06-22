@@ -17,6 +17,8 @@ import {
 } from '@/store/configSlice';
 import { getApiUrl } from "@/lib/api-url";
 
+const CONFIG_API = () => `${getApiUrl()}/api/v1/config`;
+
 interface UseConfigApiReturn {
   fetchConfig: () => Promise<void>;
   saveConfig: (config: { openmemory?: OpenMemoryConfig; mem0: Mem0Config }) => Promise<void>;
@@ -37,7 +39,7 @@ export const useConfig = (): UseConfigApiReturn => {
     dispatch(setConfigLoading());
     
     try {
-      const response = await axios.get(`${getApiUrl()}/api/v1/config`);
+      const response = await axios.get(CONFIG_API());
       dispatch(setConfigSuccess(response.data));
       setIsLoading(false);
     } catch (err: any) {
@@ -54,7 +56,7 @@ export const useConfig = (): UseConfigApiReturn => {
     setError(null);
     
     try {
-      const response = await axios.put(`${getApiUrl()}/api/v1/config`, config);
+      const response = await axios.put(CONFIG_API(), config);
       dispatch(setConfigSuccess(response.data));
       setIsLoading(false);
       return response.data;

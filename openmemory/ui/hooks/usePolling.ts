@@ -3,7 +3,7 @@ import { useEffect } from "react";
 /**
  * Executa `callback` a cada `intervalMs` milissegundos, pausando automaticamente
  * quando a aba do navegador está em background (Page Visibility API) e retomando
- * quando ela volta ao foco. É o mecanismo de auto-refresh dos módulos admin.
+ * quando ela volta ao foco. Dispara também uma vez imediatamente ao montar.
  *
  * O consumidor DEVE passar uma `callback` estável (via `useCallback`) — o efeito
  * é recriado sempre que `callback`, `intervalMs` ou `enabled` mudam.
@@ -30,6 +30,7 @@ export function usePolling(
 
     const id = setInterval(tick, intervalMs);
     document.addEventListener("visibilitychange", tick);
+    tick();
 
     return () => {
       active = false;

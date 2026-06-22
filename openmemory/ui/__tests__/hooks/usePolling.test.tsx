@@ -32,18 +32,18 @@ describe("usePolling", () => {
     jest.useRealTimers();
   });
 
-  it("chama a callback após intervalMs com enabled=true", () => {
+  it("chama a callback imediatamente ao montar e depois a cada intervalMs", () => {
     const cb = jest.fn();
     render(<Harness cb={cb} interval={1000} enabled={true} />);
-    expect(cb).not.toHaveBeenCalled();
-    act(() => {
-      jest.advanceTimersByTime(1000);
-    });
     expect(cb).toHaveBeenCalledTimes(1);
     act(() => {
       jest.advanceTimersByTime(1000);
     });
     expect(cb).toHaveBeenCalledTimes(2);
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(cb).toHaveBeenCalledTimes(3);
   });
 
   it("não chama a callback com enabled=false", () => {
@@ -58,11 +58,12 @@ describe("usePolling", () => {
   it("limpa o intervalo ao desmontar (sem chamadas após unmount)", () => {
     const cb = jest.fn();
     const { unmount } = render(<Harness cb={cb} interval={1000} />);
+    expect(cb).toHaveBeenCalledTimes(1);
     unmount();
     act(() => {
       jest.advanceTimersByTime(5000);
     });
-    expect(cb).not.toHaveBeenCalled();
+    expect(cb).toHaveBeenCalledTimes(1);
   });
 
   it("não chama a callback quando document.hidden = true", () => {
@@ -95,15 +96,17 @@ describe("usePolling", () => {
   it("reinicia o intervalo ao alterar intervalMs via re-render", () => {
     const cb = jest.fn();
     const { rerender } = render(<Harness cb={cb} interval={1000} />);
+    expect(cb).toHaveBeenCalledTimes(1);
     act(() => {
       jest.advanceTimersByTime(1000);
     });
-    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb).toHaveBeenCalledTimes(2);
 
     rerender(<Harness cb={cb} interval={500} />);
+    expect(cb).toHaveBeenCalledTimes(3);
     act(() => {
       jest.advanceTimersByTime(500);
     });
-    expect(cb).toHaveBeenCalledTimes(2);
+    expect(cb).toHaveBeenCalledTimes(4);
   });
 });

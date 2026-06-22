@@ -17,35 +17,55 @@ export function MemoriesSection() {
   const [totalItems, setTotalItems] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const currentPage = Number(searchParams.get("page")) || 1;
   const itemsPerPage = Number(searchParams.get("size")) || 10;
+  const searchQuery = searchParams.get("search") || "";
+  const searchKey = searchParams.toString();
   const [selectedCategory, setSelectedCategory] = useState<Category | "all">(
     "all"
   );
   const [selectedClient, setSelectedClient] = useState<Client | "all">("all");
 
   useEffect(() => {
+    let cancelled = false;
+
     const loadMemories = async () => {
       setIsLoading(true);
+      setLoadError(null);
       try {
-        const searchQuery = searchParams.get("search") || "";
         const result = await fetchMemories(
           searchQuery,
           currentPage,
           itemsPerPage
         );
+        if (cancelled) return;
         setMemories(result.memories);
         setTotalItems(result.total);
         setTotalPages(result.pages);
-      } catch (error) {
+      } catch (error: any) {
+        if (cancelled) return;
+        const message =
+          error?.response?.status === 429
+            ? "Muitas requisições — aguarde alguns segundos e tente novamente."
+            : error?.message || "Falha ao buscar memórias";
+        setLoadError(message);
+        setMemories([]);
+        setTotalItems(0);
+        setTotalPages(1);
         console.error("Falha ao buscar memórias:", error);
       }
-      setIsLoading(false);
+      if (!cancelled) {
+        setIsLoading(false);
+      }
     };
 
-    loadMemories();
-  }, [currentPage, itemsPerPage, fetchMemories, searchParams]);
+    void loadMemories();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentPage, itemsPerPage, fetchMemories, searchKey, searchQuery]);
 
   const setCurrentPage = (page: number) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -70,6 +90,33 @@ export function MemoriesSection() {
           <div className="h-8 w-48 bg-zinc-800 rounded animate-pulse" />
           <div className="h-8 w-32 bg-zinc-800 rounded animate-pulse" />
         </div>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        <p className="text-red-400 mb-4">{loadError}</p>
+        <Button
+          variant="outline"
+          onClick={() => {
+            setLoadError(null);
+            setIsLoading(true);
+            void fetchMemories(searchQuery, currentPage, itemsPerPage)
+              .then((result) => {
+                setMemories(result.memories);
+                setTotalItems(result.total);
+                setTotalPages(result.pages);
+              })
+              .catch((error: any) => {
+                setLoadError(error?.message || "Falha ao buscar memórias");
+              })
+              .finally(() => setIsLoading(false));
+          }}
+        >
+          Tentar novamente
+        </Button>
       </div>
     );
   }
@@ -120,9 +167,11 @@ export function MemoriesSection() {
             </div>
             <h3 className="text-lg font-medium">Nenhuma memória encontrada</h3>
             <p className="text-zinc-400 mt-1 mb-4">
-              {selectedCategory !== "all" || selectedClient !== "all"
-                ? "Tente ajustar seus filtros"
-                : "Crie sua primeira memória para vê-la aqui"}
+              {searchQuery
+                ? `Nenhum resultado para "${searchQuery}"`
+                : selectedCategory !== "all" || selectedClient !== "all"
+                  ? "Tente ajustar seus filtros"
+                  : "Crie sua primeira memória para vê-la aqui"}
             </p>
             {selectedCategory !== "all" || selectedClient !== "all" ? (
               <Button

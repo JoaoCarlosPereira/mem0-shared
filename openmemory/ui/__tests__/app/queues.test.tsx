@@ -9,6 +9,7 @@ jest.mock("@/hooks/useQueuesApi", () => ({
     fetchWriteQueue: jest.fn(),
     fetchGovernanceJobs: jest.fn(),
     refreshAll: jest.fn(),
+    retryFailedWriteJobs: jest.fn(),
   })),
 }));
 jest.mock("@/hooks/useAdminApi", () => ({

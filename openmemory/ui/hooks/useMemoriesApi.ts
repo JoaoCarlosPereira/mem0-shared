@@ -155,10 +155,10 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
         pages: response.data.pages
       };
     } catch (err: any) {
-      const errorMessage = err.message || 'Falha ao buscar memórias';
+      const errorMessage = err.response?.data?.detail || err.message || 'Falha ao buscar memórias';
       setError(errorMessage);
       setIsLoading(false);
-      throw new Error(errorMessage);
+      throw err;
     }
   }, [user_id, dispatch]);
 

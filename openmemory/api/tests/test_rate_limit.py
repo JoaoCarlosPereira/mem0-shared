@@ -112,3 +112,17 @@ def test_middleware_skips_health(monkeypatch):
     with TestClient(_app(_limiter())) as client:
         for _ in range(5):
             assert client.get("/health").status_code == 200
+
+
+def test_middleware_ui_client_uses_separate_burst_bucket(monkeypatch):
+    monkeypatch.setenv("RL_SEARCH_PER_MIN", "100")
+    monkeypatch.setenv("RL_BURST", "2")
+    monkeypatch.setenv("RL_UI_BURST", "50")
+    with TestClient(_app(_limiter())) as client:
+        ui = {"x-client-name": "openmemory-ui"}
+        for _ in range(5):
+            assert client.get("/x", headers=ui).status_code == 200
+        mcp = {"x-hostname": "unknown-host"}
+        assert client.get("/x", headers=mcp).status_code == 200
+        assert client.get("/x", headers=mcp).status_code == 200
+        assert client.get("/x", headers=mcp).status_code == 429

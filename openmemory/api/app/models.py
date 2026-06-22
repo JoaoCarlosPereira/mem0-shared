@@ -52,6 +52,7 @@ class GovernanceJobType(enum.Enum):
     # arquivamento de projects inativos (cold tier).
     enforce_quota = "enforce_quota"
     cold_tier = "cold_tier"
+    merge_projects = "merge_projects"
 
 
 class GovernanceJobStatus(enum.Enum):

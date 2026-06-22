@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 import { useDispatch, useSelector } from "react-redux";
 import { format } from "date-fns";
 import { AppDispatch, RootState } from "@/store/store";
@@ -12,6 +13,7 @@ import {
 } from "@/store/queuesSlice";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -61,8 +63,10 @@ function StatusCounters({
 
 export default function QueuesPage() {
   const dispatch = useDispatch<AppDispatch>();
-  useAdminApi(); // popula contadores do overview no adminSlice
-  const { fetchWriteQueue, fetchGovernanceJobs } = useQueuesApi();
+  const { fetchAdminOverview } = useAdminApi(); // popula contadores do overview no adminSlice
+  const { fetchWriteQueue, fetchGovernanceJobs, retryFailedWriteJobs } =
+    useQueuesApi();
+  const [retrying, setRetrying] = useState(false);
 
   const writeQueue = useSelector((s: RootState) => s.queues.writeQueue);
   const governanceQueue = useSelector(
@@ -80,6 +84,34 @@ export default function QueuesPage() {
   useEffect(() => {
     fetchGovernanceJobs();
   }, [fetchGovernanceJobs]);
+
+  const failedCount = overview?.write_queue_failed ?? writeQueue?.failed_count ?? 0;
+
+  const handleRetryFailed = useCallback(async () => {
+    setRetrying(true);
+    try {
+      const result = await retryFailedWriteJobs(writeFilter.project);
+      if (result.requeued === 0) {
+        toast.info("Nenhum job falhado para reprocessar.");
+      } else {
+        toast.success(
+          `${result.requeued} job(s) reenfileirado(s) para reprocessamento.`,
+        );
+      }
+      await Promise.all([fetchWriteQueue(), fetchAdminOverview()]);
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "Falha ao reprocessar jobs";
+      toast.error(message);
+    } finally {
+      setRetrying(false);
+    }
+  }, [
+    retryFailedWriteJobs,
+    writeFilter.project,
+    fetchWriteQueue,
+    fetchAdminOverview,
+  ]);
 
   const writeColumns: QueueColumn<WriteQueueJob>[] = [
     { key: "project", header: "Projeto", render: (r) => r.project },
@@ -202,6 +234,14 @@ export default function QueuesPage() {
                 )
               }
             />
+            <Button
+              type="button"
+              variant="outline"
+              disabled={failedCount === 0 || retrying}
+              onClick={handleRetryFailed}
+            >
+              {retrying ? "Reprocessando…" : "Reprocessar Falhas"}
+            </Button>
           </div>
           <QueueTable
             columns={writeColumns}
