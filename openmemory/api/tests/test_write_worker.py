@@ -203,7 +203,27 @@ class TestFailureHandling:
 class TestRetry:
 
     @pytest.mark.asyncio
-    async def test_empty_extraction_marks_skipped(self, queue, db_path):
+    async def test_empty_extraction_falls_back_to_infer_false(self, queue, db_path):
+        client = MagicMock()
+        client.add = MagicMock(
+            side_effect=[
+                {"results": []},
+                {"results": [{"id": "m1", "event": "ADD", "memory": "raw"}]},
+            ]
+        )
+        worker = WriteWorker(queue=queue, client_provider=lambda: client,
+                             upsert_project=lambda *a, **k: None,
+                             max_attempts=3)
+        job_id = queue.enqueue(_job())
+
+        await worker.process_once()
+        row = _status(db_path, job_id)
+        assert row.status == WriteQueueStatus.done
+        assert client.add.call_count == 2
+        assert client.add.call_args_list[1].kwargs.get("infer") is False
+
+    @pytest.mark.asyncio
+    async def test_empty_extraction_and_raw_storage_requeues(self, queue, db_path):
         client = MagicMock()
         client.add = MagicMock(return_value={"results": []})
         worker = WriteWorker(queue=queue, client_provider=lambda: client,
@@ -213,10 +233,10 @@ class TestRetry:
 
         await worker.process_once()
         row = _status(db_path, job_id)
-        assert row.status == WriteQueueStatus.skipped
-        assert row.attempts == 0
-        assert "Nenhuma memória nova" in (row.error or "")
-        client.add.assert_called_once()
+        assert row.status == WriteQueueStatus.queued
+        assert row.attempts == 1
+        assert client.add.call_count == 2
+        assert "LLM" in (row.error or "")
 
     @pytest.mark.asyncio
     async def test_transient_failure_requeues_for_retry(self, queue, db_path):

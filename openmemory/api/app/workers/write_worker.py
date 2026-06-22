@@ -49,6 +49,10 @@ SKIPPED_NO_MEMORIES_REASON = (
     "Nenhuma memória nova (já existe ou conteúdo sem fatos extraíveis)"
 )
 
+EXTRACTION_FAILED_MSG = (
+    "LLM não extraiu fatos e gravação bruta também falhou (verifique o backend LLM)"
+)
+
 # Default bound on concurrent LLM inferences. Kept small so the local LLM is not
 # saturated by a burst of queued writes; overridable via the constructor.
 DEFAULT_MAX_CONCURRENCY = 2
@@ -172,12 +176,17 @@ class WriteWorker:
                             "memory client unavailable (LLM/backend down)"
                         )
 
-                    result = await self._run_add(client, job)
+                    result = await self._run_add(client, job, infer=True)
                     if _persisted_result_count(result) == 0:
-                        self._catalog_project(job)
-                        self._queue.mark_skipped(job.id, SKIPPED_NO_MEMORIES_REASON)
-                        WRITE_WORKER_SUCCESS.inc()
-                        return
+                        logger.warning(
+                            "write job LLM extraction empty; falling back to infer=False "
+                            "job_id=%s project=%s",
+                            job.id,
+                            job.project,
+                        )
+                        result = await self._run_add(client, job, infer=False)
+                    if _persisted_result_count(result) == 0:
+                        raise RuntimeError(EXTRACTION_FAILED_MSG)
                     self._maybe_dual_write(client, result)
                     self._catalog_project(job)
                     read_cache.invalidate_search(job.project)
@@ -221,7 +230,7 @@ class WriteWorker:
                 "could not record failure transition for job %s", job.id
             )
 
-    async def _run_add(self, client, job: WriteJob):
+    async def _run_add(self, client, job: WriteJob, *, infer: bool = True):
         """Invoke the mem0 client ``add``.
 
         ``user_id`` carries the hostname for attribution only (ADR-003); the
@@ -231,6 +240,8 @@ class WriteWorker:
         """
         kwargs = dict(
             user_id=job.hostname,
+            project=job.project,
+            infer=infer,
             metadata={
                 "project": job.project,
                 "hostname": job.hostname,

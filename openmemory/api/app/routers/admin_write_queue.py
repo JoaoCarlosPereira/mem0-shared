@@ -25,7 +25,7 @@ def retry_failed_write_queue_jobs(
         None, description="Requeue only failed jobs for this project"
     ),
 ) -> RetryFailedWriteQueueResponse:
-    """Re-queue all failed write jobs (optionally scoped to one project)."""
+    """Re-queue all failed or skipped write jobs (optionally scoped to one project)."""
     count, projects = requeue_failed_write_jobs(db, project=project)
     for proj in projects:
         read_cache.invalidate_search(proj)

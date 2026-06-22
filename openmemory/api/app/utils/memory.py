@@ -426,7 +426,7 @@ def _create_llm_config(provider, model, api_key, base_url, ollama_base_url):
     """Build LLM config using registered provider factory or generic fallback."""
     base_config = {
         "temperature": 0.1,
-        "max_tokens": 2000,
+        "max_tokens": 4096,
     }
 
     factory = _LLM_CONFIG_FACTORIES.get(provider)

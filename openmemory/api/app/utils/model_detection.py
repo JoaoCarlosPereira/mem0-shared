@@ -160,7 +160,7 @@ def build_ollama_runtime_config(
             "config": {
                 "model": llm_model,
                 "temperature": 0.1,
-                "max_tokens": 2000,
+                "max_tokens": 4096,
                 "ollama_base_url": base_url,
             },
         },
@@ -265,7 +265,7 @@ def build_llamacpp_runtime_config(llm_model, embedder_model, base_url=None):
             "config": {
                 "model": llm_model,
                 "temperature": 0.1,
-                "max_tokens": 2000,
+                "max_tokens": 4096,
                 "openai_base_url": v1,
                 "api_key": "llama.cpp",
             },

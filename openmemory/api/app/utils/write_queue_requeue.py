@@ -12,12 +12,14 @@ def requeue_failed_write_jobs(
     *,
     project: Optional[str] = None,
 ) -> tuple[int, set[str]]:
-    """Move all ``failed`` jobs back to ``queued`` and reset attempts.
+    """Move all ``failed`` or ``skipped`` jobs back to ``queued`` and reset attempts.
 
     Returns ``(count, affected_project_names)``.
     """
     query = db.query(WriteQueueJob).filter(
-        WriteQueueJob.status == WriteQueueStatus.failed
+        WriteQueueJob.status.in_(
+            [WriteQueueStatus.failed, WriteQueueStatus.skipped]
+        )
     )
     if project is not None:
         query = query.filter(WriteQueueJob.project == project)

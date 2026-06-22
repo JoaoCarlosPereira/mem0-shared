@@ -117,8 +117,14 @@ def remove_code_blocks(content: str) -> str:
     """
     pattern = r"^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$"
     match = re.match(pattern, content.strip())
-    match_res=match.group(1).strip() if match else content.strip()
-    return re.sub(r"<think>.*?</think>", "", match_res, flags=re.DOTALL).strip()
+    match_res = match.group(1).strip() if match else content.strip()
+    # Strip reasoning wrappers from Qwen3 / DeepSeek-style models.
+    for think_pattern in (
+        r"<think>.*?</think>",
+        r"<think>.*?</think>",
+    ):
+        match_res = re.sub(think_pattern, "", match_res, flags=re.DOTALL)
+    return match_res.strip()
 
 
 

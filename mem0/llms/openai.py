@@ -52,6 +52,27 @@ class OpenAILLM(LLMBase):
 
             self.client = OpenAI(api_key=api_key, base_url=base_url)
 
+    def _message_text(self, message) -> Optional[str]:
+        """Return assistant text, falling back to reasoning_content when content is empty.
+
+        Qwen3 and other reasoning models served via llama.cpp often exhaust
+        max_tokens inside the thinking phase, leaving ``content`` empty while
+        the JSON (or thinking trace) lives in ``reasoning_content``.
+        """
+        content = message.content
+        if content and str(content).strip():
+            return content
+
+        reasoning = getattr(message, "reasoning_content", None)
+        if reasoning and str(reasoning).strip():
+            logging.debug(
+                "LLM content empty; using reasoning_content (len=%d)",
+                len(str(reasoning)),
+            )
+            return reasoning
+
+        return content
+
     def _parse_response(self, response, tools):
         """
         Process the response based on whether tools are used or not.
@@ -63,9 +84,10 @@ class OpenAILLM(LLMBase):
         Returns:
             str or dict: The processed response.
         """
+        message = response.choices[0].message
         if tools:
             processed_response = {
-                "content": response.choices[0].message.content,
+                "content": self._message_text(message),
                 "tool_calls": [],
             }
 
@@ -80,7 +102,7 @@ class OpenAILLM(LLMBase):
 
             return processed_response
         else:
-            return response.choices[0].message.content
+            return self._message_text(message)
 
     def generate_response(
         self,

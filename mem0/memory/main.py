@@ -132,6 +132,12 @@ _SENSITIVE_SUFFIXES = (
 
 # Entity parameters that must be passed via filters, not top-level kwargs
 ENTITY_PARAMS = frozenset({"user_id", "agent_id", "run_id"})
+_ENTITY_SCOPE_FILTER_KEYS = frozenset({"user_id", "agent_id", "run_id", "project"})
+
+
+def _entity_scope_filters(filters: dict) -> dict:
+    """Narrow vector-store filters to session entity keys (incl. project scope)."""
+    return {k: v for k, v in filters.items() if k in _ENTITY_SCOPE_FILTER_KEYS and v}
 
 
 def _reject_top_level_entity_params(kwargs: Dict[str, Any], method_name: str) -> None:
@@ -541,7 +547,7 @@ class Memory(MemoryBase):
         """Upsert an entity into the entity store, linking it to a memory."""
         try:
             entity_embedding = self.embedding_model.embed(entity_text, "add")
-            search_filters = {k: v for k, v in filters.items() if k in ("user_id", "agent_id", "run_id") and v}
+            search_filters = _entity_scope_filters(filters)
 
             existing = self.entity_store.search(
                 query=entity_text,
@@ -595,7 +601,7 @@ class Memory(MemoryBase):
         """
         if self._entity_store is None:
             return
-        search_filters = {k: v for k, v in filters.items() if k in ("user_id", "agent_id", "run_id") and v}
+        search_filters = _entity_scope_filters(filters)
         try:
             listed = self.entity_store.list(filters=search_filters, top_k=10000)
             rows = listed[0] if isinstance(listed, (list, tuple)) and listed and isinstance(listed[0], list) else listed
@@ -958,7 +964,7 @@ class Memory(MemoryBase):
 
         # Phase 1: Existing memory retrieval
         logger.info("Phase 1: Existing memory retrieval")
-        search_filters = {k: v for k, v in filters.items() if k in ("user_id", "agent_id", "run_id") and v}
+        search_filters = _entity_scope_filters(filters)
         query_embedding = self.embedding_model.embed(parsed_messages, "search")
         existing_results = self.vector_store.search(
             query=parsed_messages,
@@ -1920,7 +1926,7 @@ class Memory(MemoryBase):
         if not deduped:
             return {}
 
-        search_filters = {k: v for k, v in filters.items() if k in ("user_id", "agent_id", "run_id") and v}
+        search_filters = _entity_scope_filters(filters)
         memory_boosts = {}
 
         try:
@@ -2402,7 +2408,7 @@ class AsyncMemory(MemoryBase):
         """Async variant of `_upsert_entity` — per-entity search-then-update-or-insert."""
         try:
             entity_embedding = await asyncio.to_thread(self.embedding_model.embed, entity_text, "add")
-            search_filters = {k: v for k, v in filters.items() if k in ("user_id", "agent_id", "run_id") and v}
+            search_filters = _entity_scope_filters(filters)
 
             existing = await asyncio.to_thread(
                 self.entity_store.search,
@@ -2446,7 +2452,7 @@ class AsyncMemory(MemoryBase):
         """Async variant of `Memory._remove_memory_from_entity_store`."""
         if self._entity_store is None:
             return
-        search_filters = {k: v for k, v in filters.items() if k in ("user_id", "agent_id", "run_id") and v}
+        search_filters = _entity_scope_filters(filters)
         try:
             listed = await asyncio.to_thread(self.entity_store.list, filters=search_filters, top_k=10000)
             rows = listed[0] if isinstance(listed, (list, tuple)) and listed and isinstance(listed[0], list) else listed
@@ -2750,7 +2756,7 @@ class AsyncMemory(MemoryBase):
         parsed_messages = parse_messages(messages)
 
         # Phase 1: Existing memory retrieval
-        search_filters = {k: v for k, v in effective_filters.items() if k in ("user_id", "agent_id", "run_id") and v}
+        search_filters = _entity_scope_filters(effective_filters)
         query_embedding = await asyncio.to_thread(self.embedding_model.embed, parsed_messages, "search")
         existing_results = await asyncio.to_thread(
             self.vector_store.search,
@@ -3560,7 +3566,7 @@ class AsyncMemory(MemoryBase):
         if not deduped:
             return {}
 
-        search_filters = {k: v for k, v in filters.items() if k in ("user_id", "agent_id", "run_id") and v}
+        search_filters = _entity_scope_filters(filters)
         memory_boosts = {}
 
         try:
