@@ -1,4 +1,5 @@
 from .governance import router as governance_router
+from .governance_project_merge import router as governance_project_merge_router
 from .governance_schedule import router as governance_schedule_router
 from .admin import router as admin_router
 from .admin_write_queue import router as admin_write_queue_router
