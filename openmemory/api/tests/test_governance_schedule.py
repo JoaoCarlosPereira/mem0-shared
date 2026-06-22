@@ -1,8 +1,6 @@
 """Tests for governance schedule window."""
 
 from datetime import UTC, datetime
-from zoneinfo import ZoneInfo
-
 import pytest
 
 from app.utils.governance_policy import EffectivePolicy

@@ -26,6 +26,7 @@ from typing import Any, Optional
 
 from app.utils.memory import get_memory_client
 from app.utils.partitioning import bind_active_collection, resolve_and_bind
+from app.utils.read_audit import record_memory_reads
 from app.utils.recency import recency_weighted_sort
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
@@ -144,6 +145,8 @@ async def search(request: SearchRequest) -> dict:
     # gets up to top_k matches after filtering.
     fetch_k = min(MAX_TOP_K, top_k * 4) if metadata_filters else top_k
 
+    hits = None
+    degraded = None
     try:
         embeddings = client.embedding_model.embed(request.query, "search")
         hits = client.vector_store.search(
@@ -154,11 +157,20 @@ async def search(request: SearchRequest) -> dict:
             shard_key_selector=shard_key_selector,
         )
     except Exception as e:  # noqa: BLE001
-        logging.exception("compat_v3 search failed: %s", e)
-        return {"results": []}
+        logging.warning("compat_v3 semantic search failed (%s); falling back to list", e)
+        degraded = "list_fallback"
+        try:
+            raw = client.vector_store.list(filters=vs_filters or None, top_k=fetch_k)
+            if isinstance(raw, (tuple, list)) and raw and isinstance(raw[0], (list, tuple)):
+                hits = raw[0]
+            else:
+                hits = raw
+        except Exception as list_err:  # noqa: BLE001
+            logging.exception("compat_v3 list fallback failed: %s", list_err)
+            return {"results": []}
 
     results = []
-    for h in hits:
+    for h in hits or []:
         payload = getattr(h, "payload", {}) or {}
         if metadata_filters and not _payload_matches_metadata(payload, metadata_filters):
             continue
@@ -176,7 +188,19 @@ async def search(request: SearchRequest) -> dict:
     recency_weighted_sort(results)
     results = results[:top_k]
 
-    return {"results": results}
+    record_memory_reads(
+        project=project,
+        memory_ids=[r.get("id") for r in results],
+        access_type="search",
+        source="compat_v3",
+        query=request.query,
+        items=results,
+    )
+
+    out: dict = {"results": results}
+    if degraded:
+        out["degraded"] = degraded
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -293,4 +317,14 @@ async def list_memories(request: Request, body: ListRequest) -> dict:
         })
 
     count = len(results)
-    return {"count": count, "results": results[:page_size]}
+    page_results = results[:page_size]
+
+    record_memory_reads(
+        project=project,
+        memory_ids=[r.get("id") for r in page_results],
+        access_type="list",
+        source="compat_v3",
+        items=page_results,
+    )
+
+    return {"count": count, "results": page_results}

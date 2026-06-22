@@ -89,8 +89,18 @@ services:
     container_name: openmemory_api
     labels:
       - traefik.enable=true
-      - traefik.http.routers.openmemory.rule=PathPrefix(`/`)
+      # MCP (consultas de memória): sem circuit breaker — leitura é crítica.
+      - traefik.http.routers.openmemory-mcp.rule=PathPrefix(`/mcp`)
+      - traefik.http.routers.openmemory-mcp.entrypoints=web
+      - traefik.http.routers.openmemory-mcp.service=openmemory
+      - traefik.http.routers.openmemory-mcp.priority=100
+      - traefik.http.middlewares.openmemory-mcp-ratelimit.ratelimit.average=500
+      - traefik.http.middlewares.openmemory-mcp-ratelimit.ratelimit.burst=200
+      - traefik.http.routers.openmemory-mcp.middlewares=openmemory-mcp-ratelimit
+      # Demais rotas: rate limit + circuit breaker para proteger escrita/admin.
+      - traefik.http.routers.openmemory.rule=PathPrefix(`/`) && !PathPrefix(`/mcp`)
       - traefik.http.routers.openmemory.entrypoints=web
+      - traefik.http.routers.openmemory.priority=1
       - traefik.http.services.openmemory.loadbalancer.server.port=8765
       - traefik.http.services.openmemory.loadbalancer.sticky.cookie=true
       - traefik.http.services.openmemory.loadbalancer.sticky.cookie.name=mem0_sse_affinity

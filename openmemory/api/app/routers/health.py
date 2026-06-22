@@ -40,11 +40,12 @@ def _check_qdrant() -> tuple[str, str | None]:
 
 def _check_memory_client() -> tuple[str, str | None]:
     try:
-        from app.utils.memory import get_memory_client_safe
+        from app.utils.memory import get_memory_client_last_error, get_memory_client_safe
 
         client = get_memory_client_safe()
         if client is None:
-            return "degraded", "memory client unavailable"
+            detail = get_memory_client_last_error() or "memory client unavailable"
+            return "degraded", detail
         return "ok", None
     except Exception as exc:  # noqa: BLE001
         return "error", str(exc)

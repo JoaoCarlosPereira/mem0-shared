@@ -147,9 +147,61 @@ def _fix_ollama_urls_if_localhost(config_section):
 
 def reset_memory_client():
     """Reset the global memory client to force reinitialization with new config."""
-    global _memory_client, _config_hash
+    global _memory_client, _config_hash, _last_init_error
     _memory_client = None
     _config_hash = None
+    _last_init_error = None
+
+
+# Last initialization failure (surfaced in /health for debugging).
+_last_init_error: str | None = None
+
+# Provider-specific config keys that break Memory.from_config if left over after a provider switch.
+_LLM_DROP_FOR_OPENAI = frozenset({"ollama_base_url"})
+_LLM_DROP_FOR_OLLAMA = frozenset({"openai_base_url"})
+_EMBEDDER_DROP_FOR_OPENAI = frozenset({"ollama_base_url"})
+_EMBEDDER_DROP_FOR_OLLAMA = frozenset({"openai_base_url"})
+
+
+def _strip_provider_keys(cfg: dict, drop: frozenset[str]) -> dict:
+    if not cfg or not drop:
+        return cfg
+    cleaned = dict(cfg)
+    for key in drop:
+        cleaned.pop(key, None)
+    return cleaned
+
+
+def sanitize_mem0_config(config: dict) -> dict:
+    """Remove cross-provider config keys that cause provider __init__ TypeErrors."""
+    if not config:
+        return config
+    out = dict(config)
+    llm = dict(out.get("llm") or {})
+    llm_provider = (llm.get("provider") or "").lower()
+    llm_cfg = dict(llm.get("config") or {})
+    if llm_provider == "openai":
+        llm_cfg = _strip_provider_keys(llm_cfg, _LLM_DROP_FOR_OPENAI)
+    elif llm_provider == "ollama":
+        llm_cfg = _strip_provider_keys(llm_cfg, _LLM_DROP_FOR_OLLAMA)
+    llm["config"] = llm_cfg
+    out["llm"] = llm
+
+    embedder = dict(out.get("embedder") or {})
+    emb_provider = (embedder.get("provider") or "").lower()
+    emb_cfg = dict(embedder.get("config") or {})
+    if emb_provider == "openai":
+        emb_cfg = _strip_provider_keys(emb_cfg, _EMBEDDER_DROP_FOR_OPENAI)
+    elif emb_provider == "ollama":
+        emb_cfg = _strip_provider_keys(emb_cfg, _EMBEDDER_DROP_FOR_OLLAMA)
+    embedder["config"] = emb_cfg
+    out["embedder"] = embedder
+    return out
+
+
+def get_memory_client_last_error() -> str | None:
+    """Return the last memory client initialization error, if any."""
+    return _last_init_error
 
 
 # --- Server-side fail-closed egress guard (MEM0_LOCAL_ONLY) ------------------
@@ -628,7 +680,7 @@ def get_memory_client(custom_instructions: str = None):
     Raises:
         Exception: If required API keys are not set or critical configuration is missing.
     """
-    global _memory_client, _config_hash, _client_is_local_only
+    global _memory_client, _config_hash, _client_is_local_only, _last_init_error
 
     # Fast path: skip DB I/O when the client is cached and neither a
     # custom_instructions override nor a change to MEM0_LOCAL_ONLY requires a
@@ -709,6 +761,10 @@ def get_memory_client(custom_instructions: str = None):
         if is_local_only():
             violations = _local_only_violations(config)
             if violations:
+                msg = (
+                    "MEM0_LOCAL_ONLY: non-local provider(s): " + ", ".join(violations)
+                )
+                _last_init_error = msg
                 print(
                     "FAIL-CLOSED (MEM0_LOCAL_ONLY): refusing to initialize the memory "
                     f"client — non-local provider(s) detected: {', '.join(violations)}. "
@@ -718,6 +774,8 @@ def get_memory_client(custom_instructions: str = None):
                 _memory_client = None
                 _config_hash = None
                 return None
+
+        config = sanitize_mem0_config(config)
 
         # Check if config has changed by comparing hashes
         current_config_hash = _get_config_hash(config)
@@ -729,8 +787,10 @@ def get_memory_client(custom_instructions: str = None):
                 _memory_client = Memory.from_config(config_dict=config)
                 _config_hash = current_config_hash
                 _client_is_local_only = is_local_only()
+                _last_init_error = None
                 print("Memory client initialized successfully")
             except Exception as init_error:
+                _last_init_error = str(init_error)
                 print(f"Warning: Failed to initialize memory client: {init_error}")
                 print("Server will continue running with limited memory functionality")
                 _memory_client = None
@@ -740,6 +800,7 @@ def get_memory_client(custom_instructions: str = None):
         return _memory_client
         
     except Exception as e:
+        _last_init_error = str(e)
         print(f"Warning: Exception occurred while initializing memory client: {e}")
         print("Server will continue running with limited memory functionality")
         return None

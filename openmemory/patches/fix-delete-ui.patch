@@ -1,0 +1,32 @@
+--- a/openmemory/ui/hooks/useMemoriesApi.ts
++++ b/openmemory/ui/hooks/useMemoriesApi.ts
+@@ -181,8 +181,9 @@
+ 
+   const deleteMemories = async (memory_ids: string[]) => {
+     try {
+-      await axios.delete(`${getApiUrl()}/api/v1/memories/`, {
+-        data: { memory_ids, user_id }
++      await axios.post(`${getApiUrl()}/api/v1/memories/actions/delete`, {
++        memory_ids,
++        user_id,
+       });
+       dispatch(setMemoriesSuccess(memories.filter((memory: Memory) => !memory_ids.includes(memory.id))));
+     } catch (err: any) {
+--- a/openmemory/ui/app/api-proxy/[...path]/route.ts
++++ b/openmemory/ui/app/api-proxy/[...path]/route.ts
+@@ -18,13 +18,12 @@
+   headers.delete("host");
+ 
+   const hasBody = req.method !== "GET" && req.method !== "HEAD";
+-  const init: RequestInit & { duplex?: string } = {
++  const init: RequestInit = {
+     method: req.method,
+     headers,
+   };
+   if (hasBody) {
+-    init.body = req.body;
+-    init.duplex = "half";
++    init.body = await req.arrayBuffer();
+   }
+ 
+   const upstream = await fetch(target, init);

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import List
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
@@ -17,10 +15,10 @@ router = APIRouter(prefix="/admin/governance", tags=["governance"])
 
 class ScheduleConfigResponse(BaseModel):
     schedule_timezone: str
-    schedule_weekdays: List[int]
+    schedule_weekdays: list[int]
     schedule_start_time: str
     schedule_end_time: str
-    off_peak_hours_utc: List[int] = Field(
+    off_peak_hours_utc: list[int] = Field(
         default_factory=list,
         description="Legado — usado apenas se schedule_weekdays estiver vazio",
     )
@@ -28,13 +26,13 @@ class ScheduleConfigResponse(BaseModel):
 
 class ScheduleConfigUpdate(BaseModel):
     schedule_timezone: str = Field(min_length=1, max_length=64)
-    schedule_weekdays: List[int] = Field(min_length=1)
+    schedule_weekdays: list[int] = Field(min_length=1)
     schedule_start_time: str
     schedule_end_time: str
 
     @field_validator("schedule_weekdays")
     @classmethod
-    def validate_weekdays(cls, value: List[int]) -> List[int]:
+    def validate_weekdays(cls, value: list[int]) -> list[int]:
         return list(normalize_weekdays(value))
 
     @field_validator("schedule_start_time", "schedule_end_time")

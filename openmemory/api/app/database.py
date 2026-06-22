@@ -37,6 +37,9 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
+# Register Qdrant read-audit model with SQLAlchemy metadata (Alembic/tests).
+import app.read_audit_log_model  # noqa: F401, E402
+
 
 def get_db():
     db = SessionLocal()

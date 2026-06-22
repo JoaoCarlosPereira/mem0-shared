@@ -1,13 +1,11 @@
 """Regression tests for Qdrant-backed vector_stats helpers (UI/admin fix)."""
 
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
-
-import pytest
 
 from app.utils import vector_stats
 

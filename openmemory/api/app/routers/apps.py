@@ -4,6 +4,11 @@ from uuid import UUID
 from app.database import get_db
 from app.models import App, Memory, MemoryAccessLog, MemoryState, Project
 from app.utils.project_apps import project_to_app_id, resolve_project_name
+from app.utils.read_audit import (
+    count_distinct_memories_accessed,
+    list_project_accessed_memories,
+    project_access_stats,
+)
 from app.utils.vector_stats import count_project_memories, list_shared_memories
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, func
@@ -75,13 +80,14 @@ def _project_apps(db: Session, name: Optional[str], is_active: Optional[bool]) -
     for project in db.query(Project).order_by(Project.name).all():
         if name and name.lower() not in project.name.lower():
             continue
+        accessed = count_distinct_memories_accessed(db, project.name)
         apps.append(
             {
                 "id": project_to_app_id(project.name),
                 "name": project.name,
                 "is_active": True,
                 "total_memories_created": count_project_memories(project.name),
-                "total_memories_accessed": 0,
+                "total_memories_accessed": accessed,
                 "source": "project",
             }
         )
@@ -142,12 +148,13 @@ async def get_app_details(
     project_name = resolve_project_name(db, app_id)
     if project_name:
         count = count_project_memories(project_name)
+        accessed, first_accessed, last_accessed = project_access_stats(db, project_name)
         return {
             "is_active": True,
             "total_memories_created": count,
-            "total_memories_accessed": 0,
-            "first_accessed": None,
-            "last_accessed": None,
+            "total_memories_accessed": accessed,
+            "first_accessed": first_accessed,
+            "last_accessed": last_accessed,
         }
 
     app = get_app_or_404(db, app_id)
@@ -240,8 +247,17 @@ async def list_app_accessed_memories(
     page_size: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    if resolve_project_name(db, app_id):
-        return {"total": 0, "page": page, "page_size": page_size, "memories": []}
+    project_name = resolve_project_name(db, app_id)
+    if project_name:
+        total, memories = list_project_accessed_memories(
+            db, project_name, page=page, page_size=page_size
+        )
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "memories": memories,
+        }
 
     query = (
         db.query(

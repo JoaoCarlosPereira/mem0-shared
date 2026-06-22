@@ -1,4 +1,17 @@
-"""Rate limit por (project, hostname) com janela deslizante no Redis (task_10 / ADR-006).
+#!/usr/bin/env python3
+"""Garante que consultas de memória (MCP + API read) nunca sejam bloqueadas por rate limit."""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+RATE_LIMIT = ROOT / "api" / "app" / "middleware" / "rate_limit.py"
+MCP_SERVER = ROOT / "api" / "app" / "mcp_server.py"
+
+RATE_LIMIT_CONTENT = '''"""Rate limit por (project, hostname) com janela deslizante no Redis (task_10 / ADR-006).
 
 Substitui o limite global do Traefik por limites granulares na borda da API,
 conforme §1 da arquitetura: busca 30/min, escrita 60/min, burst 10/10s. Reaproveita
@@ -236,3 +249,148 @@ def _too_many(retry_after: int) -> JSONResponse:
         content={"detail": "rate limit exceeded"},
         headers={"Retry-After": str(retry_after)},
     )
+'''
+
+
+def patch_rate_limit() -> None:
+    RATE_LIMIT.write_text(RATE_LIMIT_CONTENT, encoding="utf-8")
+    print(f"Patched {RATE_LIMIT}")
+
+
+def patch_mcp_search_fallback() -> None:
+    text = MCP_SERVER.read_text(encoding="utf-8")
+    if "_fetch_project_memories" in text:
+        print(f"Already patched {MCP_SERVER}")
+        return
+
+    helper = '''
+async def _fetch_project_memories(memory_client, project: str, top_k: int = DEFAULT_LIST_TOP_K) -> list:
+    """Lista memórias do projeto (sem embedding) — fallback quando o embedder falha."""
+    bind_active_collection(memory_client)
+    filters = {"project": project}
+    raw = await anyio.to_thread.run_sync(
+        lambda: memory_client.vector_store.list(filters=filters, top_k=top_k)
+    )
+    points = raw
+    if isinstance(raw, (tuple, list)) and len(raw) > 0 and isinstance(raw[0], (list, tuple)):
+        points = raw[0]
+    results = []
+    for p in points or []:
+        payload = getattr(p, "payload", {}) or {}
+        results.append({
+            "id": getattr(p, "id", None),
+            "memory": payload.get("data"),
+            "hash": payload.get("hash"),
+            "created_at": payload.get("created_at"),
+            "updated_at": payload.get("updated_at"),
+            "project": payload.get("project"),
+        })
+    return results
+
+
+'''
+
+    anchor = "@mcp.tool(description=\"Search through stored memories"
+    if anchor not in text:
+        raise SystemExit(f"Anchor not found in {MCP_SERVER}")
+    text = text.replace(anchor, helper + anchor, 1)
+
+    old_embed = """            else:
+                EMBED_CACHE_MISS.inc()
+                embeddings = await anyio.to_thread.run_sync(
+                    lambda: memory_client.embedding_model.embed(query, "search")
+                )
+                read_cache.set_embedding(embed_model, query, embeddings)
+
+            hits = await anyio.to_thread.run_sync(
+                lambda: memory_client.vector_store.search(
+                    query=query,
+                    vectors=embeddings,
+                    top_k=DEFAULT_SEARCH_TOP_K,
+                    filters=filters,
+                    shard_key_selector=route.shard_key,
+                )
+            )
+
+            results = []
+            for h in hits:
+                id, score, payload = h.id, h.score, h.payload
+                results.append({
+                    "id": id,
+                    "memory": payload.get("data"),
+                    "hash": payload.get("hash"),
+                    "created_at": payload.get("created_at"),
+                    "updated_at": payload.get("updated_at"),
+                    "project": payload.get("project"),
+                    "score": score,
+                })
+            read_cache.set_search(
+                project, query, DEFAULT_SEARCH_TOP_K, filter_hash, results
+            )"""
+
+    new_embed = """            else:
+                EMBED_CACHE_MISS.inc()
+                try:
+                    embeddings = await anyio.to_thread.run_sync(
+                        lambda: memory_client.embedding_model.embed(query, "search")
+                    )
+                    read_cache.set_embedding(embed_model, query, embeddings)
+                except Exception as embed_err:  # noqa: BLE001
+                    logging.warning(
+                        "Semantic search unavailable (%s); falling back to project list",
+                        embed_err,
+                    )
+                    results = await _fetch_project_memories(
+                        memory_client, project, DEFAULT_SEARCH_TOP_K
+                    )
+                    recency_weighted_sort(results)
+                    return json.dumps(
+                        {"results": results, "degraded": "list_fallback"},
+                        indent=2,
+                    )
+
+            hits = await anyio.to_thread.run_sync(
+                lambda: memory_client.vector_store.search(
+                    query=query,
+                    vectors=embeddings,
+                    top_k=DEFAULT_SEARCH_TOP_K,
+                    filters=filters,
+                    shard_key_selector=route.shard_key,
+                )
+            )
+
+            results = []
+            for h in hits:
+                id, score, payload = h.id, h.score, h.payload
+                results.append({
+                    "id": id,
+                    "memory": payload.get("data"),
+                    "hash": payload.get("hash"),
+                    "created_at": payload.get("created_at"),
+                    "updated_at": payload.get("updated_at"),
+                    "project": payload.get("project"),
+                    "score": score,
+                })
+            read_cache.set_search(
+                project, query, DEFAULT_SEARCH_TOP_K, filter_hash, results
+            )"""
+
+    if old_embed not in text:
+        raise SystemExit("search_memory embed block not found — mcp_server.py layout changed")
+    text = text.replace(old_embed, new_embed, 1)
+
+    MCP_SERVER.write_text(text, encoding="utf-8")
+    print(f"Patched {MCP_SERVER}")
+
+
+def main() -> None:
+    patch_rate_limit()
+    patch_mcp_search_fallback()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except OSError as exc:
+        print(f"ERRO: {exc}", file=sys.stderr)
+        sys.exit(1)

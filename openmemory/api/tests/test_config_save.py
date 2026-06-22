@@ -14,8 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import get_db
-from app.models import Base, Config as ConfigModel
-from app.utils import memory as memory_mod
+from app.models import Base
 
 _PATH = Path(__file__).resolve().parents[1] / "app" / "routers" / "config.py"
 _spec = importlib.util.spec_from_file_location("config_router_under_test", _PATH)

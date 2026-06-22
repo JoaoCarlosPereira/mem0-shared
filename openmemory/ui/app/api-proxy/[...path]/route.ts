@@ -18,13 +18,12 @@ async function proxyRequest(
   headers.delete("host");
 
   const hasBody = req.method !== "GET" && req.method !== "HEAD";
-  const init: RequestInit & { duplex?: string } = {
+  const init: RequestInit = {
     method: req.method,
     headers,
   };
   if (hasBody) {
-    init.body = req.body;
-    init.duplex = "half";
+    init.body = await req.arrayBuffer();
   }
 
   const upstream = await fetch(target, init);

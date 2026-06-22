@@ -1,8 +1,5 @@
 """Tests for governance schedule API."""
 
-import importlib.util
-from pathlib import Path
-
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -11,12 +8,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database import get_db
 from app.models import Base, Config
-
-_PATH = Path(__file__).resolve().parents[1] / "app" / "routers" / "governance_schedule.py"
-_spec = importlib.util.spec_from_file_location("governance_schedule_under_test", _PATH)
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
-router = _mod.router
+from app.routers.governance_schedule import router
 
 
 @pytest.fixture

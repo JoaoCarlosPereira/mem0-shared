@@ -1,10 +1,15 @@
-"""Rate limit por (project, hostname) com janela deslizante no Redis (task_10 / ADR-006).
+#!/usr/bin/env python3
+"""Patch rate_limit middleware: MCP read tools use search quota + higher burst."""
+
+from pathlib import Path
+
+TARGET = Path(__file__).resolve().parents[1] / "api" / "app" / "middleware" / "rate_limit.py"
+
+NEW_CONTENT = '''"""Rate limit por (project, hostname) com janela deslizante no Redis (task_10 / ADR-006).
 
 Substitui o limite global do Traefik por limites granulares na borda da API,
 conforme §1 da arquitetura: busca 30/min, escrita 60/min, burst 10/10s. Reaproveita
 o Redis já presente. Falha do Redis => fail-open (não derruba requisições).
-
-Consultas de memória (MCP search/list e APIs de leitura) são isentas — processo crítico.
 """
 
 from __future__ import annotations
@@ -27,13 +32,9 @@ logger = logging.getLogger(__name__)
 _SKIP_PREFIXES = ("/health", "/metrics", "/docs", "/openapi", "/redoc")
 _MCP_PREFIX = "/mcp/"
 _UI_CLIENT = "openmemory-ui"
-# POST bodies that only read state — never throttled.
-_READ_POST_SUFFIXES = (
-    "/api/v1/memories/shared-filter",
-    "/api/v1/memories/filter",
-    "/v3/memories/search/",
-    "/v3/memories/list/",
-)
+# POST bodies that only read state (dashboard list/filter) — not MCP writes.
+_READ_POST_SUFFIXES = ("/api/v1/memories/shared-filter", "/api/v1/memories/filter")
+# MCP tools/call names that only read memory state (ADR-006: use search quota, not write).
 _MCP_READ_TOOLS = frozenset(
     {
         "search_memory",
@@ -57,6 +58,7 @@ _MCP_WRITE_TOOLS = frozenset(
         "remember",
     }
 )
+# Handshake / discovery — no quota (agents open sessions with several lightweight calls).
 _MCP_SKIP_LIMIT_METHODS = frozenset({"initialize", "notifications/initialized", "tools/list", "ping"})
 
 
@@ -116,34 +118,16 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _restore_request_body(request: Request, body: bytes) -> None:
+    """Allow downstream handlers to read the POST body after middleware inspection."""
+
     async def receive():
         return {"type": "http.request", "body": body, "more_body": False}
 
     request._receive = receive  # noqa: SLF001
 
 
-def _path_is_read_post(path: str) -> bool:
-    norm = path.rstrip("/") or "/"
-    return any(norm.endswith(suffix.rstrip("/")) for suffix in _READ_POST_SUFFIXES)
-
-
-def _is_critical_memory_read(request: Request, mcp_category: Optional[str]) -> bool:
-    """Consultas de memória não passam por rate limit (crítico para agentes)."""
-    path = request.url.path
-    if path.startswith(_MCP_PREFIX):
-        if mcp_category is None:
-            return True
-        if mcp_category == "search":
-            return True
-    if _path_is_read_post(path):
-        return True
-    if request.method in ("GET", "HEAD") and "/memories" in path:
-        return True
-    return False
-
-
 def _mcp_rpc_category(body: bytes) -> Optional[str]:
-    """``search`` = leitura MCP, ``write`` = escrita MCP, ``None`` = handshake."""
+    """Classify MCP JSON-RPC POST as ``search``, ``write``, or ``skip`` (None)."""
     if not body:
         return "search"
     try:
@@ -172,6 +156,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self._search_per_min = _env_int("RL_SEARCH_PER_MIN", 30)
         self._write_per_min = _env_int("RL_WRITE_PER_MIN", 60)
         self._burst = _env_int("RL_BURST", 10)
+        self._mcp_burst = _env_int("RL_MCP_BURST", 40)
         self._burst_window = _env_int("RL_BURST_WINDOW", 10)
 
     @staticmethod
@@ -183,19 +168,22 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         hostname = request.headers.get("x-hostname")
         if not hostname:
             parts = [p for p in request.url.path.split("/") if p]
+            # /mcp/{client}/sse/{user_id} -> user_id carrega o hostname (ADR-003)
             hostname = parts[-1] if "mcp" in parts else None
         hostname = resolve_hostname(hostname)
         project = request.headers.get("x-project") or request.query_params.get("project") or "default"
         return project, hostname
 
-    def _limit_for(self, request: Request, *, mcp_category: Optional[str] = None) -> Tuple[str, int]:
+    def _limit_for(self, request: Request, *, mcp_category: Optional[str] = None) -> Optional[Tuple[str, int]]:
         path = request.url.path.rstrip("/") or "/"
+        if mcp_category is None and path.startswith(_MCP_PREFIX):
+            return None
         if request.method in ("GET", "HEAD"):
+            return "search", self._search_per_min
+        if mcp_category == "search" or any(path.endswith(suffix) for suffix in _READ_POST_SUFFIXES):
             return "search", self._search_per_min
         if mcp_category == "write":
             return "write", self._write_per_min
-        if mcp_category == "search" or _path_is_read_post(path):
-            return "search", self._search_per_min
         return "write", self._write_per_min
 
     async def dispatch(self, request: Request, call_next):
@@ -208,19 +196,26 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             body = await request.body()
             _restore_request_body(request, body)
             mcp_category = _mcp_rpc_category(body)
-
-        if _is_critical_memory_read(request, mcp_category):
-            return await call_next(request)
+            if mcp_category is None:
+                return await call_next(request)
 
         project, hostname = self._scope(request)
-        category, limit = self._limit_for(request, mcp_category=mcp_category)
+        limit_pair = self._limit_for(request, mcp_category=mcp_category)
+        if limit_pair is None:
+            return await call_next(request)
+        category, limit = limit_pair
 
-        burst_limit = (
-            _env_int("RL_UI_BURST", 120)
-            if hostname.startswith("ui:")
-            else self._burst
-        )
-        ok_burst, retry_b = self._limiter.allow(f"burst:{hostname}", burst_limit, self._burst_window)
+        # Burst por hostname (protege contra rajadas independentemente do project).
+        if hostname.startswith("ui:"):
+            burst_limit = _env_int("RL_UI_BURST", 120)
+            burst_key = f"burst:{hostname}"
+        elif path.startswith(_MCP_PREFIX) and category == "search":
+            burst_limit = self._mcp_burst
+            burst_key = f"burst:mcp:{hostname}"
+        else:
+            burst_limit = self._burst
+            burst_key = f"burst:{hostname}"
+        ok_burst, retry_b = self._limiter.allow(burst_key, burst_limit, self._burst_window)
         if not ok_burst:
             return _too_many(retry_b)
 
@@ -236,3 +231,13 @@ def _too_many(retry_after: int) -> JSONResponse:
         content={"detail": "rate limit exceeded"},
         headers={"Retry-After": str(retry_after)},
     )
+'''
+
+
+def main() -> None:
+    TARGET.write_text(NEW_CONTENT, encoding="utf-8")
+    print(f"Patched {TARGET}")
+
+
+if __name__ == "__main__":
+    main()

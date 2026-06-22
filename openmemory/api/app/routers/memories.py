@@ -15,6 +15,7 @@ from app.models import (
     User,
 )
 from app.schemas import MemoryResponse
+from app.utils.db import get_or_create_user
 from app.utils.memory import get_memory_client
 from app.utils.permissions import check_memory_access_permissions
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -356,6 +357,16 @@ async def get_memory(
 
     shared = get_shared_memory_by_id(str(memory_id))
     if shared:
+        from app.utils.read_audit import record_memory_reads
+
+        proj = (shared.get("metadata_") or {}).get("project") or shared.get("app_name")
+        record_memory_reads(
+            project=str(proj) if proj else None,
+            memory_ids=[str(memory_id)],
+            access_type="get",
+            source="api",
+            items=[{"id": str(memory_id), "project": proj, "metadata_": shared.get("metadata_")}],
+        )
         return shared
 
     raise HTTPException(status_code=404, detail="Memory not found")
@@ -365,43 +376,61 @@ class DeleteMemoriesRequest(BaseModel):
     memory_ids: List[UUID]
     user_id: str
 
-# Delete multiple memories
+
+def _delete_memories_impl(db: Session, memory_ids: List[UUID], user_id: str) -> int:
+    """Delete memories from Qdrant and mark deleted in SQL when a row exists."""
+    from app.utils.memory import get_memory_client_safe
+
+    user = get_or_create_user(db, user_id)
+    memory_client = get_memory_client_safe()
+    if not memory_client:
+        raise HTTPException(status_code=503, detail="Memory client is not available")
+
+    deleted = 0
+    for memory_id in memory_ids:
+        vector_ok = False
+        try:
+            memory_client.delete(str(memory_id))
+            vector_ok = True
+        except Exception as delete_error:
+            logging.warning(
+                "Failed to delete memory %s from vector store: %s",
+                memory_id,
+                delete_error,
+            )
+
+        memory = db.query(Memory).filter(Memory.id == memory_id).first()
+        if memory:
+            update_memory_state(db, memory_id, MemoryState.deleted, user.id)
+            deleted += 1
+        elif vector_ok:
+            deleted += 1
+
+    return deleted
+
+
+# Delete multiple memories (legacy DELETE — prefer POST /actions/delete through UI proxy)
 @router.delete("/")
 async def delete_memories(
     request: DeleteMemoriesRequest,
     db: Session = Depends(get_db)
 ):
-    user = db.query(User).filter(User.user_id == request.user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    deleted = _delete_memories_impl(db, request.memory_ids, request.user_id)
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="No memories were deleted")
+    return {"message": f"Successfully deleted {deleted} memories"}
 
-    # Get memory client to delete from vector store
-    try:
-        memory_client = get_memory_client()
-        if not memory_client:
-            raise HTTPException(
-                status_code=503,
-                detail="Memory client is not available"
-            )
-    except HTTPException:
-        raise
-    except Exception as client_error:
-        logging.error(f"Memory client initialization failed: {client_error}")
-        raise HTTPException(
-            status_code=503,
-            detail=f"Memory service unavailable: {str(client_error)}"
-        )
 
-    # Delete from vector store then mark as deleted in database
-    for memory_id in request.memory_ids:
-        try:
-            memory_client.delete(str(memory_id))
-        except Exception as delete_error:
-            logging.warning(f"Failed to delete memory {memory_id} from vector store: {delete_error}")
-
-        update_memory_state(db, memory_id, MemoryState.deleted, user.id)
-
-    return {"message": f"Successfully deleted {len(request.memory_ids)} memories"}
+@router.post("/actions/delete")
+async def delete_memories_action(
+    request: DeleteMemoriesRequest,
+    db: Session = Depends(get_db)
+):
+    """Delete memories (POST for Next.js api-proxy — DELETE bodies are not forwarded)."""
+    deleted = _delete_memories_impl(db, request.memory_ids, request.user_id)
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="No memories were deleted")
+    return {"message": f"Successfully deleted {deleted} memories"}
 
 
 # Archive memories
@@ -506,20 +535,46 @@ async def get_memory_access_log(
     page_size: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
+    from app.utils.read_audit import list_memory_read_audit
+
+    mid = str(memory_id)
+
+    # Qdrant/MCP reads land in read_audit_logs (no SQL memories FK).
+    audit_total, audit_logs = list_memory_read_audit(db, mid, page=page, page_size=page_size)
+    if audit_total:
+        return {
+            "total": audit_total,
+            "page": page,
+            "page_size": page_size,
+            "logs": audit_logs,
+        }
+
+    # Legacy SQL-backed memories still use memory_access_logs.
     query = db.query(MemoryAccessLog).filter(MemoryAccessLog.memory_id == memory_id)
     total = query.count()
-    logs = query.order_by(MemoryAccessLog.accessed_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
-
-    # Get app name
-    for log in logs:
+    legacy_rows = (
+        query.order_by(MemoryAccessLog.accessed_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    logs = []
+    for log in legacy_rows:
         app = db.query(App).filter(App.id == log.app_id).first()
-        log.app_name = app.name if app else None
+        logs.append(
+            {
+                "id": str(log.id),
+                "app_name": app.name if app else "unknown",
+                "accessed_at": log.accessed_at.isoformat() if log.accessed_at else None,
+                "access_type": log.access_type,
+            }
+        )
 
     return {
         "total": total,
         "page": page,
         "page_size": page_size,
-        "logs": logs
+        "logs": logs,
     }
 
 
@@ -607,6 +662,26 @@ async def filter_shared_memories(request: FilterMemoriesRequest):
         )
         for item in data["items"]
     ]
+
+    from app.utils.read_audit import record_memory_reads
+
+    audit_items = [
+        {
+            "id": item.id,
+            "project": (item.metadata_ or {}).get("project") or item.app_name,
+            "metadata_": item.metadata_,
+        }
+        for item in items
+    ]
+    record_memory_reads(
+        project=request.project,
+        memory_ids=[i["id"] for i in audit_items],
+        access_type="search" if request.search_query else "list",
+        source="api",
+        query=request.search_query,
+        items=audit_items,
+    )
+
     return SharedMemoriesPage(
         items=items,
         total=data["total"],
@@ -739,7 +814,7 @@ async def get_related_memories(
     
     if not category_ids:
         return Page.create([], total=0, params=params)
-    
+
     # Build query for related memories
     query = db.query(Memory).distinct(Memory.id).filter(
         Memory.user_id == user.id,
@@ -775,3 +850,41 @@ async def get_related_memories(
             for memory in items
         ]
     )
+
+
+def install_admin_read_audit() -> None:
+    try:
+        from app.routers import admin as admin_mod
+        from app.utils.read_audit import record_memory_reads
+
+        if getattr(admin_mod.project_memories, "_read_audit_wrapped", False):
+            return
+
+        original = admin_mod.project_memories
+
+        def wrapped(project: str, search=None, limit: int = 100):
+            result = original(project=project, search=search, limit=limit)
+            items = result.get("items") or []
+            record_memory_reads(
+                project=project,
+                memory_ids=[i.get("id") for i in items],
+                access_type="search" if search else "list",
+                source="admin",
+                query=search,
+                items=[
+                    {"id": i.get("id"), "project": project, "metadata": {"project": project}}
+                    for i in items
+                ],
+            )
+            return result
+
+        wrapped._read_audit_wrapped = True  # type: ignore[attr-defined]
+        admin_mod.project_memories = wrapped
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).warning("admin read-audit wrapper not installed", exc_info=True)
+
+
+from app.utils.mcp_read_wrappers import install_mcp_read_audit
+
+install_mcp_read_audit()
+install_admin_read_audit()

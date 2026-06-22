@@ -165,6 +165,31 @@ def _record_write_audit(*, job_id, project, hostname, client_name):
         db.close()
 
 
+
+async def _fetch_project_memories(memory_client, project: str, top_k: int = DEFAULT_LIST_TOP_K) -> list:
+    """Lista memórias do projeto (sem embedding) — fallback quando o embedder falha."""
+    bind_active_collection(memory_client)
+    filters = {"project": project}
+    raw = await anyio.to_thread.run_sync(
+        lambda: memory_client.vector_store.list(filters=filters, top_k=top_k)
+    )
+    points = raw
+    if isinstance(raw, (tuple, list)) and len(raw) > 0 and isinstance(raw[0], (list, tuple)):
+        points = raw[0]
+    results = []
+    for p in points or []:
+        payload = getattr(p, "payload", {}) or {}
+        results.append({
+            "id": getattr(p, "id", None),
+            "memory": payload.get("data"),
+            "hash": payload.get("hash"),
+            "created_at": payload.get("created_at"),
+            "updated_at": payload.get("updated_at"),
+            "project": payload.get("project"),
+        })
+    return results
+
+
 @mcp.tool(description="Search through stored memories scoped by project (shared across all machines). This method is called EVERYTIME the user asks anything.")
 async def search_memory(query: str, project: str, rerank: bool = False) -> str:
     # NOTE (task_03 / ADR-003): reads are scoped by `project` and are SHARED
@@ -204,10 +229,24 @@ async def search_memory(query: str, project: str, rerank: bool = False) -> str:
                 EMBED_CACHE_HIT.inc()
             else:
                 EMBED_CACHE_MISS.inc()
-                embeddings = await anyio.to_thread.run_sync(
-                    lambda: memory_client.embedding_model.embed(query, "search")
-                )
-                read_cache.set_embedding(embed_model, query, embeddings)
+                try:
+                    embeddings = await anyio.to_thread.run_sync(
+                        lambda: memory_client.embedding_model.embed(query, "search")
+                    )
+                    read_cache.set_embedding(embed_model, query, embeddings)
+                except Exception as embed_err:  # noqa: BLE001
+                    logging.warning(
+                        "Semantic search unavailable (%s); falling back to project list",
+                        embed_err,
+                    )
+                    results = await _fetch_project_memories(
+                        memory_client, project, DEFAULT_SEARCH_TOP_K
+                    )
+                    recency_weighted_sort(results)
+                    return json.dumps(
+                        {"results": results, "degraded": "list_fallback"},
+                        indent=2,
+                    )
 
             hits = await anyio.to_thread.run_sync(
                 lambda: memory_client.vector_store.search(

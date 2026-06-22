@@ -5,7 +5,12 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Copy, Check } from "lucide-react";
 import Image from "next/image";
-import { getApiUrl, getMcpBaseUrl } from "@/lib/api-url";
+import { getMcpBaseUrl } from "@/lib/api-url";
+import {
+  installLocalCommand,
+  installShellVariants,
+  mcpSseUrl,
+} from "@/lib/mcp-install";
 
 const clientTabs = [
   { key: "claude", label: "Claude", icon: "/images/claude.webp" },
@@ -38,44 +43,81 @@ const getColorGradient = (color: string) => {
 
 const allTabs = [{ key: "mcp", label: "Link MCP", icon: "🔗" }, ...clientTabs];
 
+async function copyText(text: string): Promise<void> {
+  if (navigator?.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+}
+
+function CommandBlock({
+  label,
+  command,
+  copyKey,
+  copiedKey,
+  onCopied,
+}: {
+  label: string;
+  command: string;
+  copyKey: string;
+  copiedKey: string | null;
+  onCopied: (key: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-zinc-500">{label}</p>
+      <div className="relative">
+        <pre className="bg-zinc-800 px-4 py-3 pr-14 rounded-md overflow-x-auto text-sm">
+          <code className="text-gray-300 whitespace-pre-wrap break-all">{command}</code>
+        </pre>
+        <button
+          type="button"
+          className="absolute top-0 right-0 py-3 px-4 rounded-md hover:bg-zinc-600 bg-zinc-700"
+          aria-label={`Copiar comando ${label}`}
+          onClick={() => {
+            copyText(command).then(() => onCopied(copyKey));
+          }}
+        >
+          {copiedKey === copyKey ? (
+            <Check className="h-5 w-5 text-green-400" />
+          ) : (
+            <Copy className="h-5 w-5 text-zinc-400" />
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export const Install = () => {
-  const [copiedTab, setCopiedTab] = useState<string | null>(null);
-  const user = process.env.NEXT_PUBLIC_USER_ID || "user";
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const mcpBase = getMcpBaseUrl();
+  const defaultShell = installShellVariants[0];
 
-  const handleCopy = async (tab: string, isMcp: boolean = false) => {
-    const text = isMcp
-      ? `${mcpBase}/mcp/openmemory/sse/${user}`
-      : `npx @openmemory/install local ${mcpBase}/mcp/${tab}/sse/${user} --client ${tab}`;
-
-    try {
-      // Try using the Clipboard API first
-      if (navigator?.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        // Fallback: Create a temporary textarea element
-        const textarea = document.createElement("textarea");
-        textarea.value = text;
-        textarea.style.position = "fixed";
-        textarea.style.opacity = "0";
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand("copy");
-        document.body.removeChild(textarea);
-      }
-
-      // Update UI to show success
-      setCopiedTab(tab);
-      setTimeout(() => setCopiedTab(null), 1500); // Reset after 1.5s
-    } catch (error) {
-      console.error("Failed to copy text:", error);
-      // You might want to add a toast notification here to show the error
-    }
+  const markCopied = (key: string) => {
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 1500);
   };
 
   return (
     <div>
-      <h2 className="text-xl font-semibold mb-6">Instalar OpenMemory</h2>
+      <h2 className="text-xl font-semibold mb-2">Instalar OpenMemory</h2>
+      <p className="text-sm text-zinc-500 mb-6 max-w-2xl">
+        Execute o comando na máquina onde o Claude ou o Cursor está instalado. O
+        hostname é resolvido automaticamente pela variável do sistema (
+        <code className="text-zinc-400">%COMPUTERNAME%</code> /{" "}
+        <code className="text-zinc-400">$env:COMPUTERNAME</code> /{" "}
+        <code className="text-zinc-400">$(hostname)</code>) — não use o usuário
+        Linux do servidor.
+      </p>
 
       <div className="hidden">
         <div className="data-[state=active]:bg-[linear-gradient(to_top,_rgba(239,108,60,0.3),_rgba(239,108,60,0))] data-[state=active]:border-[#EF6C3C]"></div>
@@ -96,7 +138,7 @@ export const Install = () => {
               key={key}
               value={key}
               className={`flex-1 px-0 pb-2 rounded-none ${getColorGradient(
-                key
+                key,
               )} data-[state=active]:border-b-2 data-[state=active]:shadow-none text-zinc-400 data-[state=active]:text-white flex items-center justify-center gap-2 text-sm`}
             >
               {icon.startsWith("/") ? (
@@ -115,70 +157,55 @@ export const Install = () => {
           ))}
         </TabsList>
 
-        {/* MCP Tab Content */}
         <TabsContent value="mcp" className="mt-6">
           <Card className="bg-zinc-900 border-zinc-800">
             <CardHeader className="py-4">
               <CardTitle className="text-white text-xl">Link MCP</CardTitle>
             </CardHeader>
             <hr className="border-zinc-800" />
-            <CardContent className="py-4">
-              <div className="relative">
-                <pre className="bg-zinc-800 px-4 py-3 rounded-md overflow-x-auto text-sm">
-                  <code className="text-gray-300">
-                    {mcpBase}/mcp/openmemory/sse/{user}
-                  </code>
-                </pre>
-                <div>
-                  <button
-                    className="absolute top-0 right-0 py-3 px-4 rounded-md hover:bg-zinc-600 bg-zinc-700"
-                    aria-label="Copiar para a área de transferência"
-                    onClick={() => handleCopy("mcp", true)}
-                  >
-                    {copiedTab === "mcp" ? (
-                      <Check className="h-5 w-5 text-green-400" />
-                    ) : (
-                      <Copy className="h-5 w-5 text-zinc-400" />
-                    )}
-                  </button>
-                </div>
-              </div>
+            <CardContent className="py-4 space-y-4">
+              <CommandBlock
+                label={defaultShell.label}
+                command={mcpSseUrl(mcpBase, "openmemory", defaultShell.hostnameExpr)}
+                copyKey="mcp-ps"
+                copiedKey={copiedKey}
+                onCopied={markCopied}
+              />
+              <CommandBlock
+                label={installShellVariants[1].label}
+                command={mcpSseUrl(
+                  mcpBase,
+                  "openmemory",
+                  installShellVariants[1].hostnameExpr,
+                )}
+                copyKey="mcp-bash"
+                copiedKey={copiedKey}
+                onCopied={markCopied}
+              />
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* Client Tabs Content */}
         {clientTabs.map(({ key }) => (
           <TabsContent key={key} value={key} className="mt-6">
             <Card className="bg-zinc-900 border-zinc-800">
               <CardHeader className="py-4">
                 <CardTitle className="text-white text-xl">
-                  {key.charAt(0).toUpperCase() + key.slice(1)} Installation
-                  Command
+                  Comando de instalação — {key.charAt(0).toUpperCase() + key.slice(1)}
                 </CardTitle>
               </CardHeader>
               <hr className="border-zinc-800" />
-              <CardContent className="py-4">
-                <div className="relative">
-                  <pre className="bg-zinc-800 px-4 py-3 rounded-md overflow-x-auto text-sm">
-                    <code className="text-gray-300">
-                      {`npx @openmemory/install local ${getMcpBaseUrl()}/mcp/${key}/sse/${user} --client ${key}`}
-                    </code>
-                  </pre>
-                  <div>
-                    <button
-                      className="absolute top-0 right-0 py-3 px-4 rounded-md hover:bg-zinc-600 bg-zinc-700"
-                      aria-label="Copiar para a área de transferência"
-                      onClick={() => handleCopy(key)}
-                    >
-                      {copiedTab === key ? (
-                        <Check className="h-5 w-5 text-green-400" />
-                      ) : (
-                        <Copy className="h-5 w-5 text-zinc-400" />
-                      )}
-                    </button>
-                  </div>
-                </div>
+              <CardContent className="py-4 space-y-4">
+                {installShellVariants.map((variant) => (
+                  <CommandBlock
+                    key={`${key}-${variant.id}`}
+                    label={variant.label}
+                    command={installLocalCommand(mcpBase, key, variant.hostnameExpr)}
+                    copyKey={`${key}-${variant.id}`}
+                    copiedKey={copiedKey}
+                    onCopied={markCopied}
+                  />
+                ))}
               </CardContent>
             </Card>
           </TabsContent>
