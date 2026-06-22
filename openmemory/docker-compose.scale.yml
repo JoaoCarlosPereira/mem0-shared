@@ -189,7 +189,7 @@ services:
       # Browser calls /api-proxy on the same host:port; Next rewrites to the API container.
       - API_INTERNAL_URL=http://openmemory-mcp:8765
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-/api-proxy}
-      - NEXT_PUBLIC_USER_ID=${USER:-openmemory}
+      - NEXT_PUBLIC_USER_ID=${OPENMEMORY_UI_USER_ID:-openmemory}
 
 volumes:
   mem0_storage:

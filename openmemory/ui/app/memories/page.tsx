@@ -1,26 +1,27 @@
 "use client";
 
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { MemoriesSection } from "@/app/memories/components/MemoriesSection";
 import { MemoryFilters } from "@/app/memories/components/MemoryFilters";
 import { useRouter, useSearchParams } from "next/navigation";
 import "@/styles/animation.css";
 import UpdateMemory from "@/components/shared/update-memory";
 import { useUI } from "@/hooks/useUI";
+import { MemoryTableSkeleton } from "@/skeleton/MemoryTableSkeleton";
 
-export default function MemoriesPage() {
+function MemoriesPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { updateMemoryDialog, handleCloseUpdateMemoryDialog } = useUI();
+
   useEffect(() => {
-    // Set default pagination values if not present in URL
     if (!searchParams.has("page") || !searchParams.has("size")) {
       const params = new URLSearchParams(searchParams.toString());
       if (!searchParams.has("page")) params.set("page", "1");
       if (!searchParams.has("size")) params.set("size", "10");
-      router.push(`?${params.toString()}`);
+      router.replace(`?${params.toString()}`);
     }
-  }, []);
+  }, [router, searchParams]);
 
   return (
     <div className="">
@@ -41,5 +42,13 @@ export default function MemoriesPage() {
         </div>
       </main>
     </div>
+  );
+}
+
+export default function MemoriesPage() {
+  return (
+    <Suspense fallback={<MemoryTableSkeleton />}>
+      <MemoriesPageContent />
+    </Suspense>
   );
 }

@@ -9,7 +9,7 @@ printenv | grep '^NEXT_PUBLIC_' | while IFS= read -r line; do
   key="${line%%=*}"
   value="${line#*=}"
   if [ -n "$value" ] && [ "$value" != "$key" ]; then
-    find .next/ -type f -exec sed -i "s|${key}|${value}|g" {} +
+    find .next/ -type f \( -name '*.js' -o -name '*.json' \) -exec sed -i "s|${key}|${value}|g" {} +
   fi
 done
 echo "Done replacing env variables NEXT_PUBLIC_ with real values"
