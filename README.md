@@ -159,7 +159,39 @@ pelos runbooks/drills em execução real. Runbooks em
 
 ## Arquitetura
 
-### Modo local-first (Fase 0)
+Esta seção explica **como o sistema é construído e como os dados fluem**, de
+forma autossuficiente. Para a arquitetura-alvo em escala (cluster, GPU, K8s) e o
+estado de implementação detalhado, veja
+[`openmemory/docs/self-hosted-scale-architecture.md`](openmemory/docs/self-hosted-scale-architecture.md).
+
+### Visão em uma frase
+
+Uma **memória compartilhada por time, escopada por `project`**, onde cada fato
+vira um **vetor** (representação do seu significado) e fica em um banco vetorial.
+A **escrita é assíncrona** (entra numa fila e é processada por um worker), a
+**leitura é síncrona e rápida** (busca por significado, com cache), e uma
+**governança automática** roda fora do horário de pico para manter a qualidade do
+acervo. Tudo **100% na rede local** — nenhum conteúdo sai da LAN.
+
+### Componentes e stack tecnológico
+
+| Camada | Componente | Tecnologia | Papel |
+|--------|-----------|------------|-------|
+| **Tela** | `openmemory-ui` (`:3000`) | Next.js 15, React 19, Redux Toolkit, Radix UI, TailwindCSS | Dashboard: memórias, projetos, painéis de governança. |
+| **Cérebro** | `openmemory-mcp` (`:8765`) | FastAPI (Python), servidor **MCP** (SSE + HTTP) + REST | Recebe pedidos dos agentes (MCP) e da UI (REST). Stateless no modo escala. |
+| **Workers** | write / governance / migration | `asyncio` workers (FastAPI app ou processos dedicados) | Processamento fora de banda: extração LLM, faxina, particionamento. |
+| **Memória semântica** | `mem0_store` (`:6333`) | **Qdrant** (vector store) | Onde os vetores realmente moram; busca por similaridade. |
+| **Controle** | banco relacional | **SQLite** (local) / **PostgreSQL + PgBouncer** (escala) via SQLAlchemy + Alembic | Catálogo de projetos, fila de escrita, governança, auditoria, histórico. |
+| **Extração** | LLM local | **Ollama** (`:11434`) ou **llama.cpp** (OpenAI-compat) | Extrai fatos do texto bruto e gera embeddings. |
+| **Cache / coordenação** | `redis` | **Redis** (modo escala) | Cache de embeddings e de resultados de busca; contadores de rate limit. |
+| **Borda** | `traefik` | **Traefik** + middleware FastAPI | Reverse proxy, sticky SSE, circuit breaker; rate limit fino no app. |
+| **Observabilidade** | métricas + tracing | **Prometheus** + **OpenTelemetry** (Collector/Tempo) | `/metrics`, `trace_id` correlacionado ponta a ponta. |
+
+> **Por baixo de tudo está o SDK mem0** (`mem0/memory/main.py`,
+> `mem0/vector_stores/qdrant.py`), com as customizações de `project` e filtro
+> `state=active`. Veja [Principais mudanças em relação ao upstream](#principais-mudanças-em-relação-ao-upstream).
+
+### Diagrama — modo local-first (Fase 0)
 
 ```
 Agentes (Claude Code, Cursor, …)
@@ -178,7 +210,7 @@ Qdrant          LLM local
 coleção única   extração + embeddings
 ```
 
-### Modo escala (Fases 1–3)
+### Diagrama — modo escala (Fases 1–3)
 
 ```
 Agentes ──► Traefik (:8765) ──► openmemory-mcp (N réplicas, stateless)
@@ -193,15 +225,129 @@ Agentes ──► Traefik (:8765) ──► openmemory-mcp (N réplicas, statele
               PostgreSQL + PgBouncer (catálogo, fila, governança, audit)
 ```
 
-Fluxo ponta a ponta (comum aos dois perfis):
+### Modelo de dados (onde cada coisa fica)
+
+A divisão é deliberada: **o significado fica no Qdrant; o controle fica no banco
+relacional.**
+
+- **Qdrant** — os vetores das memórias, com payload incluindo `project`,
+  `hash` (dedup), `created_at`, `type` e `state` (`active` / `quarantined` /
+  `purged`). É o que a busca semântica consulta.
+- **Banco relacional** (SQLite ou PostgreSQL) — tabelas de controle:
+  catálogo de **projetos** (auto-cadastrado na 1ª escrita), **fila de escrita**
+  (`WriteQueueJob`), **jobs de governança** + **agendamento**, **auditoria de
+  escrita** (quem/quando/qual host), **histórico de estados** das memórias e
+  **políticas de governança** (global + override por projeto).
+
+### Fluxo de ESCRITA (assíncrono) — `add_memories`
+
+O agente **não pode travar** esperando a extração LLM (lenta). Por isso a escrita
+é desacoplada: o pedido entra numa fila durável e devolve ack na hora (ADR-004).
+Implementação em [`app/mcp_server.py`](openmemory/api/app/mcp_server.py),
+[`app/utils/write_queue.py`](openmemory/api/app/utils/write_queue.py) e
+[`app/workers/write_worker.py`](openmemory/api/app/workers/write_worker.py).
+
+1. **Chega o pedido.** `add_memories(text, project)` valida os campos
+   (`project` é obrigatório). O `hostname` da rota MCP serve só para
+   atribuição/auditoria, **não** para escopar a memória (ADR-003).
+2. **Enfileira — não grava ainda.** O job entra na fila com status `queued` e a
+   resposta volta imediatamente: `{"status":"accepted", "job_id":…}`
+   (fire-and-forget; o agente não consulta status).
+3. **Registra a atribuição.** Grava na auditoria de escrita (host, cliente,
+   projeto, timestamp). Se a auditoria falhar, a escrita **não** falha.
+4. **O write worker processa.** Pega jobs em lote
+   (`FOR UPDATE SKIP LOCKED` no PostgreSQL), respeitando um limite de
+   concorrência (`asyncio.Semaphore`, default 2) para não saturar o LLM local.
+   Chama `client.add(text, project=…, user_id=hostname, …)` → extração LLM →
+   embeddings → upsert no Qdrant. Na 1ª escrita de um projeto, cataloga o
+   projeto (idempotente).
+5. **Fallback de extração.** Se o LLM extrair zero fatos, tenta uma **gravação
+   bruta** (`infer=False`); se ainda assim nada for persistido, o job falha e
+   entra em retentativa.
+6. **Status final do job:**
+
+   | Status | Significado |
+   |--------|-------------|
+   | `done` | Persistido com sucesso no Qdrant. Invalida o cache de leitura do projeto. |
+   | `skipped` | O LLM concluiu que **não havia nada novo** (já existia ou sem fato extraível). **Não é erro** — é "nada a fazer". |
+   | `failed` | Falhou até o teto de tentativas (`max_attempts`, default 3). **Fica na tabela** e é re-enfileirado automaticamente (~15 min) — nunca se perde. |
+
+7. **Dual-write (Fase 2, opcional).** Durante uma migração de particionamento, o
+   worker replica o ponto para a coleção de destino sem competir com o SLA da
+   fila (falhas só contam métrica, não derrubam o job).
+
+### Fluxo de LEITURA (síncrono) — `search_memory` / `list_memories`
+
+A leitura é o **caminho crítico**: precisa ser rápida e direta, então roda na
+própria API (sem fila). Implementação em
+[`app/mcp_server.py`](openmemory/api/app/mcp_server.py) e
+[`app/utils/read_cache.py`](openmemory/api/app/utils/read_cache.py).
+
+1. **Chega a busca.** `search_memory(query, project)` — escopada **por projeto e
+   compartilhada** (sem filtro por usuário): qualquer host vê o mesmo acervo.
+2. **Cache primeiro (modo escala).** Consulta o cache de embedding e o cache de
+   resultado de busca no Redis. Hit → resposta sem recalcular.
+3. **Vira vetor.** Em miss, gera o embedding da query no LLM/embedder local.
+4. **Busca no Qdrant.** `search` com `top_k` limitado (default 20), filtrando por
+   `project` e por `state=active` (memórias quarentenadas **ficam fora** da busca
+   semântica; só `list_memories` as enxerga, para uso operacional).
+5. **Reordena por relevância + recência.** Mistura similaridade semântica com o
+   quão recente é a memória, para o que é pertinente **e** atual subir.
+6. **Modo degradado.** Se o embedding falhar, lista as memórias do projeto por
+   recência — não quebra, só fica menos "inteligente".
+7. **Auditoria.** Registra a leitura. O caminho de leitura tem limite de tráfego
+   mais generoso que a escrita.
+
+### Governança automática (Fase 3)
+
+Sem manutenção, o acervo degrada: duplicatas, memórias velhas e projetos
+abandonados poluem a busca. O **governance-worker**
+([`app/workers/governance_worker.py`](openmemory/api/app/workers/governance_worker.py))
+resolve isso de forma agendada:
+
+- **Agendador interno** acorda a cada ~60s, verifica se está na **janela
+  off-peak** (fuso/dias/horário configuráveis) e enfileira os jobs vencidos, em
+  cadência **diária / semanal / mensal**. Jobs também podem ser disparados
+  manualmente via `/admin/governance/jobs/{job_type}`.
+- **Estados de memória:** `active` → `quarantined` (reversível) → `purged`
+  (irreversível, após a janela de quarentena).
+- **Jobs** (em [`app/governance/`](openmemory/api/app/governance/)): `dedup`,
+  `ttl_prune`, `consolidate` (merge semântico via LLM), `purge`,
+  `quality_eval`, `enforce_quota` (teto por projeto) e `cold_tier` (arquiva
+  projetos inativos em MinIO/S3, reversível).
+- Tudo idempotente e com retentativa. Os parâmetros e a tabela de políticas
+  estão na seção [Governança de memória](#governança-de-memória).
+
+### Particionamento Qdrant (Fase 2)
+
+O isolamento entre projetos é feito por **tenant index / custom shard_key** numa
+coleção base; projetos grandes podem ser **promovidos** a coleção dedicada via
+um **migration worker blue/green** (dual-write → validação → flip atômico →
+rollback se preciso), controlado por `POST /admin/migration/*` e
+`POST /admin/projects/{name}/promote`.
+
+### Borda: rate limit, autenticação e observabilidade
+
+- **Rate limit** por `(project, hostname)` — janela deslizante no Redis
+  ([`app/middleware/rate_limit.py`](openmemory/api/app/middleware/rate_limit.py)):
+  busca **30/min**, escrita **60/min**, burst **10/10s** (a leitura é mais
+  liberada que a escrita). Se o Redis cair, o limitador **libera** (fail-open).
+- **Autenticação por equipe** — `TeamAuthMiddleware` com modos
+  `off` / `warn` / `enforce`; tokens vêm de secret, fora do `.env` versionado.
+- **Observabilidade** — `/health`, `/metrics` (Prometheus) e tracing
+  OpenTelemetry com `trace_id` propagado de MCP → embed → Qdrant.
+
+### Resumo do fluxo ponta a ponta
 
 1. Um agente conecta na rota MCP `/mcp/{client_name}/sse/{hostname}`.
-2. `add_memories(text, project)` **enfileira** e retorna ack imediato.
-3. O **write worker** consome a fila, extrai via LLM e persiste no projeto.
+2. `add_memories(text, project)` **enfileira** e retorna ack imediato
+   (`done` / `skipped` / `failed` são resolvidos depois pelo worker).
+3. O **write worker** consome a fila, extrai via LLM e persiste no projeto
+   (com fallback de gravação bruta se a extração vier vazia).
 4. `search_memory(query, project)` recupera memórias **ativas** do projeto
-   compartilhado (quarentenadas ficam fora da busca semântica).
-5. O **governance-worker** aplica políticas (TTL, dedup, consolidação) em
-   background conforme agendamento e enfileiramento via `/admin/governance/*`.
+   compartilhado por significado (cache → vetor → Qdrant → relevância+recência).
+5. O **governance-worker** aplica políticas (TTL, dedup, consolidação, cota,
+   cold tier) em background, na janela off-peak ou via `/admin/governance/*`.
 
 ## Instalação
 
