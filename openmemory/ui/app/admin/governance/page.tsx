@@ -29,6 +29,8 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { GovernanceJob, ProjectSize } from "@/types/admin";
 import { getApiUrl } from "@/lib/api-url";
+import { PageHeader } from "@/components/shared/PageHeader";
+import { Shield } from "lucide-react";
 
 type ProjectMergePreviewGroup = {
   canonical: string;
@@ -232,7 +234,12 @@ export default function GovernancePage() {
 
   return (
     <div>
-      <h1 className="mb-4 text-xl font-semibold text-zinc-100">Governança</h1>
+      <PageHeader
+        className="mb-4"
+        icon={Shield}
+        title="Governança"
+        description="Deduplicação, consolidação, TTL e merge de projetos"
+      />
 
       <section className="mb-6">
         <h2 className="mb-2 text-sm font-medium text-zinc-400">

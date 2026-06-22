@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useSelector } from "react-redux";
 import {
@@ -11,6 +12,7 @@ import {
   ScrollText,
 } from "lucide-react";
 import { selectFailedCount } from "@/store/queuesSlice";
+import { APP_NAME } from "@/lib/branding";
 
 interface NavItem {
   label: string;
@@ -35,6 +37,16 @@ export function AdminSidebar() {
       aria-label="Navegação do painel admin"
       className="flex w-56 shrink-0 flex-col gap-1 border-r border-zinc-800 bg-zinc-950 p-3"
     >
+      <Link
+        href="/admin/overview"
+        className="mb-3 flex items-center gap-2 rounded-md px-2 py-2 text-zinc-200 hover:bg-zinc-900"
+      >
+        <Image src="/logo.svg" alt={APP_NAME} width={24} height={24} />
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold">{APP_NAME}</div>
+          <div className="text-xs text-zinc-500">Admin</div>
+        </div>
+      </Link>
       {NAV_ITEMS.map((item) => {
         const Icon = item.icon;
         const isActive = pathname?.startsWith(item.href);

@@ -15,6 +15,8 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { ProjectSize } from "@/types/admin";
+import { PageHeader } from "@/components/shared/PageHeader";
+import { Database } from "lucide-react";
 
 export default function ProjectsPage() {
   const { fetchProjectSizes } = useAdminApi({ poll: false });
@@ -44,7 +46,12 @@ export default function ProjectsPage() {
 
   return (
     <div>
-      <h1 className="mb-4 text-xl font-semibold text-zinc-100">Projetos</h1>
+      <PageHeader
+        className="mb-4"
+        icon={Database}
+        title="Projetos"
+        description="Catálogo de projetos e volume de memórias"
+      />
       <Input
         placeholder="Buscar projeto…"
         className="mb-3 w-72"

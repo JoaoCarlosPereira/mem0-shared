@@ -4,13 +4,15 @@ import { useState, useEffect } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { SaveIcon, RotateCcw } from "lucide-react"
+import { SaveIcon, RotateCcw, Settings } from "lucide-react"
 import { FormView } from "@/components/form-view"
 import { JsonEditor } from "@/components/json-editor"
 import { useConfig } from "@/hooks/useConfig"
 import { useSelector } from "react-redux"
 import { RootState } from "@/store/store"
 import { useToast } from "@/components/ui/use-toast"
+import { PageHeader } from "@/components/shared/PageHeader"
+import { APP_NAME } from "@/lib/branding"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -105,8 +107,12 @@ export default function SettingsPage() {
       <div className="container mx-auto py-10 max-w-4xl">
         <div className="flex justify-between items-center mb-8">
           <div className="animate-fade-slide-down">
-            <h1 className="text-3xl font-bold tracking-tight">Configurações</h1>
-            <p className="text-muted-foreground mt-1">Gerencie sua configuração do OpenMemory e do Mem0</p>
+            <PageHeader
+              size="large"
+              icon={Settings}
+              title="Configurações"
+              description={`Gerencie sua configuração do ${APP_NAME} e do Mem0`}
+            />
           </div>
           <div className="flex space-x-2">
             <AlertDialog>

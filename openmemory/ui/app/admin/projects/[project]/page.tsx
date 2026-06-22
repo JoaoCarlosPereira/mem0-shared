@@ -15,8 +15,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Database } from "lucide-react";
 import { ProjectMemory } from "@/types/admin";
+import { PageHeader } from "@/components/shared/PageHeader";
 
 function fmtDate(v: string | null): string {
   if (!v) return "—";
@@ -65,12 +66,12 @@ export default function ProjectMemoriesPage() {
       >
         <ArrowLeft className="h-4 w-4" /> Projetos
       </Link>
-      <h1 className="mb-1 text-xl font-semibold text-zinc-100">
-        Memórias — {projectName}
-      </h1>
-      <p className="mb-4 text-sm text-zinc-500">
-        Leitura direta do store compartilhado (Qdrant), indexada por projeto.
-      </p>
+      <PageHeader
+        className="mb-4"
+        icon={Database}
+        title={`Memórias — ${projectName}`}
+        description="Leitura direta do store compartilhado (Qdrant), indexada por projeto."
+      />
 
       <div className="mb-3 flex gap-2">
         <Input

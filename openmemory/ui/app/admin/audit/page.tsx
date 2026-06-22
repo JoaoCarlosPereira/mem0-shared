@@ -21,7 +21,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Loader2 } from "lucide-react";
+import { Loader2, ScrollText } from "lucide-react";
+import { PageHeader } from "@/components/shared/PageHeader";
 import {
   ProjectSize,
   WriteAuditFilter,
@@ -108,7 +109,12 @@ export default function AuditPage() {
 
   return (
     <div>
-      <h1 className="mb-4 text-xl font-semibold text-zinc-100">Log de Auditoria</h1>
+      <PageHeader
+        className="mb-4"
+        icon={ScrollText}
+        title="Log de Auditoria"
+        description="Histórico de escritas e acessos à memória compartilhada"
+      />
 
       <div className="mb-3 flex flex-wrap items-end gap-2">
         <div>

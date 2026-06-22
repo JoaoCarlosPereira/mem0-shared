@@ -3,6 +3,8 @@ import { useSelector } from "react-redux";
 import { RootState } from "@/store/store";
 import { useStats } from "@/hooks/useStats";
 import Image from "next/image";
+import { BarChart3 } from "lucide-react";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { constants } from "@/components/shared/source-app";
 const Stats = () => {
   const totalMemories = useSelector(
@@ -22,7 +24,11 @@ const Stats = () => {
   return (
     <div className="bg-zinc-900 rounded-lg border border-zinc-800">
       <div className="bg-zinc-800 border-b border-zinc-800 rounded-t-lg p-4">
-        <div className="text-white text-xl font-semibold">Estatísticas de Memórias</div>
+        <PageHeader
+          icon={BarChart3}
+          title="Estatísticas de Memórias"
+          description="Visão rápida do volume e apps conectados"
+        />
       </div>
       <div className="space-y-3 p-4">
         <div>

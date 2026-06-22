@@ -13,10 +13,11 @@ import {
 import { Label } from "@/components/ui/label";
 import { useState, useRef } from "react";
 import { GoPlus } from "react-icons/go";
-import { Loader2 } from "lucide-react";
+import { Loader2, PlusCircle } from "lucide-react";
 import { useMemoriesApi } from "@/hooks/useMemoriesApi";
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/textarea";
+import { APP_NAME } from "@/lib/branding";
 
 export function CreateMemoryDialog() {
   const { createMemory, isLoading, fetchMemories } = useMemoriesApi();
@@ -51,9 +52,12 @@ export function CreateMemoryDialog() {
       </DialogTrigger>
       <DialogContent className="sm:max-w-[525px] bg-zinc-900 border-zinc-800">
         <DialogHeader>
-          <DialogTitle>Criar Nova Memória</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            <PlusCircle className="h-5 w-5 text-violet-400" />
+            Criar Nova Memória
+          </DialogTitle>
           <DialogDescription>
-            Adicione uma nova memória à sua instância OpenMemory
+            Adicione uma nova memória à sua instância {APP_NAME}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">

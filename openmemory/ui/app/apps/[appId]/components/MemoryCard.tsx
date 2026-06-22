@@ -93,7 +93,7 @@ export function MemoryCard({
                       constants[app_name as keyof typeof constants]
                         ?.iconImage || ""
                     }
-                    alt="OpenMemory"
+                    alt="Mem0-Shared"
                     width={24}
                     height={24}
                   />

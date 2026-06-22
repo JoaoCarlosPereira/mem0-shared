@@ -3,6 +3,8 @@
 import { Suspense, useEffect } from "react";
 import { MemoriesSection } from "@/app/memories/components/MemoriesSection";
 import { MemoryFilters } from "@/app/memories/components/MemoryFilters";
+import { PageHeader } from "@/components/shared/PageHeader";
+import { Layers } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import "@/styles/animation.css";
 import UpdateMemory from "@/components/shared/update-memory";
@@ -33,6 +35,12 @@ function MemoriesPageContent() {
       />
       <main className="flex-1 py-6">
         <div className="container">
+          <PageHeader
+            className="mb-4 animate-fade-slide-down"
+            icon={Layers}
+            title="Memórias"
+            description="Busque, filtre e gerencie memórias compartilhadas"
+          />
           <div className="mt-1 pb-4 animate-fade-slide-down">
             <MemoryFilters />
           </div>

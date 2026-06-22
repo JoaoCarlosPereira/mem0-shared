@@ -13,6 +13,7 @@ import { Textarea } from "./ui/textarea"
 import { useRef, useState as useReactState } from "react"
 import { useSelector } from "react-redux"
 import { RootState } from "@/store/store"
+import { APP_NAME } from "@/lib/branding"
 import { getApiUrl } from "@/lib/api-url";
 
 interface FormViewProps {
@@ -152,11 +153,11 @@ export function FormView({ settings, onChange }: FormViewProps) {
 
   return (
     <div className="space-y-8">
-      {/* Configurações do OpenMemory */}
+      {/* Configurações da plataforma */}
       <Card>
         <CardHeader>
-          <CardTitle>Configurações do OpenMemory</CardTitle>
-          <CardDescription>Configure as opções da sua instância OpenMemory</CardDescription>
+          <CardTitle>Configurações do {APP_NAME}</CardTitle>
+          <CardDescription>Configure as opções da sua instância {APP_NAME}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">
@@ -446,7 +447,7 @@ export function FormView({ settings, onChange }: FormViewProps) {
           {/* Importar Section */}
           <div className="p-4 border border-zinc-800 rounded-lg space-y-2">
             <div className="text-sm font-medium">Importar</div>
-            <p className="text-xs text-muted-foreground">Envie um ZIP exportado pelo OpenMemory. As configurações padrão serão usadas.</p>
+            <p className="text-xs text-muted-foreground">Envie um ZIP exportado pelo {APP_NAME}. As configurações padrão serão usadas.</p>
             <div className="flex items-center gap-3 flex-wrap">
               <input
                 ref={fileInputRef}

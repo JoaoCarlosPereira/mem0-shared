@@ -17,9 +17,9 @@ export const constants = {
     iconImage: "/images/claude.webp",
   },
   openmemory: {
-    name: "OpenMemory",
-    icon: <Icon source="/images/open-memory.svg" />,
-    iconImage: "/images/open-memory.svg",
+    name: "Mem0-Shared",
+    icon: <Icon source="/logo.svg" />,
+    iconImage: "/logo.svg",
   },
   cursor: {
     name: "Cursor",

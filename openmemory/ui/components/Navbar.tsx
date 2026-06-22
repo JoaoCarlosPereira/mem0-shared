@@ -13,6 +13,7 @@ import { useStats } from "@/hooks/useStats";
 import { useAppsApi } from "@/hooks/useAppsApi";
 import { Settings, ShieldCheck } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
+import { APP_NAME } from "@/lib/branding";
 
 export function Navbar() {
   const pathname = usePathname();
@@ -93,9 +94,9 @@ export function Navbar() {
   return (
     <header className="sticky top-0 z-50 w-full border-b border-zinc-800 bg-zinc-950/95 backdrop-blur supports-[backdrop-filter]:bg-zinc-950/60">
       <div className="container flex h-14 items-center justify-between">
-        <Link href="/" className="flex items-center gap-2">
-          <Image src="/logo.svg" alt="OpenMemory" width={26} height={26} />
-          <span className="text-xl font-medium">OpenMemory</span>
+        <Link href="/" className="flex items-center gap-2.5">
+          <Image src="/logo.svg" alt={APP_NAME} width={28} height={28} />
+          <span className="text-xl font-semibold tracking-tight">{APP_NAME}</span>
         </Link>
         <div className="flex items-center gap-2">
           <Link href="/">

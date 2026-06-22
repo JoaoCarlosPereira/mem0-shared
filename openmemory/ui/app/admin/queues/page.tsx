@@ -23,6 +23,8 @@ import {
 } from "@/components/ui/select";
 import { QueueTable, QueueColumn } from "@/components/admin/QueueTable";
 import { JobStatusBadge } from "@/components/admin/JobStatusBadge";
+import { PageHeader } from "@/components/shared/PageHeader";
+import { ListOrdered } from "lucide-react";
 import {
   WriteQueueJob,
   GovernanceJob,
@@ -197,7 +199,12 @@ export default function QueuesPage() {
 
   return (
     <div>
-      <h1 className="mb-4 text-xl font-semibold text-zinc-100">Filas</h1>
+      <PageHeader
+        className="mb-4"
+        icon={ListOrdered}
+        title="Filas"
+        description="Monitoramento das filas de escrita e governança"
+      />
       <Tabs defaultValue="write">
         <TabsList>
           <TabsTrigger value="write">Fila de Escrita</TabsTrigger>

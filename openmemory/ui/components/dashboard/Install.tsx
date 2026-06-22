@@ -3,14 +3,16 @@
 import React, { useState } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, Plug } from "lucide-react";
 import Image from "next/image";
 import { getMcpBaseUrl } from "@/lib/api-url";
+import { APP_NAME, APP_TAGLINE } from "@/lib/branding";
 import {
   installLocalCommand,
   installShellVariants,
   mcpSseUrl,
 } from "@/lib/mcp-install";
+import { PageHeader } from "@/components/shared/PageHeader";
 
 const clientTabs = [
   { key: "claude", label: "Claude", icon: "/images/claude.webp" },
@@ -109,7 +111,12 @@ export const Install = () => {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold mb-2">Instalar OpenMemory</h2>
+      <PageHeader
+        className="mb-4"
+        icon={Plug}
+        title={`Instalar ${APP_NAME}`}
+        description={APP_TAGLINE}
+      />
       <p className="text-sm text-zinc-500 mb-6 max-w-2xl">
         Execute o comando na máquina onde o Claude ou o Cursor está instalado. O
         hostname é resolvido automaticamente pela variável do sistema (
