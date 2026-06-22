@@ -27,4 +27,10 @@ describe("formatDate", () => {
     expect(toDate(ms)?.toISOString()).toBe(new Date(iso).toISOString());
     expect(toDate(seconds)?.toISOString()).toBe(new Date(iso).toISOString());
   });
+
+  it("rejeita ISO com Z concatenado (bug antigo created_at + Z)", () => {
+    const iso = "2026-06-20T06:43:55.690920+00:00";
+    expect(toDate(iso + "Z")).toBeNull();
+    expect(toDate(iso)).not.toBeNull();
+  });
 });

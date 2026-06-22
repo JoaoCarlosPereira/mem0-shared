@@ -4,7 +4,7 @@ import { useMemoriesApi } from "@/hooks/useMemoriesApi";
 import { constants } from "@/components/shared/source-app";
 import { useSelector } from "react-redux";
 import { RootState } from "@/store/store";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { formatDateTime } from "@/lib/i18n/pt-BR";
 
 interface AccessLogEntry {
   id: string;
@@ -94,16 +94,7 @@ export function AccessLog({ memoryId }: AccessLogProps) {
                 <div className="flex flex-col">
                   <span className="font-medium">{appConfig.name}</span>
                   <span className="text-zinc-400 text-sm">
-                    {new Date(entry.accessed_at + "Z").toLocaleDateString(
-                      "pt-BR",
-                      {
-                        year: "numeric",
-                        month: "short",
-                        day: "numeric",
-                        hour: "numeric",
-                        minute: "numeric",
-                      }
-                    )}
+                    {formatDateTime(entry.accessed_at)}
                   </span>
                 </div>
               </li>

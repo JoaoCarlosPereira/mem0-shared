@@ -1,4 +1,5 @@
 /** Rótulos PT-BR para estados técnicos exibidos na UI. */
+import { toDate } from "@/lib/helpers";
 export const MEMORY_STATE_LABELS: Record<string, string> = {
   active: "Ativa",
   paused: "Pausada",
@@ -30,10 +31,10 @@ export function appStatusLabel(active: boolean): string {
   return active ? APP_STATUS_LABELS.active : APP_STATUS_LABELS.inactive;
 }
 
-/** Formata data/hora no padrão brasileiro. */
-export function formatDateTime(value: string | Date): string {
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
+/** Formata data/hora no padrão brasileiro (ISO, segundos ou milissegundos). */
+export function formatDateTime(value: string | number | Date): string {
+  const date = value instanceof Date ? value : toDate(value);
+  if (!date) return "—";
   return date.toLocaleString("pt-BR", {
     day: "numeric",
     month: "short",

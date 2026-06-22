@@ -112,15 +112,7 @@ const AppDetailCard = ({
             <p className="text-xs text-zinc-400">Primeiro Acesso</p>
             <p className="font-medium">
               {selectedApp.details.first_accessed
-                ? new Date(
-                    selectedApp.details.first_accessed
-                  ).toLocaleDateString("pt-BR", {
-                    day: "numeric",
-                    month: "short",
-                    year: "numeric",
-                    hour: "numeric",
-                    minute: "numeric",
-                  })
+                ? formatDateTime(selectedApp.details.first_accessed)
                 : "Nunca"}
             </p>
           </div>
@@ -129,15 +121,7 @@ const AppDetailCard = ({
             <p className="text-xs text-zinc-400">Último Acesso</p>
             <p className="font-medium">
               {selectedApp.details.last_accessed
-                ? new Date(
-                    selectedApp.details.last_accessed
-                  ).toLocaleDateString("pt-BR", {
-                    day: "numeric",
-                    month: "short",
-                    year: "numeric",
-                    hour: "numeric",
-                    minute: "numeric",
-                  })
+                ? formatDateTime(selectedApp.details.last_accessed)
                 : "Nunca"}
             </p>
           </div>

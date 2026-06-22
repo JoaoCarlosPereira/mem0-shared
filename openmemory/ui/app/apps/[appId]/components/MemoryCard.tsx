@@ -3,10 +3,12 @@ import Categories from "@/components/shared/categories";
 import Link from "next/link";
 import { constants } from "@/components/shared/source-app";
 import Image from "next/image";
+import { formatDateTime } from "@/lib/i18n/pt-BR";
+
 interface MemoryCardProps {
   id: string;
   content: string;
-  created_at: string;
+  created_at: string | number;
   metadata?: Record<string, any>;
   categories?: string[];
   access_count?: number;
@@ -61,13 +63,7 @@ export function MemoryCard({
                   Acessada {access_count} vezes
                 </span>
               ) : (
-                new Date(created_at + "Z").toLocaleDateString("pt-BR", {
-                  year: "numeric",
-                  month: "short",
-                  day: "numeric",
-                  hour: "numeric",
-                  minute: "numeric",
-                })
+                formatDateTime(created_at)
               )}
             </span>
 
