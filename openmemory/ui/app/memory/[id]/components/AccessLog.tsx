@@ -4,6 +4,7 @@ import { useMemoriesApi } from "@/hooks/useMemoriesApi";
 import { constants } from "@/components/shared/source-app";
 import { useSelector } from "react-redux";
 import { RootState } from "@/store/store";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatDateTime } from "@/lib/i18n/pt-BR";
 
 interface AccessLogEntry {
