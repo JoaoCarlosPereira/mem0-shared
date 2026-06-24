@@ -55,7 +55,7 @@ EXTRACTION_FAILED_MSG = (
 
 # Default bound on concurrent LLM inferences. Kept small so the local LLM is not
 # saturated by a burst of queued writes; overridable via the constructor.
-DEFAULT_MAX_CONCURRENCY = 2
+DEFAULT_MAX_CONCURRENCY = 1
 
 # How many times a job is attempted before it is marked terminally ``failed``.
 # On a failed attempt the job is re-queued (retentativa) until this ceiling is
@@ -64,7 +64,7 @@ DEFAULT_MAX_ATTEMPTS = 3
 
 # How many jobs to pull from the queue per pass and how long to idle (seconds)
 # when the queue is empty before polling again.
-DEFAULT_BATCH_SIZE = 8
+DEFAULT_BATCH_SIZE = 1
 DEFAULT_IDLE_SLEEP = 1.0
 
 # Re-queue terminal ``failed`` jobs after this many minutes (0 = disabled).

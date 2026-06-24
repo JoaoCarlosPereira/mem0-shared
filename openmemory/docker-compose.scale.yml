@@ -43,7 +43,7 @@ x-api-common: &api-common
     OLLAMA_EMBED_URL: ${OLLAMA_EMBED_URL:-http://host.docker.internal:11434}
     OPENMEMORY_DISCOVERY_BASE_URL: ${OPENMEMORY_DISCOVERY_BASE_URL:-}
     RUN_EMBEDDED_WORKER: "false"
-    WRITE_WORKER_MAX_CONCURRENCY: ${WRITE_WORKER_MAX_CONCURRENCY:-4}
+    WRITE_WORKER_MAX_CONCURRENCY: ${WRITE_WORKER_MAX_CONCURRENCY:-1}
     # Autenticação por equipe (task_11 / ADR-006): warn (default) -> enforce.
     AUTH_MODE: ${AUTH_MODE:-warn}
     # Caminho do secret de tokens (ex.: Docker secret montado em /run/secrets).
@@ -126,6 +126,8 @@ services:
     environment:
       <<: *api-env
       RUN_EMBEDDED_WORKER: "false"
+      WRITE_WORKER_MAX_CONCURRENCY: ${WRITE_WORKER_MAX_CONCURRENCY:-1}
+      WRITE_WORKER_BATCH_SIZE: ${WRITE_WORKER_BATCH_SIZE:-1}
     depends_on:
       pgbouncer:
         condition: service_healthy
