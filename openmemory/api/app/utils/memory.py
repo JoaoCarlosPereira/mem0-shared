@@ -43,6 +43,7 @@ from mem0 import Memory
 _memory_client = None
 _config_hash = None
 _client_is_local_only = None  # is_local_only() state when _memory_client was last built
+_cached_config_updated_at = None  # configs.updated_at when _memory_client was last built
 
 
 def _get_config_hash(config_dict):
@@ -147,10 +148,25 @@ def _fix_ollama_urls_if_localhost(config_section):
 
 def reset_memory_client():
     """Reset the global memory client to force reinitialization with new config."""
-    global _memory_client, _config_hash, _last_init_error
+    global _memory_client, _config_hash, _last_init_error, _client_is_local_only, _cached_config_updated_at
     _memory_client = None
     _config_hash = None
     _last_init_error = None
+    _client_is_local_only = None
+    _cached_config_updated_at = None
+
+
+def _peek_config_updated_at():
+    """Lightweight check used to invalidate the cached client across workers."""
+    try:
+        db = SessionLocal()
+        try:
+            return db.query(ConfigModel.updated_at).filter(ConfigModel.key == "main").scalar()
+        finally:
+            db.close()
+    except Exception as exc:
+        print(f"Warning: could not read config updated_at: {exc}")
+        return None
 
 
 # Last initialization failure (surfaced in /health for debugging).
@@ -680,19 +696,31 @@ def get_memory_client(custom_instructions: str = None):
     Raises:
         Exception: If required API keys are not set or critical configuration is missing.
     """
-    global _memory_client, _config_hash, _client_is_local_only, _last_init_error
+    global _memory_client, _config_hash, _client_is_local_only, _last_init_error, _cached_config_updated_at
 
-    # Fast path: skip DB I/O when the client is cached and neither a
-    # custom_instructions override nor a change to MEM0_LOCAL_ONLY requires a
-    # re-evaluation. Comparing the local-only flag state at build time catches
-    # the "flag set after startup" eviction case without re-reading the DB.
+    db_updated_at = _peek_config_updated_at()
+
+    # Fast path only when the DB row has not changed since this process built the client.
+    # Every worker and the write-worker process share the same configs.updated_at signal.
     if (
         custom_instructions is None
         and _memory_client is not None
+        and _cached_config_updated_at is not None
+        and db_updated_at is not None
+        and db_updated_at == _cached_config_updated_at
         and _client_is_local_only is not None
         and is_local_only() == _client_is_local_only
     ):
         return _memory_client
+
+    if (
+        _memory_client is not None
+        and db_updated_at is not None
+        and _cached_config_updated_at is not None
+        and db_updated_at != _cached_config_updated_at
+    ):
+        _memory_client = None
+        _config_hash = None
 
     try:
         # Start with default configuration
@@ -700,6 +728,7 @@ def get_memory_client(custom_instructions: str = None):
         
         # Variable to track custom instructions
         db_custom_instructions = None
+        db_config = None
         
         # Load configuration from database
         try:
@@ -708,6 +737,7 @@ def get_memory_client(custom_instructions: str = None):
             
             if db_config:
                 json_config = db_config.value
+                db_updated_at = db_config.updated_at
                 
                 # Extract custom instructions from openmemory settings
                 if "openmemory" in json_config and "custom_instructions" in json_config["openmemory"]:
@@ -729,6 +759,7 @@ def get_memory_client(custom_instructions: str = None):
                         config["vector_store"] = mem0_config["vector_store"]
             else:
                 print("No configuration found in database, using defaults")
+                db_updated_at = None
                     
             db.close()
                             
@@ -773,6 +804,7 @@ def get_memory_client(custom_instructions: str = None):
                 )
                 _memory_client = None
                 _config_hash = None
+                _cached_config_updated_at = None
                 return None
 
         config = sanitize_mem0_config(config)
@@ -787,6 +819,7 @@ def get_memory_client(custom_instructions: str = None):
                 _memory_client = Memory.from_config(config_dict=config)
                 _config_hash = current_config_hash
                 _client_is_local_only = is_local_only()
+                _cached_config_updated_at = db_updated_at
                 _last_init_error = None
                 print("Memory client initialized successfully")
             except Exception as init_error:
@@ -795,6 +828,7 @@ def get_memory_client(custom_instructions: str = None):
                 print("Server will continue running with limited memory functionality")
                 _memory_client = None
                 _config_hash = None
+                _cached_config_updated_at = None
                 return None
         
         return _memory_client
