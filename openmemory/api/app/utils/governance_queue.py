@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from app.database import SessionLocal, is_postgresql
 from app.models import GovernanceJob as GovernanceJobModel
 from app.models import GovernanceJobStatus, GovernanceJobType
+from app.utils.datetime_format import format_utc_iso
 from sqlalchemy.orm import Session
 
 
@@ -29,7 +30,7 @@ def _to_job(row: GovernanceJobModel) -> GovernanceJob:
         project=row.project,
         payload=dict(row.payload or {}),
         attempts=row.attempts or 0,
-        created_at=row.created_at.isoformat() if row.created_at else "",
+        created_at=format_utc_iso(row.created_at),
     )
 
 

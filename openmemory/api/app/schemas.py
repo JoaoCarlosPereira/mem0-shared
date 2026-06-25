@@ -2,7 +2,9 @@ from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, validator
+
+from app.utils.datetime_format import format_utc_iso
 
 
 class MemoryBase(BaseModel):
@@ -76,6 +78,10 @@ class WriteQueueJobResponse(BaseModel):
     attempts: int
     created_at: datetime
 
+    @field_serializer("created_at")
+    def _serialize_created_at(self, value: datetime) -> str:
+        return format_utc_iso(value)
+
 
 class PaginatedWriteQueueResponse(BaseModel):
     items: List[WriteQueueJobResponse]
@@ -95,6 +101,10 @@ class GovernanceJobResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @field_serializer("created_at", "updated_at")
+    def _serialize_utc_datetimes(self, value: datetime) -> str:
+        return format_utc_iso(value)
+
 
 class PaginatedGovernanceJobResponse(BaseModel):
     items: List[GovernanceJobResponse]
@@ -112,6 +122,10 @@ class WriteAuditLogResponse(BaseModel):
     client_name: Optional[str]
     action: str
     created_at: datetime
+
+    @field_serializer("created_at")
+    def _serialize_created_at(self, value: datetime) -> str:
+        return format_utc_iso(value)
 
 
 class PaginatedWriteAuditResponse(BaseModel):

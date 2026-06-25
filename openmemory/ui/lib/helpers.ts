@@ -6,14 +6,34 @@ const capitalize = (str: string) => {
   return str.toUpperCase()[0] + str.slice(1);
 };
 
+/** ISO sem fuso (ex.: PostgreSQL UTC via isoformat()) — tratar como UTC. */
+const NAIVE_ISO_RE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
+
+function parseIsoString(value: string): Date | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (/[Zz]$/.test(trimmed) || /[+-]\d{2}:\d{2}$/.test(trimmed)) {
+    const parsed = new Date(trimmed);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  if (NAIVE_ISO_RE.test(trimmed)) {
+    const normalized = trimmed.includes(" ") ? trimmed.replace(" ", "T") : trimmed;
+    const parsed = new Date(`${normalized}Z`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  const parsed = new Date(trimmed);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 /** Normaliza epoch em segundos, milissegundos ou ISO string para Date. */
 function toDate(value: number | string): Date | null {
   if (value === null || value === undefined || value === "") {
     return null;
   }
   if (typeof value === "string") {
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
+    return parseIsoString(value);
   }
   if (!Number.isFinite(value) || value <= 0) {
     return null;

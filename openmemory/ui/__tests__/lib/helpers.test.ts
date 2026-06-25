@@ -33,4 +33,10 @@ describe("formatDate", () => {
     expect(toDate(iso + "Z")).toBeNull();
     expect(toDate(iso)).not.toBeNull();
   });
+
+  it("interpreta ISO sem fuso como UTC (fila de escrita / PostgreSQL)", () => {
+    expect(toDate("2026-06-25T18:26:35.488939")?.toISOString()).toBe(
+      "2026-06-25T18:26:35.488Z",
+    );
+  });
 });

@@ -12,6 +12,12 @@ describe("datetime (Brasília)", () => {
     );
   });
 
+  it("formata ISO sem fuso (API PostgreSQL) como UTC em Brasília", () => {
+    expect(formatDateTimeFull("2026-06-25T18:26:35.488939")).toBe(
+      "25/06/2026 15:26:35",
+    );
+  });
+
   it("formata epoch em segundos em horário de Brasília", () => {
     const seconds = Math.floor(
       new Date("2026-01-01T10:00:00Z").getTime() / 1000,

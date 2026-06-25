@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from app.database import SessionLocal, is_postgresql
+from app.utils.datetime_format import format_utc_iso
 from app.models import WriteQueueJob as WriteQueueModel
 from app.models import WriteQueueStatus
 from sqlalchemy.orm import Session
@@ -41,7 +42,7 @@ def _to_job(row: WriteQueueModel) -> WriteJob:
         hostname=row.hostname,
         client_name=row.client_name,
         text=row.text,
-        created_at=row.created_at.isoformat() if row.created_at else "",
+        created_at=format_utc_iso(row.created_at),
         attempts=row.attempts or 0,
     )
 
@@ -158,7 +159,7 @@ class WriteQueue:
                 "hostname": row.hostname,
                 "attempts": row.attempts or 0,
                 "error": row.error,
-                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "created_at": format_utc_iso(row.created_at) or None,
             }
         finally:
             db.close()
