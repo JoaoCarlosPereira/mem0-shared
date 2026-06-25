@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { format } from "date-fns";
+import { formatDateTimeFull } from "@/lib/datetime";
 import { useAdminApi } from "@/hooks/useAdminApi";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -18,17 +18,6 @@ import {
 import { ArrowLeft, Database } from "lucide-react";
 import { ProjectMemory } from "@/types/admin";
 import { PageHeader } from "@/components/shared/PageHeader";
-
-function fmtDate(v: string | null): string {
-  if (!v) return "—";
-  try {
-    // payloads do Qdrant trazem ISO; alguns backends trazem epoch em segundos.
-    const d = /^\d+$/.test(v) ? new Date(Number(v) * 1000) : new Date(v);
-    return format(d, "dd/MM/yyyy HH:mm:ss");
-  } catch {
-    return v;
-  }
-}
 
 export default function ProjectMemoriesPage() {
   const params = useParams<{ project: string }>();
@@ -120,7 +109,7 @@ export default function ProjectMemoriesPage() {
                 <TableRow key={m.id}>
                   <TableCell className="text-zinc-200">{m.memory}</TableCell>
                   <TableCell className="text-zinc-400">
-                    {fmtDate(m.created_at)}
+                    {formatDateTimeFull(m.created_at)}
                   </TableCell>
                 </TableRow>
               ))

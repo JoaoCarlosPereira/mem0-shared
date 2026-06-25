@@ -88,6 +88,24 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*swigva
 logger = logging.getLogger(__name__)
 _op_logger = op_logger(__name__, "main")
 
+_last_llm_extraction_error: str | None = None
+
+
+def get_last_llm_extraction_error() -> str | None:
+    """Last LLM extraction exception message in this process (if any)."""
+    return _last_llm_extraction_error
+
+
+def clear_last_llm_extraction_error() -> None:
+    """Clear the last-recorded LLM extraction error."""
+    global _last_llm_extraction_error
+    _last_llm_extraction_error = None
+
+
+def _record_llm_extraction_error(exc: Exception) -> None:
+    global _last_llm_extraction_error
+    _last_llm_extraction_error = str(exc)
+
 
 # Fields that hold runtime auth/connection objects and must be preserved.
 # These are non-serializable objects (e.g. AWSV4SignerAuth, RequestsHttpConnection)
@@ -1013,6 +1031,7 @@ class Memory(MemoryBase):
             llm_elapsed_ms = (time.perf_counter() - llm_start) * 1000
             logger.info("Phase 2: LLM response received | elapsed_ms=%.1f response_len=%d", llm_elapsed_ms, len(response) if response else 0)
         except Exception as e:
+            _record_llm_extraction_error(e)
             logger.error("LLM extraction failed | elapsed_ms=%.1f error=%s", (time.perf_counter() - llm_start) * 1000, e)
             return []
 
@@ -2798,6 +2817,7 @@ class AsyncMemory(MemoryBase):
                 response_format={"type": "json_object"},
             )
         except Exception as e:
+            _record_llm_extraction_error(e)
             logger.error(f"LLM extraction failed (async): {e}")
             return []
 

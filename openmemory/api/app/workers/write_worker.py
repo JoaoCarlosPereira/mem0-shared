@@ -53,6 +53,10 @@ EXTRACTION_FAILED_MSG = (
     "LLM não extraiu fatos e gravação bruta também falhou (verifique o backend LLM)"
 )
 
+LLM_INFRA_ERROR_MSG = (
+    "LLM indisponível ou modelo inválido — job será reprocessado quando o backend estiver OK"
+)
+
 # Default bound on concurrent LLM inferences. Kept small so the local LLM is not
 # saturated by a burst of queued writes; overridable via the constructor.
 DEFAULT_MAX_CONCURRENCY = 1
@@ -86,6 +90,50 @@ def _persisted_result_count(result) -> int:
         if item.get("id"):
             count += 1
     return count
+
+
+def _is_llm_infrastructure_error(message: str | None) -> bool:
+    """True when empty extraction is likely caused by LLM/config outage, not content."""
+    if not message:
+        return False
+    lower = message.lower()
+    markers = (
+        "404",
+        "401",
+        "403",
+        "500",
+        "502",
+        "503",
+        "nao esta carregado",
+        "não está carregado",
+        "not loaded",
+        "not found",
+        "authentication",
+        "api key",
+        "invalid api key",
+        "connection refused",
+        "connection error",
+        "timed out",
+        "timeout",
+        "modelo ",
+        "model ",
+        "unavailable",
+        "indispon",
+    )
+    return any(marker in lower for marker in markers)
+
+
+def _last_llm_extraction_error() -> str | None:
+    from mem0.memory.main import get_last_llm_extraction_error
+
+    return get_last_llm_extraction_error()
+
+
+def _clear_llm_extraction_error() -> None:
+    from mem0.memory.main import clear_last_llm_extraction_error
+
+    clear_last_llm_extraction_error()
+
 
 def _default_client_provider():
     """Lazily import the memory client accessor.
@@ -176,15 +224,7 @@ class WriteWorker:
                             "memory client unavailable (LLM/backend down)"
                         )
 
-                    result = await self._run_add(client, job, infer=True)
-                    if _persisted_result_count(result) == 0:
-                        logger.warning(
-                            "write job LLM extraction empty; falling back to infer=False "
-                            "job_id=%s project=%s",
-                            job.id,
-                            job.project,
-                        )
-                        result = await self._run_add(client, job, infer=False)
+                    result = await self._run_add_with_extraction_policy(client, job)
                     if _persisted_result_count(result) == 0:
                         raise RuntimeError(EXTRACTION_FAILED_MSG)
                     self._maybe_dual_write(client, result)
@@ -333,6 +373,7 @@ class WriteWorker:
         if recovered:
             logger.info("recovered %s stale processing jobs -> queued", recovered)
         self._recover_failed_jobs()
+        self._log_llm_startup_status()
         logger.info(
             "write worker started (max_concurrency=%s, batch_size=%s)",
             self._max_concurrency,
@@ -359,6 +400,68 @@ class WriteWorker:
                 except asyncio.TimeoutError:
                     pass
         logger.info("write worker stopped")
+
+    async def _run_add_with_extraction_policy(self, client, job: WriteJob):
+        """Run infer=True; retry once after client reset on infra errors.
+
+        Falls back to infer=False only when extraction returned no facts without
+        an LLM infrastructure failure (model down, 404, auth, etc.).
+        """
+        from app.utils.memory import reset_memory_client
+
+        _clear_llm_extraction_error()
+        result = await self._run_add(client, job, infer=True)
+        if _persisted_result_count(result) > 0:
+            return result
+
+        llm_err = _last_llm_extraction_error()
+        if llm_err and _is_llm_infrastructure_error(llm_err):
+            logger.warning(
+                "write job LLM infra error; resetting client and retrying infer=True "
+                "job_id=%s project=%s error=%s",
+                job.id,
+                job.project,
+                llm_err,
+            )
+            reset_memory_client()
+            _clear_llm_extraction_error()
+            client = self._client_provider()
+            if client is None:
+                raise RuntimeError(
+                    f"{LLM_INFRA_ERROR_MSG}: memory client unavailable after reset"
+                )
+            result = await self._run_add(client, job, infer=True)
+            if _persisted_result_count(result) > 0:
+                return result
+            llm_err = _last_llm_extraction_error() or llm_err
+            raise RuntimeError(f"{LLM_INFRA_ERROR_MSG}: {llm_err}")
+
+        logger.warning(
+            "write job LLM extraction empty; falling back to infer=False "
+            "job_id=%s project=%s",
+            job.id,
+            job.project,
+        )
+        return await self._run_add(client, job, infer=False)
+
+    def _log_llm_startup_status(self) -> None:
+        """Log configured model and probe LLM so misconfig is visible early."""
+        try:
+            from app.utils.memory import get_configured_llm_model, probe_llm_model
+
+            model = get_configured_llm_model() or "(unset)"
+            ok, detail = probe_llm_model()
+            if ok:
+                logger.info("write worker LLM ready | model=%s", detail or model)
+            else:
+                logger.error(
+                    "write worker LLM probe FAILED | configured_model=%s error=%s "
+                    "(jobs will retry; fix model/token in UI or load model on server)",
+                    model,
+                    detail,
+                )
+        except Exception:
+            logger.exception("write worker LLM startup check failed")
 
     def start(self) -> asyncio.Task:
         """Schedule :meth:`run` as a background task on the running loop."""

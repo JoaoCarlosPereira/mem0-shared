@@ -220,6 +220,41 @@ def get_memory_client_last_error() -> str | None:
     return _last_init_error
 
 
+def get_configured_llm_model() -> str | None:
+    """Return the LLM model name from DB config, falling back to env."""
+    try:
+        db = SessionLocal()
+        try:
+            row = db.query(ConfigModel).filter(ConfigModel.key == "main").first()
+            if row and row.value:
+                model = (row.value.get("mem0") or {}).get("llm", {}).get("config", {}).get("model")
+                if model:
+                    return model
+        finally:
+            db.close()
+    except Exception:
+        pass
+    return os.getenv("LLM_MODEL") or None
+
+
+def probe_llm_model() -> tuple[bool, str]:
+    """Ping the configured LLM with a minimal completion (startup health)."""
+    try:
+        client = get_memory_client_safe()
+        if client is None:
+            return False, get_memory_client_last_error() or "memory client unavailable"
+        llm = client.llm
+        model = getattr(getattr(llm, "config", None), "model", None) or get_configured_llm_model() or "unknown"
+        generate = llm.generate_response
+        generate(
+            messages=[{"role": "user", "content": "ok"}],
+            max_tokens=1,
+        )
+        return True, str(model)
+    except Exception as exc:
+        return False, str(exc)
+
+
 # --- Server-side fail-closed egress guard (MEM0_LOCAL_ONLY) ------------------
 #
 # This mirrors, on the server, the fail-closed guarantee that

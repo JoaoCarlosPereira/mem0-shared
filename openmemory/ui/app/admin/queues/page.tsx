@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useDispatch, useSelector } from "react-redux";
-import { format } from "date-fns";
+import { formatDateTimeFull } from "@/lib/datetime";
 import { AppDispatch, RootState } from "@/store/store";
 import { useQueuesApi } from "@/hooks/useQueuesApi";
 import { useAdminApi } from "@/hooks/useAdminApi";
@@ -33,14 +33,6 @@ import {
 } from "@/types/admin";
 
 const ALL = "all";
-
-function fmtDate(iso: string): string {
-  try {
-    return format(new Date(iso), "dd/MM/yyyy HH:mm:ss");
-  } catch {
-    return iso;
-  }
-}
 
 function StatusCounters({
   queued,
@@ -161,7 +153,7 @@ export default function QueuesPage() {
     {
       key: "created_at",
       header: "Criado em",
-      render: (r) => fmtDate(r.created_at),
+      render: (r) => formatDateTimeFull(r.created_at),
     },
   ];
 
@@ -193,7 +185,7 @@ export default function QueuesPage() {
     {
       key: "created_at",
       header: "Criado em",
-      render: (r) => fmtDate(r.created_at),
+      render: (r) => formatDateTimeFull(r.created_at),
     },
   ];
 

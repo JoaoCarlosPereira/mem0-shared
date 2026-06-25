@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { format } from "date-fns";
+import { formatDateTimeShort } from "@/lib/datetime";
 import { useAdminApi } from "@/hooks/useAdminApi";
 import { Input } from "@/components/ui/input";
 import {
@@ -105,7 +105,7 @@ export default function ProjectsPage() {
                   </TableCell>
                   <TableCell>
                     {p.last_activity_at
-                      ? format(new Date(p.last_activity_at), "dd/MM/yyyy HH:mm")
+                      ? formatDateTimeShort(p.last_activity_at)
                       : "—"}
                   </TableCell>
                 </TableRow>

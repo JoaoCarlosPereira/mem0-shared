@@ -88,7 +88,7 @@ describe("AuditPage", () => {
 
   it("formata a data no padrão dd/MM/yyyy HH:mm:ss", async () => {
     render(<AuditPage />);
-    expect(await screen.findByText("02/01/2026 08:30:00")).toBeInTheDocument();
+    expect(await screen.findByText("02/01/2026 05:30:00")).toBeInTheDocument();
   });
 
   it("exporta CSV com header Accept text/csv e responseType blob", async () => {

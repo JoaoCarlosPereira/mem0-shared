@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import axios from "axios";
-import { format } from "date-fns";
+import { formatDateTimeFull } from "@/lib/datetime";
 import { useAdminApi } from "@/hooks/useAdminApi";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,14 +32,6 @@ import { getApiUrl } from "@/lib/api-url";
 
 const ALL = "all";
 const PAGE_SIZE = 100;
-
-function fmtDate(iso: string): string {
-  try {
-    return format(new Date(iso), "dd/MM/yyyy HH:mm:ss");
-  } catch {
-    return iso;
-  }
-}
 
 export default function AuditPage() {
   // Filtros locais (não-Redux): específicos desta página.
@@ -209,7 +201,7 @@ export default function AuditPage() {
                   <TableCell>{row.client_name ?? row.hostname}</TableCell>
                   <TableCell>{row.project}</TableCell>
                   <TableCell>{row.action}</TableCell>
-                  <TableCell>{fmtDate(row.created_at)}</TableCell>
+                  <TableCell>{formatDateTimeFull(row.created_at)}</TableCell>
                 </TableRow>
               ))
             )}

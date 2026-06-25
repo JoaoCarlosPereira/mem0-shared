@@ -216,11 +216,46 @@ class TestRetry:
                              max_attempts=3)
         job_id = queue.enqueue(_job())
 
-        await worker.process_once()
+        with patch("app.workers.write_worker._last_llm_extraction_error", return_value=None):
+            with patch("app.workers.write_worker._clear_llm_extraction_error"):
+                await worker.process_once()
         row = _status(db_path, job_id)
         assert row.status == WriteQueueStatus.done
         assert client.add.call_count == 2
         assert client.add.call_args_list[1].kwargs.get("infer") is False
+
+    @pytest.mark.asyncio
+    async def test_llm_infra_error_requeues_without_raw_fallback(self, queue, db_path):
+        client = MagicMock()
+        client.add = MagicMock(return_value={"results": []})
+        providers = {"n": 0}
+
+        def provider():
+            providers["n"] += 1
+            return client
+
+        worker = WriteWorker(
+            queue=queue,
+            client_provider=provider,
+            upsert_project=lambda *a, **k: None,
+            max_attempts=3,
+        )
+        job_id = queue.enqueue(_job())
+
+        with patch(
+            "app.workers.write_worker._last_llm_extraction_error",
+            return_value="Error code: 404 - modelo nao esta carregado",
+        ):
+            with patch("app.workers.write_worker._clear_llm_extraction_error"):
+                with patch("app.utils.memory.reset_memory_client"):
+                    await worker.process_once()
+
+        row = _status(db_path, job_id)
+        assert row.status == WriteQueueStatus.queued
+        assert row.attempts == 1
+        assert client.add.call_count == 2
+        assert all(call.kwargs.get("infer") is not False for call in client.add.call_args_list)
+        assert "LLM indisponível" in (row.error or "")
 
     @pytest.mark.asyncio
     async def test_empty_extraction_and_raw_storage_requeues(self, queue, db_path):
@@ -231,7 +266,9 @@ class TestRetry:
                              max_attempts=3)
         job_id = queue.enqueue(_job())
 
-        await worker.process_once()
+        with patch("app.workers.write_worker._last_llm_extraction_error", return_value=None):
+            with patch("app.workers.write_worker._clear_llm_extraction_error"):
+                await worker.process_once()
         row = _status(db_path, job_id)
         assert row.status == WriteQueueStatus.queued
         assert row.attempts == 1

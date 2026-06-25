@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import axios from "axios";
 import { toast } from "sonner";
 import { useSelector } from "react-redux";
-import { format } from "date-fns";
+import { formatDateTimeFull } from "@/lib/datetime";
 import { RootState } from "@/store/store";
 import { useQueuesApi } from "@/hooks/useQueuesApi";
 import { useAdminApi } from "@/hooks/useAdminApi";
@@ -76,14 +76,6 @@ const JOB_TYPES: { type: string; label: string; destructive?: boolean }[] = [
   { type: "consolidate", label: "Consolidar" },
   { type: "purge", label: "Purgar", destructive: true },
 ];
-
-function fmtDate(iso: string): string {
-  try {
-    return format(new Date(iso), "dd/MM/yyyy HH:mm:ss");
-  } catch {
-    return iso;
-  }
-}
 
 export default function GovernancePage() {
   const { fetchGovernanceJobs } = useQueuesApi();
@@ -228,7 +220,7 @@ export default function GovernancePage() {
     {
       key: "created_at",
       header: "Criado em",
-      render: (r) => fmtDate(r.created_at),
+      render: (r) => formatDateTimeFull(r.created_at),
     },
   ];
 

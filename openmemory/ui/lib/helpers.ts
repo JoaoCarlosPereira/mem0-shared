@@ -1,3 +1,5 @@
+import { formatDateOnly } from "@/lib/datetime";
+
 const capitalize = (str: string) => {
   if (!str) return "";
   if (str.length <= 1) return str.toUpperCase();
@@ -34,11 +36,7 @@ function formatDate(timestamp: number | string) {
   const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
 
   if (diffInSeconds < 0) {
-    return date.toLocaleDateString("pt-BR", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    });
+    return formatDateOnly(date);
   }
 
   if (diffInSeconds < 60) {
@@ -57,11 +55,7 @@ function formatDate(timestamp: number | string) {
     return `há ${days} ${days === 1 ? "dia" : "dias"}`;
   }
 
-  return date.toLocaleDateString("pt-BR", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
+  return formatDateOnly(date);
 }
 
 export { capitalize, formatDate, toDate };
