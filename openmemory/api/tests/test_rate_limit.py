@@ -114,6 +114,30 @@ def test_middleware_skips_health(monkeypatch):
             assert client.get("/health").status_code == 200
 
 
+def test_middleware_skips_admin_dashboard(monkeypatch):
+    app = FastAPI()
+    app.add_middleware(RateLimitMiddleware, limiter=_limiter())
+
+    @app.get("/admin/overview")
+    def admin_overview():
+        return {"ok": True}
+
+    monkeypatch.setenv("RL_SEARCH_PER_MIN", "1")
+    monkeypatch.setenv("RL_BURST", "1")
+    with TestClient(app) as client:
+        for _ in range(5):
+            assert client.get("/admin/overview").status_code == 200
+
+
+def test_middleware_skips_openmemory_ui_rest(monkeypatch):
+    monkeypatch.setenv("RL_SEARCH_PER_MIN", "1")
+    monkeypatch.setenv("RL_BURST", "1")
+    with TestClient(_app(_limiter())) as client:
+        ui = {"x-client-name": "openmemory-ui"}
+        for _ in range(10):
+            assert client.get("/x", headers=ui).status_code == 200
+
+
 def test_middleware_ui_client_uses_separate_burst_bucket(monkeypatch):
     monkeypatch.setenv("RL_SEARCH_PER_MIN", "100")
     monkeypatch.setenv("RL_BURST", "2")

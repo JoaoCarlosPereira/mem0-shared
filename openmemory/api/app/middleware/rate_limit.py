@@ -24,7 +24,7 @@ from app.utils.identity import resolve_hostname
 
 logger = logging.getLogger(__name__)
 
-_SKIP_PREFIXES = ("/health", "/metrics", "/docs", "/openapi", "/redoc")
+_SKIP_PREFIXES = ("/health", "/metrics", "/docs", "/openapi", "/redoc", "/admin")
 _MCP_PREFIX = "/mcp/"
 _UI_CLIENT = "openmemory-ui"
 # POST bodies that only read state — never throttled.
@@ -163,6 +163,13 @@ def _mcp_rpc_category(body: bytes) -> Optional[str]:
     return "search"
 
 
+def _is_trusted_ui_rest(request: Request) -> bool:
+    """Painel web interno — não aplicar cota de agentes MCP."""
+    if request.headers.get("x-client-name", "").strip() != _UI_CLIENT:
+        return False
+    return not request.url.path.startswith(_MCP_PREFIX)
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Aplica limites por (project, hostname) + burst por hostname."""
 
@@ -201,6 +208,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
         if any(path.startswith(p) for p in _SKIP_PREFIXES):
+            return await call_next(request)
+
+        if _is_trusted_ui_rest(request):
             return await call_next(request)
 
         mcp_category: Optional[str] = None
