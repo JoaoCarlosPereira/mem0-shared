@@ -51,7 +51,7 @@ export default function AppDetailsPage() {
 
   if (selectedApp.error) {
     return (
-      <NotFound message={selectedApp.error} title="Erro ao carregar detalhes do app" />
+      <NotFound message={selectedApp.error} title="Erro ao carregar detalhes do projeto" />
     );
   }
 

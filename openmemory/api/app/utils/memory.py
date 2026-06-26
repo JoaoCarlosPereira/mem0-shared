@@ -806,7 +806,7 @@ def get_memory_client(custom_instructions: str = None):
         # Use custom_instructions parameter first, then fall back to database value
         instructions_to_use = custom_instructions or db_custom_instructions
         if instructions_to_use:
-            config["custom_fact_extraction_prompt"] = instructions_to_use
+            config["custom_instructions"] = instructions_to_use
 
         # Fix Ollama URLs for Docker environment when still pointing at localhost.
         # Explicit service endpoints (scale mode) are left untouched.

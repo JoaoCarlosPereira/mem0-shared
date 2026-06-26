@@ -24,6 +24,7 @@ import { getApiUrl } from "@/lib/api-url";
 
 interface ApiResponse {
   total: number;
+  total_memories_created?: number;
   page: number;
   page_size: number;
   apps: App[];
@@ -73,10 +74,10 @@ export const useAppsApi = (): UseAppsApiReturn => {
     const {
       name,
       is_active,
-      sort_by = 'name',
-      sort_direction = 'asc',
+      sort_by = 'memories',
+      sort_direction = 'desc',
       page = 1,
-      page_size = 10
+      page_size = 100,
     } = params;
 
     setIsLoading(true);
@@ -96,14 +97,24 @@ export const useAppsApi = (): UseAppsApiReturn => {
         `${getApiUrl()}/api/v1/apps/?${queryParams.toString()}`
       );
 
+      const totalMemoriesCreated =
+        response.data.total_memories_created ??
+        response.data.apps.reduce((sum, app) => sum + app.total_memories_created, 0);
+
       setIsLoading(false);
-      dispatch(setAppsSuccess(response.data.apps));
+      dispatch(
+        setAppsSuccess({
+          apps: response.data.apps,
+          total: response.data.total,
+          totalMemoriesCreated,
+        }),
+      );
       return {
         apps: response.data.apps,
-        total: response.data.total
+        total: response.data.total,
       };
     } catch (err: any) {
-      const errorMessage = err.message || 'Falha ao buscar apps';
+      const errorMessage = err.message || 'Falha ao buscar projetos';
       setError(errorMessage);
       dispatch(setAppsError(errorMessage));
       setIsLoading(false);

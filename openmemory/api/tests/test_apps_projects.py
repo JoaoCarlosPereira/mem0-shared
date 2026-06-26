@@ -16,7 +16,7 @@ from sqlalchemy.pool import StaticPool
 from app.database import get_db
 from app.models import App, Base, Project, User
 from app.routers.apps import router as apps_router
-from app.utils.project_apps import project_to_app_id
+from app.utils.project_apps import merge_app_sources, project_to_app_id
 
 
 @pytest.fixture
@@ -73,9 +73,11 @@ class TestAppsProjectListing:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["total"] == 3
+        assert body["total"] == 2
+        assert body.get("total_memories_created") == 317
         names = {app["name"] for app in body["apps"]}
-        assert names == {"openmemory", "sysmovs", "default"}
+        assert names == {"sysmovs", "default"}
+        assert "openmemory" not in names
 
         by_name = {app["name"]: app for app in body["apps"]}
         assert by_name["sysmovs"]["total_memories_created"] == 288
@@ -130,3 +132,60 @@ class TestAppsProjectListing:
         resp = client.get(f"/api/v1/apps/{app_id}/accessed")
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
+
+    def test_list_apps_hides_empty_legacy_sql_rows(self, db_factory):
+        db = db_factory()
+        user = User(user_id="root", name="Root")
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        db.add(App(name="openmemory", owner_id=user.id, is_active=True))
+        db.add(App(name="claude-code", owner_id=user.id, is_active=True))
+        db.add(Project(name="mem0-shared"))
+        db.commit()
+        db.close()
+
+        client = _apps_client(db_factory)
+        with patch("app.routers.apps.count_project_memories", return_value=6):
+            resp = client.get("/api/v1/apps/", params={"page": 1, "page_size": 20})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 1
+        assert body["apps"][0]["name"] == "mem0-shared"
+        assert body["apps"][0]["total_memories_created"] == 6
+
+
+class TestMergeAppSources:
+    def test_project_wins_on_name_collision(self):
+        sql_apps = [
+            {
+                "id": "sql-1",
+                "name": "sysmovs",
+                "total_memories_created": 0,
+                "total_memories_accessed": 0,
+                "source": "sql",
+            }
+        ]
+        project_apps = [
+            {
+                "id": "proj-1",
+                "name": "sysmovs",
+                "total_memories_created": 288,
+                "total_memories_accessed": 7,
+                "source": "project",
+            }
+        ]
+        merged = merge_app_sources(sql_apps, project_apps)
+        assert len(merged) == 1
+        assert merged[0]["total_memories_created"] == 288
+        assert merged[0]["source"] == "project"
+
+    def test_drops_empty_sql_only_apps(self):
+        sql_apps = [
+            {"name": "openmemory", "total_memories_created": 0, "total_memories_accessed": 0},
+            {"name": "openmemory", "total_memories_created": 0, "total_memories_accessed": 0},
+            {"name": "claude-code", "total_memories_created": 0, "total_memories_accessed": 0},
+        ]
+        merged = merge_app_sources(sql_apps, [])
+        assert merged == []

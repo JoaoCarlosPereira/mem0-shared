@@ -3,7 +3,7 @@ from uuid import UUID
 
 from app.database import get_db
 from app.models import App, Memory, MemoryAccessLog, MemoryState, Project
-from app.utils.project_apps import project_to_app_id, resolve_project_name
+from app.utils.project_apps import merge_app_sources, project_to_app_id, resolve_project_name
 from app.utils.read_audit import (
     count_distinct_memories_accessed,
     list_project_accessed_memories,
@@ -109,22 +109,27 @@ def _sort_apps(apps: list[dict[str, Any]], sort_by: str, sort_direction: str) ->
 async def list_apps(
     name: Optional[str] = None,
     is_active: Optional[bool] = None,
-    sort_by: str = "name",
-    sort_direction: str = "asc",
+    sort_by: str = "memories",
+    sort_direction: str = "desc",
     page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100),
+    page_size: int = Query(100, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    """List SQL apps plus MCP projects (Qdrant-backed) for the Apps dashboard."""
-    merged = _sql_apps(db, name, is_active) + _project_apps(db, name, is_active)
+    """List SQL apps plus MCP projects (Qdrant-backed) for the Projects dashboard."""
+    merged = merge_app_sources(
+        _sql_apps(db, name, is_active),
+        _project_apps(db, name, is_active),
+    )
     merged = _sort_apps(merged, sort_by, sort_direction)
 
     total = len(merged)
+    total_memories_created = sum(int(app["total_memories_created"] or 0) for app in merged)
     start = (page - 1) * page_size
     page_items = merged[start : start + page_size]
 
     return {
         "total": total,
+        "total_memories_created": total_memories_created,
         "page": page,
         "page_size": page_size,
         "apps": [

@@ -83,7 +83,7 @@ export function AppFilters() {
       <div className="relative flex-1">
         <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
         <Input
-          placeholder="Buscar apps..."
+          placeholder="Buscar projetos..."
           className="pl-8 bg-zinc-950 border-zinc-800 max-w-[500px]"
           value={localSearch}
           onChange={handleSearchChange}

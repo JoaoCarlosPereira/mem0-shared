@@ -1,5 +1,5 @@
 from app.database import get_db
-from app.models import App, Memory, MemoryState, User
+from app.models import App, Memory, MemoryState, Project, User
 from app.utils.vector_stats import count_collection_memories
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -25,7 +25,8 @@ async def get_profile(
     total_memories = max(sql_memories, count_collection_memories())
 
     apps = db.query(App).filter(App.owner_id == user.id)
-    total_apps = apps.count()
+    project_count = db.query(Project).count()
+    total_apps = max(apps.count(), project_count)
 
     return {
         "total_memories": total_memories,

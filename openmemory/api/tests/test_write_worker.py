@@ -370,6 +370,7 @@ class TestCatalogUpsert:
             queue=queue,
             client_provider=lambda: client,
             upsert_project=lambda name, hostname: upserts.append(name),
+            batch_size=2,
         )
         queue.enqueue(_job(project="alpha"))
         queue.enqueue(_job(project="beta"))
@@ -399,7 +400,7 @@ class TestConcurrencyLimit:
             await asyncio.sleep(0.02)
             async with lock:
                 state["current"] -= 1
-            return {"results": []}
+            return {"results": [{"id": str(uuid.uuid4()), "event": "ADD"}]}
 
         client.add = MagicMock(side_effect=_add)
 

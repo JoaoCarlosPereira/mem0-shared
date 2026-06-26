@@ -132,7 +132,7 @@ export function Navbar() {
               }`}
             >
               <RiApps2AddFill />
-              Apps
+              Projetos
             </Button>
           </Link>
           <Link href="/settings">

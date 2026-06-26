@@ -13,8 +13,8 @@ export default function AppsPage() {
         <PageHeader
           className="mb-4 animate-fade-slide-down"
           icon={Grid2x2}
-          title="Apps"
-          description="Clientes e editores conectados à memória compartilhada"
+          title="Projetos"
+          description="Repositórios de memória compartilhada por projeto"
         />
         <div className="mt-1 pb-4 animate-fade-slide-down">
           <AppFilters />

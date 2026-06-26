@@ -26,7 +26,7 @@ describe("Navbar", () => {
     expect(adminLink).toHaveAttribute("href", "/admin");
   });
 
-  it("mantém os links existentes (Painel, Memórias, Apps, Configurações)", () => {
+  it("mantém os links existentes (Painel, Memórias, Projetos, Configurações)", () => {
     render(
       <Provider store={store}>
         <Navbar />
@@ -34,7 +34,7 @@ describe("Navbar", () => {
     );
     expect(screen.getByText("Painel")).toBeInTheDocument();
     expect(screen.getByText("Memórias")).toBeInTheDocument();
-    expect(screen.getByText("Apps")).toBeInTheDocument();
+    expect(screen.getByText("Projetos")).toBeInTheDocument();
     expect(screen.getByText("Configurações")).toBeInTheDocument();
   });
 });

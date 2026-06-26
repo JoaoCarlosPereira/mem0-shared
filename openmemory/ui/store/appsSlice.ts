@@ -55,6 +55,8 @@ interface AccessedMemoriesState {
 
 interface AppsState {
   apps: App[];
+  listTotal: number;
+  totalMemoriesCreated: number;
   status: 'idle' | 'loading' | 'succeeded' | 'failed';
   error: string | null;
   filters: {
@@ -92,13 +94,15 @@ const initialAccessedMemoriesState: AccessedMemoriesState = {
 
 const initialState: AppsState = {
   apps: [],
+  listTotal: 0,
+  totalMemoriesCreated: 0,
   status: 'idle',
   error: null,
   filters: {
     searchQuery: '',
     isActive: 'all',
-    sortBy: 'name',
-    sortDirection: 'asc'
+    sortBy: 'memories',
+    sortDirection: 'desc'
   },
   selectedApp: {
     details: null,
@@ -119,9 +123,18 @@ const appsSlice = createSlice({
       state.status = 'loading';
       state.error = null;
     },
-    setAppsSuccess: (state, action: PayloadAction<App[]>) => {
+    setAppsSuccess: (
+      state,
+      action: PayloadAction<{
+        apps: App[];
+        total: number;
+        totalMemoriesCreated: number;
+      }>,
+    ) => {
       state.status = 'succeeded';
-      state.apps = action.payload;
+      state.apps = action.payload.apps;
+      state.listTotal = action.payload.total;
+      state.totalMemoriesCreated = action.payload.totalMemoriesCreated;
       state.error = null;
     },
     setAppsError: (state, action: PayloadAction<string>) => {
