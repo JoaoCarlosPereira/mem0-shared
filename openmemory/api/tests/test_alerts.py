@@ -12,8 +12,10 @@ os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 import yaml
 
+from tests.paths import openmemory_root
+
 _API_ROOT = Path(__file__).resolve().parents[1]
-_ALERTS = _API_ROOT.parent / "compose" / "alerts.yml"
+_ALERTS = openmemory_root() / "compose" / "alerts.yml"
 _METRICS_SRC = (_API_ROOT / "app" / "utils" / "metrics.py").read_text(encoding="utf-8")
 
 # Métricas (nome Prometheus base) usadas pelos alertas.

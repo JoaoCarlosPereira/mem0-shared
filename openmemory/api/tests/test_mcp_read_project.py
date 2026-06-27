@@ -68,7 +68,16 @@ def _make_client(search_return=None, list_return=None):
 def patched_client():
     """Patch get_memory_client_safe to return a fresh mocked client."""
     client = _make_client()
-    with patch.object(mcp_server, "get_memory_client_safe", return_value=client) as p:
+    client.embedding_model.model = "test-embed-model"
+    route = SimpleNamespace(collection="openmemory", shard_key=None)
+    with (
+        patch.object(mcp_server, "get_memory_client_safe", return_value=client) as p,
+        patch.object(mcp_server, "resolve_and_bind", return_value=route),
+        patch.object(mcp_server.read_cache, "get_search", return_value=None),
+        patch.object(mcp_server.read_cache, "set_search"),
+        patch.object(mcp_server.read_cache, "get_embedding", return_value=None),
+        patch.object(mcp_server.read_cache, "set_embedding"),
+    ):
         yield client, p
 
 

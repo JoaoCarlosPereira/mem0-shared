@@ -19,5 +19,11 @@ ENV PYTHONPATH=/usr/src
 # Codigo da API.
 COPY openmemory/api/ .
 
+# Artefatos de infra referenciados pelos testes (compose, stack, scripts).
+COPY openmemory/compose/ compose/
+COPY openmemory/docker-compose.scale.yml .
+COPY openmemory/docker-stack.yml .
+COPY openmemory/scripts/ scripts/
+
 EXPOSE 8765
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8765"]

@@ -1,13 +1,14 @@
 """Tests for scale bootstrap artifacts (task_08)."""
 
 import os
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
+from tests.paths import openmemory_root
 
-ROOT = Path(__file__).resolve().parents[2]
+
+ROOT = openmemory_root()
 
 
 class TestBootstrapArtifacts:

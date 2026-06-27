@@ -1,12 +1,12 @@
 """Docker stack governance worker validation (task_13)."""
 
-from pathlib import Path
-
 import pytest
+
+from tests.paths import openmemory_root
 
 yaml = pytest.importorskip("yaml")
 
-STACK = Path(__file__).resolve().parents[2] / "docker-stack.yml"
+STACK = openmemory_root() / "docker-stack.yml"
 
 
 @pytest.fixture(scope="module")
