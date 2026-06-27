@@ -10,10 +10,13 @@ import { getApiUrl } from "@/lib/api-url";
 export interface SimpleMemory {
   id: string;
   text: string;
-  created_at: string;
+  created_at: string | number;
   state: string;
   categories: string[];
   app_name: string;
+  created_by_hostname?: string | null;
+  created_by_client?: string | null;
+  metadata_?: Record<string, unknown>;
 }
 
 // Define the shape of the API response item
@@ -40,6 +43,8 @@ interface ApiResponse {
 interface AccessLogEntry {
   id: string;
   app_name: string;
+  client_name?: string;
+  hostname?: string;
   accessed_at: string;
 }
 
@@ -204,7 +209,15 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
         `${getApiUrl()}/api/v1/memories/${memoryId}?user_id=${user_id}`
       );
       setIsLoading(false);
-      dispatch(setSelectedMemory(response.data));
+      dispatch(setSelectedMemory({
+        ...response.data,
+        metadata_: response.data.metadata_ ?? undefined,
+        created_by_hostname: response.data.created_by_hostname
+          ?? (response.data.metadata_ as Record<string, unknown> | undefined)?.hostname as string | undefined
+          ?? (response.data.metadata_ as Record<string, unknown> | undefined)?.user_id as string | undefined,
+        created_by_client: response.data.created_by_client
+          ?? (response.data.metadata_ as Record<string, unknown> | undefined)?.mcp_client as string | undefined,
+      }));
     } catch (err: any) {
       const errorMessage = err.message || 'Falha ao buscar memória';
       setError(errorMessage);

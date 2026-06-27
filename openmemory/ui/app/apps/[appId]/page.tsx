@@ -111,6 +111,8 @@ export default function AppDetailsPage() {
         metadata={memory.metadata_}
         categories={memory.categories}
         app_name={memory.app_name}
+        created_by_hostname={memory.created_by_hostname}
+        created_by_client={memory.created_by_client}
         state={memory.state}
       />
     ));
@@ -158,6 +160,8 @@ export default function AppDetailsPage() {
           categories={accessedMemory.memory.categories}
           access_count={accessedMemory.access_count}
           app_name={accessedMemory.memory.app_name}
+          created_by_hostname={accessedMemory.memory.created_by_hostname}
+          created_by_client={accessedMemory.memory.created_by_client}
           state={accessedMemory.memory.state}
         />
       </div>

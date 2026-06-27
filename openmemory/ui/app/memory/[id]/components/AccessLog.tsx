@@ -1,7 +1,7 @@
 import Image from "next/image";
 import { useEffect, useState } from "react";
 import { useMemoriesApi } from "@/hooks/useMemoriesApi";
-import { constants } from "@/components/shared/source-app";
+import { resolveAttribution } from "@/lib/attribution";
 import { useSelector } from "react-redux";
 import { RootState } from "@/store/store";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -10,6 +10,9 @@ import { formatDateTime } from "@/lib/i18n/pt-BR";
 interface AccessLogEntry {
   id: string;
   app_name: string;
+  display_name?: string;
+  client_name?: string;
+  hostname?: string;
   accessed_at: string;
 }
 
@@ -66,26 +69,25 @@ export function AccessLog({ memoryId }: AccessLogProps) {
         )}
         <ul className="space-y-8">
           {accessEntries.map((entry: AccessLogEntry, index: number) => {
-            const appConfig =
-              constants[entry.app_name as keyof typeof constants] ||
-              constants.default;
+            const attribution = resolveAttribution({
+              appName: entry.app_name,
+              clientName: entry.client_name,
+              hostname: entry.hostname,
+            });
+            const label = entry.display_name || attribution.label;
 
             return (
               <li key={entry.id} className="relative flex items-start gap-4">
                 <div className="relative z-10 rounded-full overflow-hidden bg-[#2a2a2a] w-8 h-8 flex items-center justify-center flex-shrink-0">
-                  {appConfig.iconImage ? (
+                  {attribution.iconImage ? (
                     <Image
-                      src={appConfig.iconImage}
-                      alt={`${appConfig.name} — ícone`}
+                      src={attribution.iconImage}
+                      alt={`${label} — ícone`}
                       width={30}
                       height={30}
                       className="w-8 h-8 object-contain"
                     />
-                  ) : (
-                    <div className="w-8 h-8 flex items-center justify-center">
-                      {appConfig.icon}
-                    </div>
-                  )}
+                  ) : null}
                 </div>
 
                 {index < accessEntries.length - 1 && (
@@ -93,7 +95,7 @@ export function AccessLog({ memoryId }: AccessLogProps) {
                 )}
 
                 <div className="flex flex-col">
-                  <span className="font-medium">{appConfig.name}</span>
+                  <span className="font-medium">{label}</span>
                   <span className="text-zinc-400 text-sm">
                     {formatDateTime(entry.accessed_at)}
                   </span>

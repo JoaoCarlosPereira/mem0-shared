@@ -55,6 +55,10 @@ class MemoryConfig(BaseModel):
         description="Custom instructions for fact extraction",
         default=None,
     )
+    multilingual: Optional[bool] = Field(
+        description="When True, extract memories in the same language as the input messages",
+        default=False,
+    )
 
 
 class AzureConfig(BaseModel):

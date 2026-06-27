@@ -135,6 +135,15 @@ def project_access_stats(db: Session, project: str) -> tuple[int, Optional[datet
     return int(row.distinct_memories or 0), row.first_accessed, row.last_accessed
 
 
+def _normalize_audit_hostname(hostname: Optional[str]) -> Optional[str]:
+    host = (hostname or "").strip()
+    if not host or host in {"unknown", "unknown-host"}:
+        return None
+    if host.startswith("ui:"):
+        host = host[3:].strip()
+    return host or None
+
+
 def audit_log_display_name(
     *,
     client_name: Optional[str],
@@ -148,6 +157,27 @@ def audit_log_display_name(
     if src in {"mcp", "api", "compat_v3", "admin"}:
         return "openmemory"
     return src or "default"
+
+
+def audit_log_display_label(
+    *,
+    client_name: Optional[str],
+    hostname: Optional[str],
+    source: Optional[str],
+) -> str:
+    """Human-readable actor for access-log rows (hostname / client / fallback)."""
+    host = _normalize_audit_hostname(hostname)
+    if host:
+        return host
+    client = (client_name or "").strip()
+    if client and client not in {"unknown-client", "unknown"}:
+        return client
+    src = (source or "").strip().lower()
+    if src == "api":
+        return "Interface Web"
+    if src in {"mcp", "admin", "compat_v3"}:
+        return "Mem0-Shared"
+    return src or "Desconhecido"
 
 
 def list_memory_read_audit(
@@ -173,6 +203,12 @@ def list_memory_read_audit(
                 client_name=row.client_name,
                 source=row.source,
             ),
+            "display_name": audit_log_display_label(
+                client_name=row.client_name,
+                hostname=row.hostname,
+                source=row.source,
+            ),
+            "client_name": row.client_name,
             "accessed_at": row.accessed_at.isoformat() if row.accessed_at else None,
             "access_type": row.access_type,
             "source": row.source,
@@ -223,6 +259,8 @@ def list_project_accessed_memories(
                     "state": shared.get("state") or "active",
                     "app_id": None,
                     "app_name": project,
+                    "created_by_hostname": shared.get("created_by_hostname"),
+                    "created_by_client": shared.get("created_by_client"),
                     "categories": shared.get("categories") or [],
                     "metadata_": shared.get("metadata_") or {},
                 },

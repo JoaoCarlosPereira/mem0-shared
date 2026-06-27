@@ -9,6 +9,7 @@ import { useMemoriesApi } from "@/hooks/useMemoriesApi";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft } from "lucide-react";
+import { resolveAttribution } from "@/lib/attribution";
 
 export default function AdminMemoryDetailPage() {
   const params = useParams<{ project: string; memoryId: string }>();
@@ -61,7 +62,15 @@ export default function AdminMemoryDetailPage() {
             <CardContent className="space-y-1 text-sm text-zinc-400">
               <div>ID: {memory.id}</div>
               <div>Estado: {memory.state}</div>
-              <div>App de origem: {memory.app_name}</div>
+              <div>
+                Criado por:{" "}
+                {resolveAttribution({
+                  appName: memory.app_name,
+                  clientName: memory.created_by_client,
+                  hostname: memory.created_by_hostname,
+                  metadata: memory.metadata_,
+                }).label}
+              </div>
               <div>Categorias: {memory.categories?.join(", ") || "—"}</div>
               <div>Criado em: {memory.created_at}</div>
             </CardContent>
@@ -78,7 +87,13 @@ export default function AdminMemoryDetailPage() {
                 <ul className="space-y-1">
                   {accessLogs.map((log) => (
                     <li key={log.id}>
-                      {log.app_name} — {log.accessed_at}
+                      {log.display_name ||
+                        resolveAttribution({
+                          appName: log.app_name,
+                          clientName: log.client_name,
+                          hostname: log.hostname,
+                        }).label}{" "}
+                      — {log.accessed_at}
                     </li>
                   ))}
                 </ul>

@@ -13,6 +13,8 @@ export interface AppMemory {
   created_at: string;
   archived_at: string | null;
   categories: string[];
+  created_by_hostname?: string | null;
+  created_by_client?: string | null;
   app_name: string;
 }
 

@@ -150,6 +150,7 @@ def list_shared_memories(
                 "app_name": payload.get("project") or project or "shared",
                 "categories": [],
                 "metadata_": payload,
+                **_attribution_from_payload(payload),
             }
         )
 
@@ -167,6 +168,16 @@ def list_shared_memories(
         "page": page,
         "size": size,
         "pages": pages,
+    }
+
+
+def _attribution_from_payload(payload: dict[str, Any]) -> dict[str, Optional[str]]:
+    """Extract write-time attribution stored in Qdrant payload (ADR-003)."""
+    hostname = payload.get("hostname") or payload.get("user_id")
+    client = payload.get("mcp_client")
+    return {
+        "created_by_hostname": str(hostname) if hostname else None,
+        "created_by_client": str(client) if client else None,
     }
 
 
@@ -204,6 +215,7 @@ def get_shared_memory_by_id(memory_id: str) -> Optional[dict[str, Any]]:
             "app_name": payload.get("project") or "shared",
             "categories": [],
             "metadata_": payload,
+            **_attribution_from_payload(payload),
         }
     except Exception:  # noqa: BLE001
         logger.exception("failed to get shared memory %s", memory_id)

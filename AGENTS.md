@@ -10,6 +10,62 @@ This file provides context for AI coding assistants (Claude Code, Cursor, GitHub
 - **Documentation**: https://docs.mem0.ai
 - **License**: Apache-2.0
 
+## CRITICAL — Proteção de memórias (OpenMemory / deploy compartilhado)
+
+Este fork roda **OpenMemory em produção na LAN** (`openmemory/docker-compose.scale.yml`).
+As memórias da equipe vivem no **volume Docker `mem0_storage` (Qdrant)** e na fila
+durável **`write_queue` (PostgreSQL)**. Perda do volume Qdrant já causou perda de
+**1000+ memórias**; a recuperação depende da fila PostgreSQL.
+
+**Qualquer pessoa ou agente de IA que manipule este repositório DEVE seguir estas regras.
+Não execute, sugira ou automatize nada abaixo sem pedido explícito do usuário.**
+
+### Infraestrutura Docker — NUNCA apagar volumes por acidente
+
+| Proibido | Use em vez disso |
+|----------|------------------|
+| `docker compose down -v` | `openmemory/scripts/safe-stack-down.sh` |
+| `make down-clean` sem confirmação | `make down` (preserva volumes) |
+| `docker volume rm mem0_storage` | — |
+| `docker compose up -d` em stack inteira só para rebuild de API | Rebuild **somente** dos serviços alterados: `openmemory-mcp`, `openmemory-write-worker` |
+
+Destruição de volumes **só** com confirmação explícita do usuário:
+
+```bash
+CONFIRM_VOLUME_DESTROY=1 make down-clean
+# ou
+CONFIRM_VOLUME_DESTROY=1 ./openmemory/scripts/safe-stack-down.sh --destroy-volumes
+```
+
+**Nunca** reinicie ou recrie o serviço `mem0_store` (Qdrant) sem avisar o usuário e
+verificar `points_count` em `http://localhost:6333/collections/openmemory`.
+
+### Aplicação — guarda fail-closed de exclusão
+
+Implementação: `openmemory/api/app/utils/deletion_guard.py`
+
+| Variável | Padrão | Significado |
+|----------|--------|-------------|
+| `MEM0_ALLOW_MEMORY_DELETE` | `0` | Bloqueia delete por ID (API/MCP) |
+| `MEM0_ALLOW_BULK_DELETE` | `0` | Bloqueia `delete_all` e delete em lote |
+
+**Nunca**, sem pedido explícito do usuário:
+
+- Definir `MEM0_ALLOW_MEMORY_DELETE=1` ou `MEM0_ALLOW_BULK_DELETE=1` no `.env`, compose ou config
+- Remover, contornar ou enfraquecer `deletion_guard.py` ou suas chamadas em `mcp_server.py` / `routers/memories.py`
+- Chamar MCP `delete_all_memories`, `delete_memories` em lote, ou `POST /api/v1/memories/actions/delete`
+- Executar `POST /admin/backup/restore` (sobrescreve Qdrant)
+- Truncar ou apagar linhas de `write_queue` / `write_audit_logs` no PostgreSQL
+
+Status da guarda: `GET /admin/deletion-guard`
+
+### Recuperação e backups
+
+- Se Qdrant estiver vazio mas `write_queue` tiver jobs `done`, reenfileirar com
+  `openmemory/scripts/requeue-done-jobs.py` ou `POST /admin/write-queue/requeue-done`
+  (após deploy) — **não** apagar a fila.
+- Configure backup periódico: `POST /admin/backup/run` (MinIO bucket `mem0-backups`).
+
 ## Repository Structure
 
 This is a **polyglot monorepo** containing Python and TypeScript packages, CLIs, servers, plugins, and documentation.
@@ -600,6 +656,7 @@ N/A
 
 ## Do NOT
 
+- **Apagar ou arriscar perda de memórias OpenMemory** — ver seção **CRITICAL — Proteção de memórias** acima. Em especial: nunca `docker compose down -v`, nunca habilitar `MEM0_ALLOW_*_DELETE` sem pedido explícito, nunca rebuild de stack inteira quando bastam serviços API/worker, nunca recriar `mem0_store` sem aviso.
 - Modify CI/CD workflows without explicit approval.
 - Add new Python dependencies to the core `dependencies` list in `pyproject.toml` without discussion — use optional dependency groups instead.
 - Commit `.env` files, API keys, or credentials.

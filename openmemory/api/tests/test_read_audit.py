@@ -102,6 +102,8 @@ def test_list_memory_read_audit_for_detail_page(db_factory):
     body = resp.json()
     assert body["total"] == 1
     assert body["logs"][0]["app_name"] == "claude"
+    assert body["logs"][0]["client_name"] == "claude"
+    assert body["logs"][0]["hostname"] == "S0293"
     assert body["logs"][0]["access_type"] == "search"
 
 

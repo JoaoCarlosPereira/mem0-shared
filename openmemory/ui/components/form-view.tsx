@@ -173,6 +173,19 @@ export function FormView({ settings, onChange }: FormViewProps) {
               Instruções usadas para guiar o processamento de memórias e extração de fatos.
             </p>
           </div>
+          <div className="flex items-center justify-between rounded-lg border p-4">
+            <div className="space-y-1">
+              <Label htmlFor="multilingual">Memórias no idioma de entrada</Label>
+              <p className="text-xs text-muted-foreground">
+                Quando ativado, as memórias são extraídas no mesmo idioma das mensagens (ex.: PT-BR).
+              </p>
+            </div>
+            <Switch
+              id="multilingual"
+              checked={settings.openmemory?.multilingual ?? true}
+              onCheckedChange={(checked) => handleOpenMemoryChange("multilingual", checked)}
+            />
+          </div>
         </CardContent>
       </Card>
 

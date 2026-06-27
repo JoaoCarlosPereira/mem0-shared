@@ -16,6 +16,7 @@ from app.models import (
 )
 from app.schemas import MemoryResponse
 from app.utils.db import get_or_create_user
+from app.utils.deletion_guard import DeletionBlockedError, assert_bulk_delete_allowed, assert_memory_delete_allowed
 from app.utils.memory import get_memory_client
 from app.utils.permissions import check_memory_access_permissions
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -338,9 +339,15 @@ async def create_memory(
 @router.get("/{memory_id}")
 async def get_memory(
     memory_id: UUID,
+    user_id: str | None = Query(None),
     db: Session = Depends(get_db)
 ):
-    memory = db.query(Memory).filter(Memory.id == memory_id).first()
+    memory = (
+        db.query(Memory)
+        .options(joinedload(Memory.user), joinedload(Memory.app))
+        .filter(Memory.id == memory_id)
+        .first()
+    )
     if memory:
         return {
             "id": memory.id,
@@ -349,6 +356,8 @@ async def get_memory(
             "state": memory.state.value,
             "app_id": memory.app_id,
             "app_name": memory.app.name if memory.app else None,
+            "created_by_hostname": memory.user.user_id if memory.user else None,
+            "created_by_client": memory.app.name if memory.app else None,
             "categories": [category.name for category in memory.categories],
             "metadata_": memory.metadata_
         }
@@ -365,6 +374,8 @@ async def get_memory(
             memory_ids=[str(memory_id)],
             access_type="get",
             source="api",
+            hostname=f"ui:{user_id}" if user_id else None,
+            client_name="openmemory",
             items=[{"id": str(memory_id), "project": proj, "metadata_": shared.get("metadata_")}],
         )
         return shared
@@ -380,6 +391,17 @@ class DeleteMemoriesRequest(BaseModel):
 def _delete_memories_impl(db: Session, memory_ids: List[UUID], user_id: str) -> int:
     """Delete memories from Qdrant and mark deleted in SQL when a row exists."""
     from app.utils.memory import get_memory_client_safe
+
+    if len(memory_ids) > 1:
+        try:
+            assert_bulk_delete_allowed("bulk_delete")
+        except DeletionBlockedError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+    else:
+        try:
+            assert_memory_delete_allowed("delete")
+        except DeletionBlockedError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     user = get_or_create_user(db, user_id)
     memory_client = get_memory_client_safe()
@@ -565,6 +587,7 @@ async def get_memory_access_log(
             {
                 "id": str(log.id),
                 "app_name": app.name if app else "unknown",
+                "display_name": app.name if app else "Desconhecido",
                 "accessed_at": log.accessed_at.isoformat() if log.accessed_at else None,
                 "access_type": log.access_type,
             }
@@ -621,6 +644,8 @@ class SharedMemoryResponse(BaseModel):
     state: str
     app_id: Optional[UUID] = None
     app_name: str
+    created_by_hostname: Optional[str] = None
+    created_by_client: Optional[str] = None
     categories: List[str] = Field(default_factory=list)
     metadata_: Optional[dict] = None
 
@@ -657,6 +682,8 @@ async def filter_shared_memories(request: FilterMemoriesRequest):
             state=item["state"],
             app_id=item["app_id"],
             app_name=item["app_name"],
+            created_by_hostname=item.get("created_by_hostname"),
+            created_by_client=item.get("created_by_client"),
             categories=item["categories"],
             metadata_=item.get("metadata_"),
         )
@@ -678,6 +705,8 @@ async def filter_shared_memories(request: FilterMemoriesRequest):
         memory_ids=[i["id"] for i in audit_items],
         access_type="search" if request.search_query else "list",
         source="api",
+        hostname=f"ui:{request.user_id}" if request.user_id else None,
+        client_name="openmemory",
         query=request.search_query,
         items=audit_items,
     )

@@ -1,18 +1,19 @@
 import { ArrowRight } from "lucide-react";
 import Categories from "@/components/shared/categories";
 import Link from "next/link";
-import { constants } from "@/components/shared/source-app";
-import Image from "next/image";
+import { AttributionBadge } from "@/components/shared/attribution-badge";
 import { formatDateTime } from "@/lib/i18n/pt-BR";
 
 interface MemoryCardProps {
   id: string;
   content: string;
   created_at: string | number;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   categories?: string[];
   access_count?: number;
   app_name: string;
+  created_by_hostname?: string | null;
+  created_by_client?: string | null;
   state: string;
 }
 
@@ -24,6 +25,8 @@ export function MemoryCard({
   categories,
   access_count,
   app_name,
+  created_by_hostname,
+  created_by_client,
   state,
 }: MemoryCardProps) {
   return (
@@ -74,7 +77,7 @@ export function MemoryCard({
             )}
           </div>
 
-          {!app_name && (
+          <div className="flex items-center gap-2">
             <Link
               href={`/memory/${id}`}
               className="hover:cursor-pointer bg-zinc-800 hover:bg-zinc-700 flex items-center px-3 py-1 text-sm rounded-lg text-white p-0 hover:text-white"
@@ -82,28 +85,13 @@ export function MemoryCard({
               Ver Detalhes
               <ArrowRight className="ml-2 h-4 w-4" />
             </Link>
-          )}
-          {app_name && (
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1 bg-zinc-700 px-3 py-1 rounded-lg">
-                <span className="text-sm text-zinc-400">Criada por:</span>
-                <div className="w-5 h-5 rounded-full bg-zinc-700 flex items-center justify-center overflow-hidden">
-                  <Image
-                    src={
-                      constants[app_name as keyof typeof constants]
-                        ?.iconImage || ""
-                    }
-                    alt="Mem0-Shared"
-                    width={24}
-                    height={24}
-                  />
-                </div>
-                <p className="text-sm text-zinc-100 font-semibold">
-                  {constants[app_name as keyof typeof constants]?.name}
-                </p>
-              </div>
-            </div>
-          )}
+            <AttributionBadge
+              appName={app_name}
+              clientName={created_by_client}
+              hostname={created_by_hostname}
+              metadata={metadata}
+            />
+          </div>
         </div>
       </div>
     </div>

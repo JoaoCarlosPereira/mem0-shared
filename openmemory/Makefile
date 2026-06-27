@@ -30,6 +30,11 @@ up:
 	NEXT_PUBLIC_USER_ID=$(USER) NEXT_PUBLIC_API_URL=$(NEXT_PUBLIC_API_URL) docker compose up
 
 down:
+	docker compose down
+
+down-clean:
+	@echo "AVISO: remove volumes Docker incluindo mem0_storage (Qdrant) — APAGA TODAS AS MEMÓRIAS."
+	@test "$(CONFIRM_VOLUME_DESTROY)" = "1" || (echo "Abortado. Rode: CONFIRM_VOLUME_DESTROY=1 make down-clean"; exit 1)
 	docker compose down -v
 	rm -f api/openmemory.db
 

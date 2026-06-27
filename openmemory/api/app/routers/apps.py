@@ -204,6 +204,8 @@ async def list_app_memories(
                     "state": item["state"],
                     "app_id": str(app_id),
                     "app_name": item["app_name"],
+                    "created_by_hostname": item.get("created_by_hostname"),
+                    "created_by_client": item.get("created_by_client"),
                     "categories": item["categories"],
                     "metadata_": item.get("metadata_"),
                 }

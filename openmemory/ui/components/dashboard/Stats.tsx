@@ -27,7 +27,7 @@ const Stats = () => {
         <PageHeader
           icon={BarChart3}
           title="Estatísticas de Memórias"
-          description="Visão rápida do volume e apps conectados"
+          description="Visão rápida do volume e projetos conectados"
         />
       </div>
       <div className="space-y-3 p-4">
@@ -38,7 +38,7 @@ const Stats = () => {
           </h3>
         </div>
         <div>
-          <p className="text-zinc-400">Total de Apps Conectados</p>
+          <p className="text-zinc-400">Total de Projetos Conectados</p>
           <div className="flex flex-col items-start gap-1 mt-2">
             <div className="flex -space-x-2">
               {apps.map((app) => (
@@ -64,7 +64,7 @@ const Stats = () => {
                 </div>
               ))}
             </div>
-            <h3 className="text-lg font-bold text-white">{totalApps} Apps</h3>
+            <h3 className="text-lg font-bold text-white">{totalApps} Projetos</h3>
           </div>
         </div>
       </div>

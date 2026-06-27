@@ -33,6 +33,7 @@ export interface Mem0Config {
 
 export interface OpenMemoryConfig {
   custom_instructions?: string | null;
+  multilingual?: boolean;
 }
 
 export interface ConfigState {
@@ -45,6 +46,7 @@ export interface ConfigState {
 const initialState: ConfigState = {
   openmemory: {
     custom_instructions: null,
+    multilingual: true,
   },
   mem0: {
     llm: {

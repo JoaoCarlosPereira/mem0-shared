@@ -49,6 +49,10 @@ class VectorStoreProvider(BaseModel):
 
 class OpenMemoryConfig(BaseModel):
     custom_instructions: Optional[str] = Field(None, description="Custom instructions for memory management and fact extraction")
+    multilingual: Optional[bool] = Field(
+        True,
+        description="When True, extract memories in the same language as the input messages",
+    )
 
 class Mem0Config(BaseModel):
     llm: Optional[LLMProvider] = None
@@ -80,7 +84,8 @@ def get_default_configuration():
     base = get_default_memory_config()
     return {
         "openmemory": {
-            "custom_instructions": None
+            "custom_instructions": None,
+            "multilingual": True,
         },
         "mem0": {
             "llm": base.get("llm"),
@@ -109,6 +114,8 @@ def get_config_from_db(db: Session, key: str = "main"):
     # Merge with defaults to ensure all required fields exist
     if "openmemory" not in config_value:
         config_value["openmemory"] = default_config["openmemory"]
+    elif config_value["openmemory"].get("multilingual") is None:
+        config_value["openmemory"]["multilingual"] = default_config["openmemory"]["multilingual"]
     
     if "mem0" not in config_value:
         config_value["mem0"] = default_config["mem0"]

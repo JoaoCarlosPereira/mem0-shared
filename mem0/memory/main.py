@@ -1015,6 +1015,7 @@ class Memory(MemoryBase):
             new_messages=parsed_messages,
             last_k_messages=last_messages,
             custom_instructions=custom_instr,
+            use_input_language=bool(self.config.multilingual),
         )
 
         logger.info("Phase 2: LLM extraction | existing_memories=%d new_messages=%d agent_scoped=%s", len(existing_memories), len(parsed_messages), is_agent_scoped)
@@ -2805,6 +2806,7 @@ class AsyncMemory(MemoryBase):
             new_messages=parsed_messages,
             last_k_messages=last_messages,
             custom_instructions=custom_instr,
+            use_input_language=bool(self.config.multilingual),
         )
 
         try:

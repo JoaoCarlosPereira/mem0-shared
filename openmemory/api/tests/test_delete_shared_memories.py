@@ -46,7 +46,8 @@ def _client(db_factory):
 
 
 class TestDeleteSharedMemories:
-    def test_post_actions_delete_qdrant_only_memory(self, db_factory):
+    def test_post_actions_delete_qdrant_only_memory(self, db_factory, monkeypatch):
+        monkeypatch.setenv("MEM0_ALLOW_MEMORY_DELETE", "1")
         mem_id = uuid.uuid4()
         mock_client = MagicMock()
         client = _client(db_factory)
@@ -61,7 +62,8 @@ class TestDeleteSharedMemories:
         mock_client.delete.assert_called_once_with(str(mem_id))
         assert "Successfully deleted" in resp.json()["message"]
 
-    def test_post_actions_delete_creates_user_when_missing(self, db_factory):
+    def test_post_actions_delete_creates_user_when_missing(self, db_factory, monkeypatch):
+        monkeypatch.setenv("MEM0_ALLOW_MEMORY_DELETE", "1")
         mem_id = uuid.uuid4()
         mock_client = MagicMock()
         client = _client(db_factory)
@@ -74,7 +76,8 @@ class TestDeleteSharedMemories:
 
         assert resp.status_code == 200
 
-    def test_post_actions_delete_404_when_nothing_removed(self, db_factory):
+    def test_post_actions_delete_404_when_nothing_removed(self, db_factory, monkeypatch):
+        monkeypatch.setenv("MEM0_ALLOW_MEMORY_DELETE", "1")
         mem_id = uuid.uuid4()
         mock_client = MagicMock()
         mock_client.delete.side_effect = RuntimeError("not found")

@@ -346,6 +346,15 @@ async def list_memories(project: str) -> str:
 
 @mcp.tool(description="Delete specific memories by their IDs")
 async def delete_memories(memory_ids: list[str]) -> str:
+    from app.utils.deletion_guard import check_bulk_delete_allowed, check_memory_delete_allowed
+
+    if len(memory_ids) > 1:
+        blocked = check_bulk_delete_allowed("bulk_delete")
+    else:
+        blocked = check_memory_delete_allowed("delete")
+    if blocked:
+        return f"Error: {blocked}"
+
     uid = resolve_hostname(user_id_var.get(None))
     client_name = client_name_var.get(None) or DEFAULT_CLIENT_NAME
 
@@ -416,6 +425,12 @@ async def delete_memories(memory_ids: list[str]) -> str:
 
 @mcp.tool(description="Delete all memories in the user's memory")
 async def delete_all_memories() -> str:
+    from app.utils.deletion_guard import check_bulk_delete_allowed
+
+    blocked = check_bulk_delete_allowed("delete_all")
+    if blocked:
+        return f"Error: {blocked}"
+
     uid = user_id_var.get(None)
     client_name = client_name_var.get(None)
     if not uid:

@@ -264,6 +264,26 @@ def backup_restore(
 
 
 # --------------------------------------------------------------------------- #
+# Deletion guard (fail-closed — memórias críticas)
+# --------------------------------------------------------------------------- #
+@router.get("/deletion-guard")
+def deletion_guard_admin() -> dict:
+    """Expose current delete-protection flags for operators."""
+    from app.utils.deletion_guard import deletion_guard_status
+
+    status = deletion_guard_status()
+    return {
+        **status,
+        "message": (
+            "Deletes blocked (default). Set MEM0_ALLOW_MEMORY_DELETE=1 "
+            "and optionally MEM0_ALLOW_BULK_DELETE=1 to enable."
+            if not status["memory_delete_allowed"]
+            else "Memory deletes are ENABLED — use with caution."
+        ),
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Admin dashboard: overview, write-queue & write-audit (Interface Admin)
 # --------------------------------------------------------------------------- #
 @router.get("/overview", response_model=AdminOverviewResponse)

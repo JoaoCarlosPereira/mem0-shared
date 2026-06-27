@@ -774,9 +774,13 @@ def get_memory_client(custom_instructions: str = None):
                 json_config = db_config.value
                 db_updated_at = db_config.updated_at
                 
-                # Extract custom instructions from openmemory settings
-                if "openmemory" in json_config and "custom_instructions" in json_config["openmemory"]:
-                    db_custom_instructions = json_config["openmemory"]["custom_instructions"]
+                # Extract openmemory settings
+                if "openmemory" in json_config:
+                    openmemory_settings = json_config["openmemory"]
+                    if "custom_instructions" in openmemory_settings:
+                        db_custom_instructions = openmemory_settings["custom_instructions"]
+                    if openmemory_settings.get("multilingual") is not None:
+                        config["multilingual"] = openmemory_settings["multilingual"]
                 
                 # Override defaults with configurations from the database
                 if "mem0" in json_config:

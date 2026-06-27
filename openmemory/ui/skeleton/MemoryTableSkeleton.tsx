@@ -32,7 +32,7 @@ export function MemoryTableSkeleton() {
             <TableHead className="w-[140px] border-zinc-700">
               <div className="flex items-center">
                 <GoPackage className="mr-1" />
-                App de Origem
+                Criado por
               </div>
             </TableHead>
             <TableHead className="w-[140px] border-zinc-700">

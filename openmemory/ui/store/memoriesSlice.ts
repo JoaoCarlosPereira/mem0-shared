@@ -5,6 +5,9 @@ import { SimpleMemory } from '@/hooks/useMemoriesApi';
 interface AccessLogEntry {
   id: string;
   app_name: string;
+  display_name?: string;
+  client_name?: string;
+  hostname?: string;
   accessed_at: string;
 }
 

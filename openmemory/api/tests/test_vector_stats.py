@@ -156,3 +156,23 @@ class TestGetSharedMemoryById:
         vs.client.retrieve.return_value = []
         with patch.object(vector_stats, "_vector_store", return_value=(client, vs)):
             assert vector_stats.get_shared_memory_by_id("missing") is None
+
+    def test_extracts_created_by_attribution_from_payload(self):
+        mem_id = "attribution-test"
+        point = SimpleNamespace(
+            id=mem_id,
+            payload={
+                "data": "fact",
+                "project": "sysmovs",
+                "hostname": "S0293",
+                "mcp_client": "cursor",
+                "created_at": "2026-06-21T06:35:17.834714+00:00",
+            },
+        )
+        client, vs = _make_vs()
+        vs.client.retrieve.return_value = [point]
+        with patch.object(vector_stats, "_vector_store", return_value=(client, vs)):
+            out = vector_stats.get_shared_memory_by_id(mem_id)
+
+        assert out["created_by_hostname"] == "S0293"
+        assert out["created_by_client"] == "cursor"

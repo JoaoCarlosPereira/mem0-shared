@@ -5,13 +5,12 @@ import { ArrowLeft, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
 import { AccessLog } from "./AccessLog";
-import Image from "next/image";
 import Categories from "@/components/shared/categories";
 import { useEffect, useState } from "react";
 import { useSelector } from "react-redux";
 import { RootState } from "@/store/store";
-import { constants } from "@/components/shared/source-app";
 import { RelatedMemories } from "./RelatedMemories";
+import { AttributionBadge } from "@/components/shared/attribution-badge";
 
 interface MemoryDetailsProps {
   memory_id: string;
@@ -103,32 +102,13 @@ export function MemoryDetails({ memory_id }: MemoryDetailsProps) {
                     />
                   </div>
                   <div className="flex items-center gap-2 min-w-[300px] justify-end">
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center gap-1 bg-zinc-700 px-3 py-1 rounded-lg">
-                        <span className="text-sm text-zinc-400">
-                          Criada por:
-                        </span>
-                        <div className="w-4 h-4 rounded-full bg-zinc-700 flex items-center justify-center overflow-hidden">
-                          <Image
-                            src={
-                              constants[
-                                memory?.app_name as keyof typeof constants
-                              ]?.iconImage || ""
-                            }
-                            alt="App de origem"
-                            width={24}
-                            height={24}
-                          />
-                        </div>
-                        <p className="text-sm text-zinc-100 font-semibold">
-                          {
-                            constants[
-                              memory?.app_name as keyof typeof constants
-                            ]?.name
-                          }
-                        </p>
-                      </div>
-                    </div>
+                    <AttributionBadge
+                      appName={memory?.app_name}
+                      clientName={memory?.created_by_client}
+                      hostname={memory?.created_by_hostname}
+                      metadata={memory?.metadata_}
+                      iconSize={16}
+                    />
                   </div>
                 </div>
 
