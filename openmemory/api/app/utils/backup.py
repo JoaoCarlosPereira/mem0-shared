@@ -113,8 +113,8 @@ class BackupService:
             return out
         for name in self._collections(qc):
             snapshot = qc.create_snapshot(collection_name=name)
-            out[name] = qc.download_snapshot(
-                collection_name=name, snapshot_name=_snap_name(snapshot)
+            out[name] = _download_collection_snapshot(
+                qc, collection_name=name, snapshot_name=_snap_name(snapshot)
             )
         return out
 
@@ -245,3 +245,31 @@ class BackupService:
 def _snap_name(snapshot) -> str:
     """Extrai o nome do snapshot de uma resposta do QdrantClient."""
     return getattr(snapshot, "name", snapshot) if snapshot is not None else ""
+
+
+def _download_qdrant_snapshot_http(collection_name: str, snapshot_name: str) -> bytes:
+    """Baixa snapshot via REST — ``QdrantClient`` expõe ``create_snapshot`` mas não ``download_snapshot``."""
+    import urllib.error
+    import urllib.request
+
+    host = os.getenv("QDRANT_HOST", "localhost")
+    port = os.getenv("QDRANT_PORT", "6333")
+    api_key = os.getenv("QDRANT_API_KEY", "")
+    url = f"http://{host}:{port}/collections/{collection_name}/snapshots/{snapshot_name}"
+    req = urllib.request.Request(url)
+    if api_key:
+        req.add_header("api-key", api_key)
+    try:
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"qdrant snapshot download failed ({exc.code}): {body}") from exc
+
+
+def _download_collection_snapshot(qc, collection_name: str, snapshot_name: str) -> bytes:
+    """Download de snapshot: método do client (mocks/testes) ou HTTP (produção)."""
+    downloader = getattr(qc, "download_snapshot", None)
+    if callable(downloader):
+        return downloader(collection_name=collection_name, snapshot_name=snapshot_name)
+    return _download_qdrant_snapshot_http(collection_name, snapshot_name)

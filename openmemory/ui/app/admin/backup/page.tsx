@@ -14,7 +14,7 @@ const DEFAULT_POLICY: BackupPolicy = {
   frequency: "daily",
   run_at: "03:00",
   timezone: "America/Sao_Paulo",
-  local_dir: "/mnt/backups",
+  local_dir: "/mnt/dados/backups",
   retention: 5,
   mirror_s3: false,
 };
@@ -26,6 +26,7 @@ export default function BackupPage() {
   const archives = useSelector((s: RootState) => s.backup.archives);
   const policy = useSelector((s: RootState) => s.backup.policy);
   const error = useSelector((s: RootState) => s.backup.error);
+  const loading = useSelector((s: RootState) => s.backup.loading);
 
   const [form, setForm] = useState<BackupPolicy>(DEFAULT_POLICY);
   const [selected, setSelected] = useState<string>("");
@@ -92,8 +93,9 @@ export default function BackupPage() {
             <dd>{status?.last_error ?? "—"}</dd>
           </div>
         </dl>
-        <Button className="mt-3" onClick={() => runBackup()}>
-          <Play className="mr-1 h-4 w-4" /> Fazer backup agora
+        <Button className="mt-3" disabled={loading} onClick={() => runBackup()}>
+          <Play className="mr-1 h-4 w-4" />{" "}
+          {loading ? "Backup em andamento…" : "Fazer backup agora"}
         </Button>
       </section>
 
@@ -141,13 +143,17 @@ export default function BackupPage() {
             />
           </label>
           <label className="text-sm">
-            Diretório local
+            Diretório local (no host)
             <input
               aria-label="Diretório local"
               className="mt-1 w-full rounded bg-zinc-900 p-2"
               value={form.local_dir}
               onChange={(e) => setForm({ ...form, local_dir: e.target.value })}
             />
+            <span className="mt-1 block text-xs text-zinc-500">
+              Caminho no servidor (ex.: /mnt/dados/backups). Deve coincidir com
+              LOCAL_BACKUP_DIR no compose.
+            </span>
           </label>
           <label className="text-sm">
             Cópias retidas

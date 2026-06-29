@@ -24,7 +24,7 @@ from app.utils.backup_archive import (
     BackupArchive,
     SchemaIncompatibleError,
 )
-from app.utils.backup_policy import get_backup_policy
+from app.utils.backup_policy import get_backup_policy_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 def _default_build() -> BackupArchive:
     db = SessionLocal()
     try:
-        policy = get_backup_policy(db)
+        policy = get_backup_policy_runtime(db)
     finally:
         db.close()
     return BackupArchive(BackupService(), policy)

@@ -76,13 +76,18 @@ export const useBackupApi = (options?: UseBackupApiOptions) => {
     [dispatch],
   );
 
-  const runBackup = useCallback(async (): Promise<void> => {
+  const runBackup = useCallback(async (): Promise<boolean> => {
+    dispatch(setBackupLoading());
     try {
       await axios.post(`${getApiUrl()}/admin/backup/run`);
+      await fetchStatus();
+      await fetchList();
+      return true;
     } catch (err: any) {
       dispatch(setBackupError(err?.message || "Falha ao iniciar backup"));
+      return false;
     }
-  }, [dispatch]);
+  }, [dispatch, fetchStatus, fetchList]);
 
   const restore = useCallback(
     async (archive: string, confirm: string): Promise<void> => {

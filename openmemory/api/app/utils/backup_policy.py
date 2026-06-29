@@ -12,22 +12,35 @@ from sqlalchemy.orm import Session
 from app.models import Config as ConfigModel
 from app.models import get_current_utc_time
 from app.schemas import BackupPolicySchema
+from app.utils.backup_paths import default_local_dir, externalize_policy, policy_for_storage
 
 BACKUP_POLICY_KEY = "backup_policy"
 
 
-def get_backup_policy(db: Session) -> BackupPolicySchema:
-    """Lê a política de backup; retorna defaults (``enabled=False``) se inexistente."""
+def _load_policy_row(db: Session) -> BackupPolicySchema:
     row = db.query(ConfigModel).filter(ConfigModel.key == BACKUP_POLICY_KEY).first()
     if row is None or not row.value:
-        return BackupPolicySchema()
+        return BackupPolicySchema(local_dir=default_local_dir())
     return BackupPolicySchema(**row.value)
+
+
+def get_backup_policy(db: Session) -> BackupPolicySchema:
+    """Lê a política de backup; retorna defaults (``enabled=False``) se inexistente."""
+    return externalize_policy(_load_policy_row(db))
+
+
+def get_backup_policy_runtime(db: Session) -> BackupPolicySchema:
+    """Política com ``local_dir`` resolvido para o mount do container (I/O)."""
+    from app.utils.backup_paths import internalize_policy
+
+    return internalize_policy(_load_policy_row(db))
 
 
 def save_backup_policy(db: Session, policy: BackupPolicySchema) -> BackupPolicySchema:
     """Valida e persiste (upsert) a política de backup em ``Config``."""
     if not isinstance(policy, BackupPolicySchema):
         policy = BackupPolicySchema(**dict(policy))
+    policy = policy_for_storage(policy)
     value = policy.model_dump()
     row = db.query(ConfigModel).filter(ConfigModel.key == BACKUP_POLICY_KEY).first()
     if row is not None:
@@ -38,4 +51,4 @@ def save_backup_policy(db: Session, policy: BackupPolicySchema) -> BackupPolicyS
         db.add(row)
     db.commit()
     db.refresh(row)
-    return BackupPolicySchema(**row.value)
+    return externalize_policy(BackupPolicySchema(**row.value))

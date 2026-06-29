@@ -46,7 +46,8 @@ from app.schemas import (
 )
 from app.utils.backup import BackupService
 from app.utils.backup_archive import BackupArchive
-from app.utils.backup_policy import get_backup_policy, save_backup_policy
+from app.utils.backup_policy import get_backup_policy, get_backup_policy_runtime, save_backup_policy
+from app.utils.backup_paths import to_container_path
 from app.utils.metrics import PROJECT_MEMORY_COUNT, PROJECT_SIZE_OVER_THRESHOLD
 from app.utils.migration_control import MigrationControl, MigrationError, default_count_fn
 from app.utils.promotion import PromotionService, default_promotion_service
@@ -243,7 +244,7 @@ def promote_project(
 # --------------------------------------------------------------------------- #
 def _backup_archive(db: Session = Depends(get_db)) -> BackupArchive:
     """Build a BackupArchive wired to the live backends and persisted policy."""
-    return BackupArchive(BackupService(), get_backup_policy(db))
+    return BackupArchive(BackupService(), get_backup_policy_runtime(db))
 
 
 def _ensure_writable(path: str) -> None:
@@ -291,7 +292,7 @@ def backup_policy_put(payload: dict, db: Session = Depends(get_db)) -> BackupPol
     except ValidationError as exc:
         detail = [{"campo": list(e.get("loc", [])), "erro": e.get("msg")} for e in exc.errors()]
         raise HTTPException(status_code=400, detail=detail) from exc
-    _ensure_writable(policy.local_dir)
+    _ensure_writable(to_container_path(policy.local_dir))
     return save_backup_policy(db, policy)
 
 

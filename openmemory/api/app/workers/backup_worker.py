@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 from app.database import SessionLocal
 from app.utils.backup import BackupService
 from app.utils.backup_archive import _REGULAR_RE, BackupArchive
-from app.utils.backup_policy import get_backup_policy
+from app.utils.backup_policy import get_backup_policy_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +113,7 @@ class BackupWorker:
 def _build_archive() -> BackupArchive:
     db = SessionLocal()
     try:
-        policy = get_backup_policy(db)
+        policy = get_backup_policy_runtime(db)
     finally:
         db.close()
     return BackupArchive(BackupService(), policy)

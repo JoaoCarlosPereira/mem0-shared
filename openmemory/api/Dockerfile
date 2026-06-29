@@ -4,6 +4,11 @@ LABEL org.opencontainers.image.name="mem0/openmemory-mcp"
 
 WORKDIR /usr/src/openmemory
 
+# pg_dump/psql para backup/restore do PostgreSQL (task_02 / ADR-003).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
 # Deps de terceiros (requirements fixa mem0ai pelas deps transitivas; o fork
 # in-repo abaixo sombreia o wheel publicado no import).
 COPY openmemory/api/requirements.txt .

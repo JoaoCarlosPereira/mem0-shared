@@ -59,6 +59,8 @@ x-api-common: &api-common
     S3_BUCKET: ${S3_BUCKET:-mem0-backups}
     S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
     S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+    # Caminho no host montado em /mnt/backups (traduzido pela API para a UI).
+    LOCAL_BACKUP_DIR: ${LOCAL_BACKUP_DIR:-./backups}
   env_file:
     - api/.env
   depends_on:
