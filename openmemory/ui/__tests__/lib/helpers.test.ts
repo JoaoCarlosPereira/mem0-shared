@@ -25,7 +25,9 @@ describe("formatDate", () => {
     const ms = new Date(iso).getTime();
     const seconds = Math.floor(ms / 1000);
     expect(toDate(ms)?.toISOString()).toBe(new Date(iso).toISOString());
-    expect(toDate(seconds)?.toISOString()).toBe(new Date(iso).toISOString());
+    expect(toDate(seconds)?.toISOString()).toBe(
+      new Date(seconds * 1000).toISOString(),
+    );
   });
 
   it("rejeita ISO com Z concatenado (bug antigo created_at + Z)", () => {
