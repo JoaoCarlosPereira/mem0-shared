@@ -35,6 +35,7 @@ from app.routers import (
 )
 from app.workers.write_worker import embedded_worker_enabled, write_worker
 from app.utils.logging_context import install_structured_logging
+from app.utils.tracing import configure_tracing
 from app.utils.deletion_guard import deletion_guard_status, log_deletion_guard_startup
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
