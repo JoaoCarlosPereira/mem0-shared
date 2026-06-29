@@ -2,8 +2,13 @@ import queuesReducer, {
   setWriteQueue,
   setGovernanceQueue,
   setWriteQueueFilter,
+  setFailedJobIds,
+  bumpQueueUiPrefs,
   selectFailedCount,
+  selectSidebarFailedCount,
+  selectUnacknowledgedFailedByKind,
 } from "@/store/queuesSlice";
+import { acknowledgeFailedJobs } from "@/lib/queue-ui-prefs";
 import type {
   PaginatedWriteQueue,
   PaginatedGovernanceQueue,
@@ -31,6 +36,10 @@ function rootWith(queues: Partial<ReturnType<typeof queuesReducer>>): RootState 
     queues: { ...queuesReducer(undefined, { type: "@@INIT" }), ...queues },
   } as unknown as RootState;
 }
+
+beforeEach(() => {
+  window.localStorage.clear();
+});
 
 describe("queuesSlice", () => {
   it("setWriteQueue atualiza writeQueue no state", () => {
@@ -63,5 +72,31 @@ describe("queuesSlice", () => {
 
   it("selectFailedCount usa apenas a write queue quando governance é null", () => {
     expect(selectFailedCount(rootWith({ writeQueue }))).toBe(3);
+  });
+
+  it("selectSidebarFailedCount ignora falhas reconhecidas", () => {
+    window.localStorage.clear();
+    acknowledgeFailedJobs(["a"], ["b"]);
+    const state = rootWith({
+      failedWriteJobIds: ["a", "c"],
+      failedGovernanceJobIds: ["b"],
+      uiPrefsVersion: 1,
+    });
+    expect(selectSidebarFailedCount(state)).toBe(1);
+  });
+
+  it("selectUnacknowledgedFailedByKind separa por fila", () => {
+    window.localStorage.clear();
+    acknowledgeFailedJobs(["a"], []);
+    const state = rootWith({
+      failedWriteJobIds: ["a", "c"],
+      failedGovernanceJobIds: ["g1"],
+      uiPrefsVersion: 1,
+    });
+    expect(selectUnacknowledgedFailedByKind(state)).toEqual({
+      write: 1,
+      governance: 1,
+      total: 2,
+    });
   });
 });

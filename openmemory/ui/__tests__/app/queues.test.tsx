@@ -4,6 +4,10 @@ import userEvent from "@testing-library/user-event";
 import { configureStore } from "@reduxjs/toolkit";
 import { Provider } from "react-redux";
 
+jest.mock("axios");
+import axios from "axios";
+const mockedAxios = axios as jest.Mocked<typeof axios>;
+
 jest.mock("@/hooks/useQueuesApi", () => ({
   useQueuesApi: jest.fn(() => ({
     fetchWriteQueue: jest.fn(),
@@ -24,6 +28,12 @@ import adminReducer from "@/store/adminSlice";
 import queuesReducer, { setWriteQueue } from "@/store/queuesSlice";
 import QueuesPage from "@/app/admin/queues/page";
 import type { WriteQueueJob } from "@/types/admin";
+
+beforeEach(() => {
+  mockedAxios.get.mockResolvedValue({
+    data: { items: [], total: 0, page: 1, pages: 0, failed_count: 0 },
+  });
+});
 
 const job: WriteQueueJob = {
   id: "j1",
@@ -70,10 +80,10 @@ describe("QueuesPage", () => {
     expect(err).toHaveClass("text-red-400");
   });
 
-  it("clicar em 'Governance Queue' troca para a aba correta", async () => {
+  it("clicar em 'Fila de Governança' troca para a aba correta", async () => {
     renderPage();
     await userEvent.click(
-      screen.getByRole("tab", { name: "Governance Queue" }),
+      screen.getByRole("tab", { name: "Fila de Governança" }),
     );
     // A aba governance (vazia) mostra a mensagem de vazio
     expect(screen.getAllByText("Nenhum job encontrado").length).toBeGreaterThan(

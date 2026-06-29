@@ -12,13 +12,13 @@ const columns: QueueColumn<Row>[] = [
 describe("JobStatusBadge", () => {
   it("status=failed renderiza com classe vermelha", () => {
     render(<JobStatusBadge status="failed" />);
-    const badge = screen.getByText("failed");
+    const badge = screen.getByText("Falhou");
     expect(badge).toHaveClass("bg-red-600");
   });
 
   it("status=done renderiza com classe verde", () => {
     render(<JobStatusBadge status="done" />);
-    expect(screen.getByText("done")).toHaveClass("bg-green-600");
+    expect(screen.getByText("Concluído")).toHaveClass("bg-green-600");
   });
 });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useDispatch, useSelector } from "react-redux";
 import { formatDateTimeFull } from "@/lib/datetime";
@@ -10,7 +10,15 @@ import { useAdminApi } from "@/hooks/useAdminApi";
 import {
   setWriteQueueFilter,
   setGovernanceFilter,
+  bumpQueueUiPrefs,
+  selectUnacknowledgedFailedByKind,
 } from "@/store/queuesSlice";
+import {
+  isHideCompleted,
+  setHideCompleted,
+  type QueueKind,
+} from "@/lib/queue-ui-prefs";
+import { useAcknowledgeQueueFailuresOnMount } from "@/hooks/useAcknowledgeQueueFailuresOnMount";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -26,6 +34,8 @@ import { JobStatusBadge } from "@/components/admin/JobStatusBadge";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { ListOrdered } from "lucide-react";
 import {
+  PaginatedWriteQueue,
+  PaginatedGovernanceQueue,
   WriteQueueJob,
   GovernanceJob,
   WriteQueueStatus,
@@ -74,6 +84,47 @@ export default function QueuesPage() {
   const writeFilter = useSelector((s: RootState) => s.queues.writeQueueFilter);
   const govFilter = useSelector((s: RootState) => s.queues.governanceFilter);
   const overview = useSelector((s: RootState) => s.admin.overview);
+  const uiPrefsVersion = useSelector((s: RootState) => s.queues.uiPrefsVersion);
+  const unacknowledged = useSelector(selectUnacknowledgedFailedByKind);
+  useAcknowledgeQueueFailuresOnMount();
+
+  const hideWriteCompleted = useMemo(
+    () => isHideCompleted("write"),
+    [uiPrefsVersion],
+  );
+  const hideGovCompleted = useMemo(
+    () => isHideCompleted("governance"),
+    [uiPrefsVersion],
+  );
+
+  const visibleWriteItems = useMemo(() => {
+    const items = writeQueue?.items ?? [];
+    return hideWriteCompleted
+      ? items.filter((j) => j.status !== "done")
+      : items;
+  }, [writeQueue?.items, hideWriteCompleted]);
+
+  const visibleGovItems = useMemo(() => {
+    const items = governanceQueue?.items ?? [];
+    return hideGovCompleted ? items.filter((j) => j.status !== "done") : items;
+  }, [governanceQueue?.items, hideGovCompleted]);
+
+  const handleHideCompleted = useCallback(
+    (kind: QueueKind) => {
+      setHideCompleted(kind, true);
+      dispatch(bumpQueueUiPrefs());
+      toast.success("Concluídos ocultados da visualização (somente UI).");
+    },
+    [dispatch],
+  );
+
+  const handleShowCompleted = useCallback(
+    (kind: QueueKind) => {
+      setHideCompleted(kind, false);
+      dispatch(bumpQueueUiPrefs());
+    },
+    [dispatch],
+  );
 
   // Re-fetch imediato quando os filtros mudam (fetchWriteQueue muda de
   // identidade junto com o filtro, pois é memoizado sobre seus campos).
@@ -209,7 +260,7 @@ export default function QueuesPage() {
             processing={overview?.write_queue_processing ?? 0}
             done={overview?.write_queue_done ?? 0}
             skipped={overview?.write_queue_skipped ?? 0}
-            failed={overview?.write_queue_failed ?? 0}
+            failed={unacknowledged.write}
           />
           <div className="mb-3 flex gap-2">
             <Select
@@ -257,10 +308,27 @@ export default function QueuesPage() {
             >
               {retrying ? "Reprocessando…" : "Reprocessar Falhas"}
             </Button>
+            {hideWriteCompleted ? (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => handleShowCompleted("write")}
+              >
+                Mostrar concluídos
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => handleHideCompleted("write")}
+              >
+                Ocultar concluídos
+              </Button>
+            )}
           </div>
           <QueueTable
             columns={writeColumns}
-            data={writeQueue?.items ?? []}
+            data={visibleWriteItems}
             page={writeQueue?.page ?? 1}
             pages={writeQueue?.pages ?? 0}
             onPageChange={(p) => dispatch(setWriteQueueFilter({ page: p }))}
@@ -273,7 +341,7 @@ export default function QueuesPage() {
             processing={overview?.governance_queue_processing ?? 0}
             done={0}
             skipped={0}
-            failed={overview?.governance_queue_failed ?? 0}
+            failed={unacknowledged.governance}
           />
           <div className="mb-3 flex gap-2">
             <Select
@@ -312,10 +380,27 @@ export default function QueuesPage() {
                 )
               }
             />
+            {hideGovCompleted ? (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => handleShowCompleted("governance")}
+              >
+                Mostrar concluídos
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => handleHideCompleted("governance")}
+              >
+                Ocultar concluídos
+              </Button>
+            )}
           </div>
           <QueueTable
             columns={govColumns}
-            data={governanceQueue?.items ?? []}
+            data={visibleGovItems}
             page={governanceQueue?.page ?? 1}
             pages={governanceQueue?.pages ?? 0}
             onPageChange={(p) => dispatch(setGovernanceFilter({ page: p }))}

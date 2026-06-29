@@ -4,13 +4,21 @@ import { configureStore } from "@reduxjs/toolkit";
 import { Provider } from "react-redux";
 
 const mockUsePathname = jest.fn();
+jest.mock("@/hooks/useQueueFailedAlerts", () => ({
+  useQueueFailedAlerts: jest.fn(),
+}));
 jest.mock("next/navigation", () => ({
   usePathname: () => mockUsePathname(),
   redirect: jest.fn(),
 }));
 
 import adminReducer from "@/store/adminSlice";
-import queuesReducer, { setWriteQueue } from "@/store/queuesSlice";
+import queuesReducer, {
+  setWriteQueue,
+  setFailedJobIds,
+  bumpQueueUiPrefs,
+} from "@/store/queuesSlice";
+import { acknowledgeFailedJobs } from "@/lib/queue-ui-prefs";
 import { AdminSidebar } from "@/components/admin/AdminSidebar";
 import AdminIndexPage from "@/app/admin/page";
 import { redirect } from "next/navigation";
@@ -31,6 +39,7 @@ function renderSidebar(store = makeStore()) {
 
 beforeEach(() => {
   mockUsePathname.mockReturnValue("/admin/overview");
+  window.localStorage.clear();
 });
 
 describe("AdminSidebar", () => {
@@ -43,9 +52,9 @@ describe("AdminSidebar", () => {
     );
   });
 
-  it("marca Overview como ativo quando pathname é /admin/overview", () => {
+  it("marca Visão Geral como ativo quando pathname é /admin/overview", () => {
     renderSidebar();
-    const overview = screen.getByText("Overview").closest("a");
+    const overview = screen.getByText("Visão Geral").closest("a");
     expect(overview).toHaveAttribute("aria-current", "page");
   });
 
@@ -54,20 +63,22 @@ describe("AdminSidebar", () => {
     expect(screen.queryByLabelText(/jobs com falha/i)).not.toBeInTheDocument();
   });
 
-  it("exibe badge com o número correto quando failedCount é 3", () => {
+  it("exibe badge com falhas não reconhecidas", () => {
     const store = makeStore();
-    store.dispatch(
-      setWriteQueue({
-        items: [],
-        total: 0,
-        page: 1,
-        pages: 0,
-        failed_count: 3,
-      }),
-    );
+    store.dispatch(setFailedJobIds({ write: ["f1", "f2", "f3"], governance: [] }));
+    store.dispatch(bumpQueueUiPrefs());
     renderSidebar(store);
     const badge = screen.getByLabelText(/jobs com falha/i);
     expect(badge).toHaveTextContent("3");
+  });
+
+  it("não exibe badge após falhas serem reconhecidas", () => {
+    acknowledgeFailedJobs(["f1", "f2", "f3"], []);
+    const store = makeStore();
+    store.dispatch(setFailedJobIds({ write: ["f1", "f2", "f3"], governance: [] }));
+    store.dispatch(bumpQueueUiPrefs());
+    renderSidebar(store);
+    expect(screen.queryByLabelText(/jobs com falha/i)).not.toBeInTheDocument();
   });
 });
 

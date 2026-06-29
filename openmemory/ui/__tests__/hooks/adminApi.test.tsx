@@ -97,13 +97,16 @@ describe("useAdminApi", () => {
     );
   });
 
-  it("polling dispara fetchAdminOverview ao montar (após intervalo)", () => {
+  it("polling dispara fetchAdminOverview ao montar e no intervalo", () => {
     jest.useFakeTimers();
     mockedAxios.get.mockResolvedValue({ data: overview });
     const store = makeStore();
     renderHook(() => useAdminApi(), { wrapper: wrapperFor(store) });
 
-    expect(mockedAxios.get).not.toHaveBeenCalled();
+    expect(mockedAxios.get).toHaveBeenCalledWith(
+      expect.stringContaining("/admin/overview"),
+    );
+    mockedAxios.get.mockClear();
     act(() => {
       jest.advanceTimersByTime(15000);
     });
