@@ -40,15 +40,15 @@ from app.utils.metrics import (
     SEARCH_CACHE_MISS,
     SEARCH_LATENCY,
 )
+from app.utils.env import safe_load_dotenv
 from app.utils.db import get_user_and_app
 from app.utils.identity import resolve_hostname
 from app.utils.memory import get_memory_client_safe
-from app.utils.partitioning import bind_active_collection, resolve_and_bind
+from app.utils.partitioning import bind_active_collection
 from app.utils.permissions import check_memory_access_permissions
 from app.utils.read_cache import read_cache
 from app.utils.recency import rank_search_results
 from app.utils.write_queue import WriteJob, write_queue
-from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.routing import APIRouter
 from mcp.server.fastmcp import FastMCP
@@ -57,7 +57,7 @@ from mcp.server.streamable_http import StreamableHTTPServerTransport
 from starlette.responses import Response
 
 # Load environment variables
-load_dotenv()
+safe_load_dotenv()
 
 # Initialize MCP
 mcp = FastMCP("mem0-mcp-server")

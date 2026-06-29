@@ -45,7 +45,7 @@ run_docker build -f ui/Dockerfile -t mem0/openmemory-ui:latest ui/
 
 echo "==> Recriando containers (API, workers, UI)..."
 compose up -d --no-deps --force-recreate \
-  openmemory-mcp openmemory-write-worker openmemory-governance-worker openmemory-ui
+  openmemory-mcp openmemory-write-worker openmemory-governance-worker openmemory-backup-worker openmemory-ui
 
 echo "==> Aguardando API..."
 sleep 5

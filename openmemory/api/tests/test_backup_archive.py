@@ -6,7 +6,6 @@ Qdrant/PostgreSQL/S3 e relógio mockados (sem infraestrutura real).
 
 import gzip
 import hashlib
-import io
 import json
 import os
 import zipfile

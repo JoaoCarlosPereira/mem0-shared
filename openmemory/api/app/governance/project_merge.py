@@ -19,7 +19,6 @@ from app.models import (
     Project,
     WriteAuditLog,
     WriteQueueJob,
-    WriteQueueStatus,
 )
 from app.utils.projects import upsert_project
 from app.utils.read_cache import read_cache

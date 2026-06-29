@@ -1,14 +1,13 @@
 import logging
 from typing import List
 
-from app.utils.env import is_local_only
+from app.utils.env import is_local_only, safe_load_dotenv
 from app.utils.prompts import MEMORY_CATEGORIZATION_PROMPT
-from dotenv import load_dotenv
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-load_dotenv()
+safe_load_dotenv()
 
 # The OpenAI client is created lazily (see _get_openai_client): importing this
 # module must NEVER require OpenAI credentials, otherwise the whole API crashes

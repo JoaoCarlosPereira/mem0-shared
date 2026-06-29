@@ -7,11 +7,10 @@ de ``asyncio.run`` para o tick.
 
 import asyncio
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
-import pytest
 
 from app.schemas import BackupArchiveInfo, BackupPolicySchema
 from app.workers.backup_worker import BackupWorker
