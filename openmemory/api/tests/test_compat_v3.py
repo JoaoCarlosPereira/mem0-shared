@@ -1,13 +1,14 @@
 """Tests for the cloud-compatible /v3/memories shim used by local-only hooks.
 
 Asserts the contract the plugin hooks rely on, backed by a fake memory client:
-  - search is project-scoped (shared; user_id ignored) and post-filters by
-    metadata type/threshold;
+  - search is global (shared; user_id ignored); app_id is a soft ranking hint;
+    metadata type/threshold post-filter still apply;
   - add concatenates messages, scopes by app_id=project, and preserves the
     hook-supplied metadata (type/file) by calling client.add directly;
-  - list returns a count + results.
+  - list returns a count + results and remains project-scoped.
 """
 
+import importlib
 import importlib.util
 import sys
 import types
@@ -149,11 +150,24 @@ def _and(*clauses):
 
 class TestSearch:
     @pytest.mark.asyncio
-    async def test_project_scoped_excludes_other_projects(self, client):
+    async def test_global_search_includes_all_projects(self, client):
         body = {"query": "state", "filters": _and({"user_id": "host"}, {"app_id": "A"})}
         data = (await client.post("/v3/memories/search/", json=body)).json()
         ids = {r["id"] for r in data["results"]}
-        assert ids == {"a1", "a2"}  # only project A, user_id ignored
+        assert ids == {"a1", "a2", "b1"}  # global search; app_id is hint only
+
+    @pytest.mark.asyncio
+    async def test_project_hint_boosts_matching_project(self, monkeypatch):
+        now = datetime.now(timezone.utc).isoformat()
+        hits = [
+            _Hit("other", 0.90, {"data": "other", "project": "other-repo", "updated_at": now}),
+            _Hit("mine", 0.88, {"data": "mine", "project": "mem0-shared", "updated_at": now}),
+        ]
+        monkeypatch.setattr(compat_v3, "get_memory_client", lambda: _FakeClient(hits))
+        _rec = importlib.import_module(compat_v3.rank_search_results.__module__)
+        monkeypatch.setattr(_rec, "SEARCH_RECENCY_WEIGHT", 0.0)
+        data = await _search({"query": "x", "filters": _and({"app_id": "mem0-shared"})})
+        assert [r["id"] for r in data["results"]] == ["mine", "other"]
 
     @pytest.mark.asyncio
     async def test_metadata_type_post_filter(self, client):
@@ -162,13 +176,14 @@ class TestSearch:
             "filters": _and({"app_id": "A"}, {"metadata": {"type": "session_state"}}),
         }
         data = (await client.post("/v3/memories/search/", json=body)).json()
-        assert [r["id"] for r in data["results"]] == ["a1"]
+        # Global search + metadata filter; app_id A boosts a1 above b1.
+        assert [r["id"] for r in data["results"]] == ["a1", "b1"]
 
     @pytest.mark.asyncio
     async def test_threshold_filters_low_scores(self, client):
         body = {"query": "state", "filters": _and({"app_id": "A"}), "threshold": 0.5}
         data = (await client.post("/v3/memories/search/", json=body)).json()
-        assert [r["id"] for r in data["results"]] == ["a1"]  # a2 score 0.4 dropped
+        assert [r["id"] for r in data["results"]] == ["a1", "b1"]  # a2 score 0.4 dropped
 
     @pytest.mark.asyncio
     async def test_result_shape(self, client):

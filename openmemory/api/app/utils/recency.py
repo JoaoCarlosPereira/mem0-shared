@@ -13,15 +13,20 @@ Tunable via env:
   MEM0_SEARCH_RECENCY_HALFLIFE_DAYS — days for the recency weight to halve (time scale)
   MEM0_SEARCH_RECENCY_WEIGHT        — how strongly recency influences order
                                       (0.0 = pure semantic relevance, previous behavior)
+  MEM0_SEARCH_PROJECT_BOOST_EXACT   — multiplicative boost when project names match exactly
+  MEM0_SEARCH_PROJECT_BOOST_FUZZY   — smaller boost when normalized names overlap/substring-match
 """
 
 from __future__ import annotations
 
 import datetime
 import os
+from typing import Optional
 
 SEARCH_RECENCY_HALFLIFE_DAYS = float(os.getenv("MEM0_SEARCH_RECENCY_HALFLIFE_DAYS", "90"))
 SEARCH_RECENCY_WEIGHT = float(os.getenv("MEM0_SEARCH_RECENCY_WEIGHT", "1.0"))
+SEARCH_PROJECT_BOOST_EXACT = float(os.getenv("MEM0_SEARCH_PROJECT_BOOST_EXACT", "0.1"))
+SEARCH_PROJECT_BOOST_FUZZY = float(os.getenv("MEM0_SEARCH_PROJECT_BOOST_FUZZY", "0.05"))
 
 
 def parse_ts(value):
@@ -53,19 +58,60 @@ def recency_factor(result, now):
     return 0.5 ** (age_days / SEARCH_RECENCY_HALFLIFE_DAYS)
 
 
-def recency_weighted_sort(results):
-    """Order results in place by semantic score blended with recency.
+def normalize_project_name(name) -> str:
+    """Normalize project identifiers for fuzzy comparison (case/punctuation insensitive)."""
+    if not name:
+        return ""
+    return "".join(c for c in str(name).lower() if c.isalnum())
 
-    ``final = score * recency_factor ** weight``. With ``weight == 0`` this reduces
-    to a pure semantic sort. ``list.sort`` is stable, so ties keep the vector
-    store's original order. Returns the same list for convenience.
+
+def project_match_factor(result_project, preferred_project) -> float:
+    """Small boost for matching project names; never penalizes mismatches."""
+    if not preferred_project:
+        return 1.0
+    result_norm = normalize_project_name(result_project)
+    preferred_norm = normalize_project_name(preferred_project)
+    if not preferred_norm:
+        return 1.0
+    if result_norm == preferred_norm:
+        return 1.0 + SEARCH_PROJECT_BOOST_EXACT
+    if result_norm and (result_norm in preferred_norm or preferred_norm in result_norm):
+        return 1.0 + SEARCH_PROJECT_BOOST_FUZZY
+    return 1.0
+
+
+def rank_search_results(results, preferred_project=None):
+    """Order results by semantic score blended with recency and optional project boost.
+
+    Relevance and recency dominate ordering; ``preferred_project`` only applies a
+    small multiplicative boost when names match (exact or fuzzy). Wrong or missing
+    project names are never penalized.
     """
     now = datetime.datetime.now(datetime.timezone.utc)
+
+    def _project_name(result) -> Optional[str]:
+        name = result.get("project")
+        if name:
+            return str(name)
+        meta = result.get("metadata")
+        if isinstance(meta, dict) and meta.get("project"):
+            return str(meta["project"])
+        return None
 
     def key(r):
         score = r.get("score")
         score = score if isinstance(score, (int, float)) else 0.0
-        return score * (recency_factor(r, now) ** SEARCH_RECENCY_WEIGHT)
+        factor = recency_factor(r, now) ** SEARCH_RECENCY_WEIGHT
+        factor *= project_match_factor(_project_name(r), preferred_project)
+        return score * factor
 
     results.sort(key=key, reverse=True)
     return results
+
+
+def recency_weighted_sort(results):
+    """Order results in place by semantic score blended with recency.
+
+    Backward-compatible alias for ``rank_search_results`` without project boost.
+    """
+    return rank_search_results(results)

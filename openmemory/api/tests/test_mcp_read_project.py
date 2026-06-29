@@ -1,18 +1,16 @@
-"""Tests for the project-scoped, user_id-agnostic MCP read tools (task_03).
+"""Tests for the global, user_id-agnostic MCP read tools (task_03).
 
 These cover `search_memory` and `list_memories` from ``app.mcp_server`` and assert
 the shared-read behavior mandated by ADR-003:
 
-- reads are filtered by ``project`` and NEVER by ``user_id`` (shared across all
-  machines on the local network — the hostname only feeds attribution on writes);
+- semantic search is GLOBAL (no hard project filter); ``project`` is a soft ranking
+  hint only — relevance + recency dominate ordering;
+- reads NEVER filter by ``user_id`` (shared across all machines on the local
+  network — the hostname only feeds attribution on writes);
 - a bounded default ``top_k`` is applied; results are ordered by semantic score
-  blended with recency (``updated_at`` → ``created_at``), so the most recently
-  changed fact wins over the stale version it supersedes (ADR-003 at read time);
-- the memory client is reused via ``get_memory_client_safe`` (no per-call reconnect);
-- a memory written by host ``maqA`` in project ``A`` is retrievable by a search
-  issued as host ``maqB`` in project ``A`` (verified at the mock level: no
-  ``user_id`` ends up in the filters, so cross-host reads work);
-- a search scoped to project ``B`` does not surface project ``A`` memories.
+  blended with recency (``updated_at`` → ``created_at``);
+- ``list_memories`` remains project-scoped for enumeration;
+- the memory client is reused via ``get_memory_client_safe`` (no per-call reconnect).
 
 The memory client is fully mocked, so these run without Qdrant/Ollama/LLM access.
 """
@@ -82,11 +80,11 @@ def patched_client():
 
 
 # --------------------------------------------------------------------------- #
-# search_memory — project filter, no user_id
+# search_memory — global search, no user_id, project as ranking hint
 # --------------------------------------------------------------------------- #
 class TestSearchMemoryProjectScope:
     @pytest.mark.asyncio
-    async def test_search_applies_project_filter(self, patched_client):
+    async def test_search_does_not_hard_filter_by_project(self, patched_client):
         client, _ = patched_client
         client.vector_store.search.return_value = [_hit("1", "coffee", "A")]
 
@@ -97,7 +95,8 @@ class TestSearchMemoryProjectScope:
         data = json.loads(out)
 
         filters = client.vector_store.search.call_args.kwargs["filters"]
-        assert filters["project"] == "A"
+        assert filters is None
+        assert client.vector_store.search.call_args.kwargs["shard_key_selector"] is None
         assert data["results"][0]["memory"] == "coffee"
         assert data["results"][0]["project"] == "A"
 
@@ -106,15 +105,14 @@ class TestSearchMemoryProjectScope:
         client, _ = patched_client
         client.vector_store.search.return_value = []
 
-        # Even with a hostname present in the context, it must NOT be a filter.
         mcp_server.user_id_var.set("maqA")
         mcp_server.client_name_var.set("cursor")
 
         await search_memory("anything", project="A")
 
         filters = client.vector_store.search.call_args.kwargs["filters"]
-        assert "user_id" not in filters
-        assert filters == {"project": "A"}
+        assert "user_id" not in (filters or {})
+        assert filters is None
 
     @pytest.mark.asyncio
     async def test_search_applies_default_top_k(self, patched_client):
@@ -289,23 +287,36 @@ class TestSharedReadAcrossHosts:
         data = json.loads(out)
 
         filters = client.vector_store.search.call_args.kwargs["filters"]
-        assert "user_id" not in filters  # cross-host read is not blocked
+        assert "user_id" not in (filters or {})  # cross-host read is not blocked
         assert data["results"][0]["id"] == "m-A"
         assert data["results"][0]["memory"] == "shared fact"
 
     @pytest.mark.asyncio
-    async def test_project_B_search_excludes_project_A(self, patched_client):
-        """A project-B search must filter by project B; the backend would not
-        return project-A items (simulated here by an empty backend result)."""
+    async def test_search_includes_cross_project_results(self, patched_client):
+        """Wrong project hint must not exclude relevant memories from other projects."""
         client, _ = patched_client
-        client.vector_store.search.return_value = []  # backend has only project A
+        client.vector_store.search.return_value = [
+            _hit("m-A", "shared fact", "A", score=0.95),
+        ]
 
         mcp_server.user_id_var.set("maqB")
-        mcp_server.client_name_var.set("windsurf")
-
         out = await search_memory("shared", project="B")
         data = json.loads(out)
 
-        filters = client.vector_store.search.call_args.kwargs["filters"]
-        assert filters["project"] == "B"
-        assert data["results"] == []
+        assert data["results"][0]["id"] == "m-A"
+        assert data["results"][0]["project"] == "A"
+
+    @pytest.mark.asyncio
+    async def test_search_project_hint_boosts_matching_project(self, patched_client, monkeypatch):
+        """When scores are close, matching project name gets a small ranking boost."""
+        monkeypatch.setattr(recency, "SEARCH_RECENCY_WEIGHT", 0.0)
+        now = datetime.now(timezone.utc).isoformat()
+        client, _ = patched_client
+        client.vector_store.search.return_value = [
+            _hit("other", "other fact", "other-repo", score=0.90, updated_at=now),
+            _hit("mine", "mine fact", "mem0-shared", score=0.88, updated_at=now),
+        ]
+
+        out = await search_memory("fact", project="mem0-shared")
+        ids = [r["id"] for r in json.loads(out)["results"]]
+        assert ids == ["mine", "other"]
