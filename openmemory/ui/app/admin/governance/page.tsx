@@ -308,7 +308,9 @@ export default function GovernancePage() {
                     className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300"
                   >
                     <Checkbox
-                      checked={schedule.schedule_weekdays.includes(day.value)}
+                      checked={(schedule.schedule_weekdays ?? []).includes(
+                        day.value,
+                      )}
                       onCheckedChange={(checked) =>
                         toggleWeekday(day.value, checked === true)
                       }

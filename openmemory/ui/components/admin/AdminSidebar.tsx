@@ -12,7 +12,8 @@ import {
   ScrollText,
   HardDrive,
 } from "lucide-react";
-import { selectFailedCount } from "@/store/queuesSlice";
+import { selectSidebarFailedCount } from "@/store/queuesSlice";
+import { useQueueFailedAlerts } from "@/hooks/useQueueFailedAlerts";
 import { APP_NAME } from "@/lib/branding";
 
 interface NavItem {
@@ -32,7 +33,8 @@ const NAV_ITEMS: NavItem[] = [
 
 export function AdminSidebar() {
   const pathname = usePathname();
-  const failedCount = useSelector(selectFailedCount);
+  useQueueFailedAlerts();
+  const failedCount = useSelector(selectSidebarFailedCount);
 
   return (
     <nav

@@ -3,6 +3,8 @@
 import { useSelector } from "react-redux";
 import { RootState } from "@/store/store";
 import { useAdminApi } from "@/hooks/useAdminApi";
+import { useAcknowledgeQueueFailuresOnMount } from "@/hooks/useAcknowledgeQueueFailuresOnMount";
+import { selectUnacknowledgedFailedByKind } from "@/store/queuesSlice";
 import { StatCard } from "@/components/admin/StatCard";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -21,11 +23,29 @@ function workerHint(processing: number, queued: number): string {
   return "Ocioso";
 }
 
+/** Contagem de falhas para alerta: IDs do polling quando disponíveis; senão overview da API. */
+function failedAlertCount(
+  apiCount: number,
+  polledIds: string[],
+  unacknowledged: number,
+): number {
+  if (polledIds.length > 0) return unacknowledged;
+  return apiCount;
+}
+
 export default function OverviewPage() {
   const { fetchAdminOverview } = useAdminApi();
+  useAcknowledgeQueueFailuresOnMount();
   const overview = useSelector((state: RootState) => state.admin.overview);
   const error = useSelector((state: RootState) => state.admin.error);
   const loading = useSelector((state: RootState) => state.admin.loading);
+  const failedWriteJobIds = useSelector(
+    (state: RootState) => state.queues.failedWriteJobIds,
+  );
+  const failedGovernanceJobIds = useSelector(
+    (state: RootState) => state.queues.failedGovernanceJobIds,
+  );
+  const unacknowledged = useSelector(selectUnacknowledgedFailedByKind);
 
   if (error && !overview) {
     return (
@@ -63,6 +83,17 @@ export default function OverviewPage() {
   const govDepth =
     overview.governance_queue_queued + overview.governance_queue_processing;
 
+  const writeFailed = failedAlertCount(
+    overview.write_queue_failed,
+    failedWriteJobIds,
+    unacknowledged.write,
+  );
+  const govFailed = failedAlertCount(
+    overview.governance_queue_failed,
+    failedGovernanceJobIds,
+    unacknowledged.governance,
+  );
+
   return (
     <div>
       <PageHeader className="mb-4" icon={LayoutDashboard} title="Visão Geral" />
@@ -76,10 +107,10 @@ export default function OverviewPage() {
         <StatCard
           title="Fila de Escrita"
           value={writeDepth}
-          alert={overview.write_queue_failed > 0}
+          alert={writeFailed > 0}
           hint={
-            overview.write_queue_failed > 0
-              ? `${overview.write_queue_failed} com falha · ${workerHint(overview.write_queue_processing, overview.write_queue_queued)}`
+            writeFailed > 0
+              ? `${writeFailed} com falha · ${workerHint(overview.write_queue_processing, overview.write_queue_queued)}`
               : workerHint(
                   overview.write_queue_processing,
                   overview.write_queue_queued,
@@ -89,10 +120,10 @@ export default function OverviewPage() {
         <StatCard
           title="Fila de Governança"
           value={govDepth}
-          alert={overview.governance_queue_failed > 0}
+          alert={govFailed > 0}
           hint={
-            overview.governance_queue_failed > 0
-              ? `${overview.governance_queue_failed} com falha · ${workerHint(overview.governance_queue_processing, overview.governance_queue_queued)}`
+            govFailed > 0
+              ? `${govFailed} com falha · ${workerHint(overview.governance_queue_processing, overview.governance_queue_queued)}`
               : workerHint(
                   overview.governance_queue_processing,
                   overview.governance_queue_queued,

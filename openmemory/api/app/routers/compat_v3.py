@@ -9,10 +9,11 @@ Why this exists:
   router implements the same paths the hooks call, backed by the local memory
   client, so no hook needs to learn a new contract.
 
-Scope model (task_03 / ADR-003): reads and writes are scoped by ``project``
-and SHARED across the team. ``user_id`` in incoming filters is attribution
-only and is intentionally NOT used to restrict reads. The ``app_id`` field the
-hooks send IS the project.
+Scope model (task_03 / ADR-003): semantic search is GLOBAL across projects and
+SHARED across the team. ``user_id`` in incoming filters is attribution only and is
+intentionally NOT used to restrict reads. The ``app_id`` field the hooks send is a
+soft ranking hint (small boost for matching project names); relevance + recency
+dominate ordering. List/count endpoints remain project-scoped.
 
 Reads reuse the same vector-store path as ``app.mcp_server.search_memory``.
 Writes call ``memory_client.add`` directly (not the async write queue) so the
@@ -25,9 +26,9 @@ import logging
 from typing import Any, Optional
 
 from app.utils.memory import get_memory_client
-from app.utils.partitioning import bind_active_collection, resolve_and_bind
+from app.utils.partitioning import bind_active_collection
 from app.utils.read_audit import record_memory_reads
-from app.utils.recency import recency_weighted_sort
+from app.utils.recency import rank_search_results
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
@@ -106,6 +107,7 @@ def _hit_to_result(h) -> dict:
         "score": getattr(h, "score", None),
         "created_at": payload.get("created_at"),
         "updated_at": payload.get("updated_at"),
+        "project": payload.get("project"),
         "metadata": payload,
     }
 
@@ -123,22 +125,15 @@ class SearchRequest(BaseModel):
 
 @router.post("/search/")
 async def search(request: SearchRequest) -> dict:
-    """Semantic search scoped by project (shared across the team)."""
+    """Semantic search across all projects, ranked by relevance and recency."""
     client = _memory_client()
     if not client or not request.query:
         return {"results": []}
 
     project, metadata_filters, is_global = _extract_scope(request.filters)
-    vs_filters: dict = {} if is_global else {"project": project} if project else {}
+    preferred_project = None if is_global else project
 
-    # Route to the active collection; project-scoped reads also route to the
-    # project's shard key (ADR-002). Global/cross-project reads bind the active
-    # collection only (no shard key).
-    if project and not is_global:
-        shard_key_selector = resolve_and_bind(client, project).shard_key
-    else:
-        bind_active_collection(client)
-        shard_key_selector = None
+    bind_active_collection(client)
 
     top_k = max(1, min(request.top_k or DEFAULT_TOP_K, MAX_TOP_K))
     # Over-fetch when we have to post-filter by metadata so the caller still
@@ -153,14 +148,14 @@ async def search(request: SearchRequest) -> dict:
             query=request.query,
             vectors=embeddings,
             top_k=fetch_k,
-            filters=vs_filters or None,
-            shard_key_selector=shard_key_selector,
+            filters=None,
+            shard_key_selector=None,
         )
     except Exception as e:  # noqa: BLE001
         logging.warning("compat_v3 semantic search failed (%s); falling back to list", e)
         degraded = "list_fallback"
         try:
-            raw = client.vector_store.list(filters=vs_filters or None, top_k=fetch_k)
+            raw = client.vector_store.list(filters=None, top_k=fetch_k)
             if isinstance(raw, (tuple, list)) and raw and isinstance(raw[0], (list, tuple)):
                 hits = raw[0]
             else:
@@ -185,7 +180,7 @@ async def search(request: SearchRequest) -> dict:
     # app.mcp_server.search_memory). The `rerank` arg is kept for backward
     # compatibility but no longer gates ordering; set MEM0_SEARCH_RECENCY_WEIGHT=0
     # for pure semantic order.
-    recency_weighted_sort(results)
+    rank_search_results(results, preferred_project=preferred_project)
     results = results[:top_k]
 
     record_memory_reads(

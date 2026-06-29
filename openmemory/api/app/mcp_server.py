@@ -46,7 +46,7 @@ from app.utils.memory import get_memory_client_safe
 from app.utils.partitioning import bind_active_collection, resolve_and_bind
 from app.utils.permissions import check_memory_access_permissions
 from app.utils.read_cache import read_cache
-from app.utils.recency import recency_weighted_sort
+from app.utils.recency import rank_search_results
 from app.utils.write_queue import WriteJob, write_queue
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -166,12 +166,11 @@ def _record_write_audit(*, job_id, project, hostname, client_name):
 
 
 
-async def _fetch_project_memories(memory_client, project: str, top_k: int = DEFAULT_LIST_TOP_K) -> list:
-    """Lista memórias do projeto (sem embedding) — fallback quando o embedder falha."""
+async def _fetch_all_memories(memory_client, top_k: int = DEFAULT_LIST_TOP_K) -> list:
+    """Lista memórias de toda a coleção (sem embedding) — fallback quando o embedder falha."""
     bind_active_collection(memory_client)
-    filters = {"project": project}
     raw = await anyio.to_thread.run_sync(
-        lambda: memory_client.vector_store.list(filters=filters, top_k=top_k)
+        lambda: memory_client.vector_store.list(filters=None, top_k=top_k)
     )
     points = raw
     if isinstance(raw, (tuple, list)) and len(raw) > 0 and isinstance(raw[0], (list, tuple)):
@@ -190,13 +189,12 @@ async def _fetch_project_memories(memory_client, project: str, top_k: int = DEFA
     return results
 
 
-@mcp.tool(description="Search through stored memories scoped by project (shared across all machines). This method is called EVERYTIME the user asks anything.")
+@mcp.tool(description="Search stored memories across all projects, ranked by relevance and recency. The `project` parameter is a soft hint (slight boost for matching names) — wrong or slightly different project names do not exclude results. Memories are shared across all machines on the local network.")
 async def search_memory(query: str, project: str, rerank: bool = False) -> str:
-    # NOTE (task_03 / ADR-003): reads are scoped by `project` and are SHARED
-    # across all machines on the local network. We intentionally do NOT filter
-    # by `user_id` (the hostname only serves attribution on the write path).
-    # The read path is direct/async against the vector store and bypasses the
-    # write queue, reusing the memory client (no per-call reconnect).
+    # NOTE (task_03 / ADR-003): semantic reads are GLOBAL across projects and SHARED
+    # across all machines. ``project`` is a ranking hint only (small boost for name
+    # match); relevance + recency dominate ordering. We intentionally do NOT filter
+    # by ``user_id`` (hostname is write-path attribution only).
     if not project:
         return "Error: project not provided"
 
@@ -206,13 +204,10 @@ async def search_memory(query: str, project: str, rerank: bool = False) -> str:
         if not memory_client:
             return "Error: Memory system is currently unavailable. Please try again later."
 
-        # Route to the active collection (blue-green) and the project's shard key
-        # (ADR-002 / ADR-003). The contract of this tool is unchanged.
-        route = resolve_and_bind(memory_client, project)
+        bind_active_collection(memory_client)
 
-        filters = {"project": project}
         filter_hash = hashlib.sha256(
-            json.dumps(filters, sort_keys=True).encode()
+            json.dumps({"mode": "global", "preferred_project": project}, sort_keys=True).encode()
         ).hexdigest()[:16]
 
         cached_hits = read_cache.get_search(
@@ -236,13 +231,13 @@ async def search_memory(query: str, project: str, rerank: bool = False) -> str:
                     read_cache.set_embedding(embed_model, query, embeddings)
                 except Exception as embed_err:  # noqa: BLE001
                     logging.warning(
-                        "Semantic search unavailable (%s); falling back to project list",
+                        "Semantic search unavailable (%s); falling back to global list",
                         embed_err,
                     )
-                    results = await _fetch_project_memories(
-                        memory_client, project, DEFAULT_SEARCH_TOP_K
+                    results = await _fetch_all_memories(
+                        memory_client, DEFAULT_SEARCH_TOP_K
                     )
-                    recency_weighted_sort(results)
+                    rank_search_results(results, preferred_project=project)
                     return json.dumps(
                         {"results": results, "degraded": "list_fallback"},
                         indent=2,
@@ -253,8 +248,8 @@ async def search_memory(query: str, project: str, rerank: bool = False) -> str:
                     query=query,
                     vectors=embeddings,
                     top_k=DEFAULT_SEARCH_TOP_K,
-                    filters=filters,
-                    shard_key_selector=route.shard_key,
+                    filters=None,
+                    shard_key_selector=None,
                 )
             )
 
@@ -274,12 +269,7 @@ async def search_memory(query: str, project: str, rerank: bool = False) -> str:
                 project, query, DEFAULT_SEARCH_TOP_K, filter_hash, results
             )
 
-        # Order by semantic relevance blended with recency so the most recently
-        # updated fact wins over the stale version it supersedes (ADR-003,
-        # applied at read time). Always on now; the `rerank` arg is kept for
-        # backward compatibility but no longer gates ordering. Set
-        # MEM0_SEARCH_RECENCY_WEIGHT=0 to fall back to pure semantic order.
-        recency_weighted_sort(results)
+        rank_search_results(results, preferred_project=project)
 
         return json.dumps({"results": results}, indent=2)
     except Exception as e:

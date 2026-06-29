@@ -1,14 +1,17 @@
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { PauseIcon, Loader2, PlayIcon } from "lucide-react";
+import { PauseIcon, Loader2, PlayIcon, Trash2 } from "lucide-react";
 import { useAppsApi } from "@/hooks/useAppsApi";
 import Image from "next/image";
 import { useDispatch, useSelector } from "react-redux";
-import { setAppDetails } from "@/store/appsSlice";
+import { removeApp, setAppDetails } from "@/store/appsSlice";
 import { BiEdit } from "react-icons/bi";
 import { constants } from "@/components/shared/source-app";
 import { RootState } from "@/store/store";
 import { appStatusLabel, formatDateTime } from "@/lib/i18n/pt-BR";
+import { StrongDeleteProjectDialog } from "@/components/shared/ConfirmDeleteDialog";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 
 const capitalize = (str: string) => {
   return str.charAt(0).toUpperCase() + str.slice(1);
@@ -21,9 +24,12 @@ const AppDetailCard = ({
   appId: string;
   selectedApp: any;
 }) => {
-  const { updateAppDetails } = useAppsApi();
+  const { updateAppDetails, deleteApp } = useAppsApi();
   const [isLoading, setIsLoading] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const dispatch = useDispatch();
+  const router = useRouter();
   const apps = useSelector((state: RootState) => state.apps.apps);
   const currentApp = apps.find((app: any) => app.id === appId);
   const appConfig = currentApp
@@ -32,6 +38,7 @@ const AppDetailCard = ({
   const displayName = currentApp
     ? constants[currentApp.name as keyof typeof constants]?.name ?? currentApp.name
     : appConfig.name;
+  const projectName = currentApp?.name ?? displayName;
 
   const handlePauseAccess = async () => {
     setIsLoading(true);
@@ -46,6 +53,25 @@ const AppDetailCard = ({
       console.error("Failed to toggle app pause state:", error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleDeleteProject = async () => {
+    setDeleting(true);
+    try {
+      const result = await deleteApp(appId, projectName);
+      dispatch(removeApp(appId));
+      toast.success(
+        `Projeto "${result.project}" excluído (${result.deleted_memories} memórias removidas).`,
+      );
+      setDeleteOpen(false);
+      router.push("/apps");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Falha ao excluir projeto",
+      );
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -128,10 +154,10 @@ const AppDetailCard = ({
 
           <hr className="border-zinc-800" />
 
-          <div className="flex gap-2 justify-end">
+          <div className="flex flex-col gap-2">
             <Button
               onClick={handlePauseAccess}
-              className="flex bg-transparent w-[170px] bg-zinc-800 border-zinc-800 hover:bg-zinc-800 text-white"
+              className="flex bg-transparent w-full bg-zinc-800 border-zinc-800 hover:bg-zinc-800 text-white"
               size="sm"
               disabled={isLoading}
             >
@@ -144,9 +170,28 @@ const AppDetailCard = ({
               )}
               {buttonText}
             </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full border-red-900/60 text-red-400 hover:bg-red-950/40 hover:text-red-300"
+              onClick={() => setDeleteOpen(true)}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Excluir projeto
+            </Button>
           </div>
         </div>
       </div>
+
+      <StrongDeleteProjectDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        projectName={projectName}
+        memoryCount={selectedApp.details.total_memories_created ?? 0}
+        loading={deleting}
+        onConfirm={handleDeleteProject}
+      />
     </div>
   );
 };

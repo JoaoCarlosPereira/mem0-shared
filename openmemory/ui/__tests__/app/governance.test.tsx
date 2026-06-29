@@ -72,42 +72,54 @@ function renderPage() {
 }
 
 beforeEach(() => {
-  mockedAxios.get.mockResolvedValue({ data: { global: {} } });
+  mockedAxios.get.mockImplementation((url: string) => {
+    if (String(url).includes("/admin/governance/schedule")) {
+      return Promise.resolve({
+        data: {
+          schedule_timezone: "UTC",
+          schedule_weekdays: [0, 1, 2, 3, 4, 5, 6],
+          schedule_start_time: "00:00",
+          schedule_end_time: "23:59",
+        },
+      });
+    }
+    return Promise.resolve({ data: { global: {} } });
+  });
   mockedAxios.post.mockReset().mockResolvedValue({ data: { status: "queued" } });
   fetchGovernanceJobs.mockReset().mockResolvedValue(undefined);
 });
 
 describe("GovernancePage", () => {
-  it("exibe botões para Dedup, TTL Prune, Consolidate e Purge", () => {
+  it("exibe botões para Deduplicar, TTL Prune, Consolidar e Purgar", () => {
     renderPage();
-    ["Dedup", "TTL Prune", "Consolidate", "Purge"].forEach((l) =>
+    ["Deduplicar", "TTL Prune", "Consolidar", "Purgar"].forEach((l) =>
       expect(screen.getByRole("button", { name: l })).toBeInTheDocument(),
     );
   });
 
-  it("clicar em Dedup abre o dialog com select de projeto", async () => {
+  it("clicar em Deduplicar abre o dialog com select de projeto", async () => {
     renderPage();
-    await userEvent.click(screen.getByRole("button", { name: "Dedup" }));
-    expect(screen.getByText("Disparar Dedup")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Deduplicar" }));
+    expect(screen.getByText("Disparar Deduplicar")).toBeInTheDocument();
     expect(screen.getByLabelText("Selecionar projeto")).toBeInTheDocument();
   });
 
-  it("clicar em Purge abre dialog com aviso de operação destrutiva", async () => {
+  it("clicar em Purgar abre dialog com aviso de operação destrutiva", async () => {
     renderPage();
-    await userEvent.click(screen.getByRole("button", { name: "Purge" }));
+    await userEvent.click(screen.getByRole("button", { name: "Purgar" }));
     expect(screen.getByText(/DESTRUTIVA/i)).toBeInTheDocument();
   });
 
   it("fechar o dialog sem confirmar não dispara POST", async () => {
     renderPage();
-    await userEvent.click(screen.getByRole("button", { name: "Dedup" }));
+    await userEvent.click(screen.getByRole("button", { name: "Deduplicar" }));
     await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
     expect(mockedAxios.post).not.toHaveBeenCalled();
   });
 
   it("confirmar o disparo chama POST /admin/governance/jobs/dedup e recarrega", async () => {
     renderPage();
-    await userEvent.click(screen.getByRole("button", { name: "Dedup" }));
+    await userEvent.click(screen.getByRole("button", { name: "Deduplicar" }));
     await userEvent.click(
       screen.getByRole("button", { name: "Confirmar disparo" }),
     );
@@ -131,6 +143,6 @@ describe("GovernancePage", () => {
 
   it("a lista de governance jobs usa JobStatusBadge", () => {
     renderPage();
-    expect(screen.getByText("queued")).toHaveClass("bg-zinc-700");
+    expect(screen.getByText("Na fila")).toHaveClass("bg-zinc-700");
   });
 });

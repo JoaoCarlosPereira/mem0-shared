@@ -12,11 +12,15 @@ jest.mock("@/hooks/useAdminApi", () => ({
 }));
 
 import adminReducer, { setAdminOverview } from "@/store/adminSlice";
-import queuesReducer from "@/store/queuesSlice";
+import queuesReducer, { setFailedJobIds } from "@/store/queuesSlice";
 import OverviewPage from "@/app/admin/overview/page";
 import { StatCard } from "@/components/admin/StatCard";
 import { useAdminApi } from "@/hooks/useAdminApi";
 import type { AdminOverview } from "@/types/admin";
+
+jest.mock("@/hooks/useAcknowledgeQueueFailuresOnMount", () => ({
+  useAcknowledgeQueueFailuresOnMount: jest.fn(),
+}));
 
 const baseOverview: AdminOverview = {
   total_projects: 7,
@@ -32,11 +36,25 @@ const baseOverview: AdminOverview = {
   governance_queue_failed: 0,
 };
 
-function renderPage(overview: AdminOverview | null) {
+function renderPage(
+  overview: AdminOverview | null,
+  queues?: {
+    failedWriteJobIds?: string[];
+    failedGovernanceJobIds?: string[];
+  },
+) {
   const store = configureStore({
     reducer: { admin: adminReducer, queues: queuesReducer },
   });
   if (overview) store.dispatch(setAdminOverview(overview));
+  if (queues?.failedWriteJobIds || queues?.failedGovernanceJobIds) {
+    store.dispatch(
+      setFailedJobIds({
+        write: queues.failedWriteJobIds ?? [],
+        governance: queues.failedGovernanceJobIds ?? [],
+      }),
+    );
+  }
   return render(
     <Provider store={store}>
       <OverviewPage />
@@ -45,6 +63,10 @@ function renderPage(overview: AdminOverview | null) {
 }
 
 describe("OverviewPage", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   it("exibe skeleton (sem métricas) quando overview é null", () => {
     renderPage(null);
     expect(screen.getByText("Visão Geral")).toBeInTheDocument();
@@ -62,16 +84,36 @@ describe("OverviewPage", () => {
     expect(screen.getByText("123")).toBeInTheDocument();
   });
 
-  it("card da Write Queue não tem alerta quando write_queue_failed === 0", () => {
+  it("card da Fila de Escrita não tem alerta quando write_queue_failed === 0", () => {
     renderPage(baseOverview);
-    const card = screen.getByText("Write Queue").closest("[data-alert]");
+    const card = screen.getByText("Fila de Escrita").closest("[data-alert]");
     expect(card).toHaveAttribute("data-alert", "false");
   });
 
-  it("card da Write Queue tem alerta quando write_queue_failed > 0", () => {
-    renderPage({ ...baseOverview, write_queue_failed: 3 });
-    const card = screen.getByText("Write Queue").closest("[data-alert]");
+  it("card da Fila de Escrita tem alerta quando há falha não reconhecida", () => {
+    renderPage(
+      { ...baseOverview, write_queue_failed: 3 },
+      { failedWriteJobIds: ["a", "b", "c"] },
+    );
+    const card = screen.getByText("Fila de Escrita").closest("[data-alert]");
     expect(card).toHaveAttribute("data-alert", "true");
+  });
+
+  it("card da Fila de Governança não tem alerta quando falhas foram reconhecidas", () => {
+    window.localStorage.setItem(
+      "mem0-admin-queue-ui-prefs-v1",
+      JSON.stringify({
+        acknowledgedFailedIds: ["governance:job-1"],
+        hideCompleted: { write: false, governance: false },
+      }),
+    );
+    renderPage(
+      { ...baseOverview, governance_queue_failed: 1 },
+      { failedGovernanceJobIds: ["job-1"] },
+    );
+    const card = screen.getByText("Fila de Governança").closest("[data-alert]");
+    expect(card).toHaveAttribute("data-alert", "false");
+    expect(screen.queryByText(/com falha/)).not.toBeInTheDocument();
   });
 
   it("chama useAdminApi na montagem", () => {

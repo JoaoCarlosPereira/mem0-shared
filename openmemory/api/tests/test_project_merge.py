@@ -18,7 +18,8 @@ from app.governance.project_merge import (
     detect_duplicate_groups_with_llm,
     run_merge_projects_job,
 )
-from app.models import Base, Project, WriteAuditLog, WriteQueueJob, WriteQueueStatus
+from app.models import Base, GovernanceSchedule, Project, WriteAuditLog, WriteQueueJob, WriteQueueStatus
+from app.models import GovernanceJobType
 
 _MERGE_PATH = (
     Path(__file__).resolve().parents[1] / "app" / "routers" / "governance_project_merge.py"
@@ -137,6 +138,53 @@ def test_apply_project_merge_updates_sql_and_qdrant(factory):
     assert (
         db.query(WriteAuditLog).filter(WriteAuditLog.project == "sysmovs").count() == 1
     )
+    db.close()
+
+
+def test_apply_project_merge_merges_conflicting_governance_schedules(factory):
+    """When both canonical and alias have schedules for the same job_type, merge safely."""
+    import datetime
+
+    db = factory()
+    db.add(Project(name="sysmovs"))
+    db.add(Project(name="dsv-delphi-sysmovs"))
+    canonical_ts = datetime.datetime(2026, 6, 28, 12, 0, 0)
+    alias_ts = datetime.datetime(2026, 6, 29, 0, 0, 0)
+    db.add(
+        GovernanceSchedule(
+            job_type=GovernanceJobType.dedup,
+            scope="sysmovs",
+            last_run_at=canonical_ts,
+        )
+    )
+    db.add(
+        GovernanceSchedule(
+            job_type=GovernanceJobType.dedup,
+            scope="dsv-delphi-sysmovs",
+            last_run_at=alias_ts,
+        )
+    )
+    db.commit()
+
+    vs = MagicMock()
+    vs._create_filter.return_value = None
+    vs.client.scroll.return_value = ([], None)
+
+    apply_project_merge(
+        db,
+        vs,
+        canonical="sysmovs",
+        aliases=["dsv-delphi-sysmovs"],
+        job_id="job-sched",
+    )
+
+    rows = db.query(GovernanceSchedule).filter(
+        GovernanceSchedule.job_type == GovernanceJobType.dedup,
+        GovernanceSchedule.scope.in_(["sysmovs", "dsv-delphi-sysmovs"]),
+    ).all()
+    assert len(rows) == 1
+    assert rows[0].scope == "sysmovs"
+    assert rows[0].last_run_at == alias_ts
     db.close()
 
 

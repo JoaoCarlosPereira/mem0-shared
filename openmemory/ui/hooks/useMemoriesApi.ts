@@ -1,10 +1,17 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import axios from 'axios';
 import { Memory, Client, Category } from '@/components/types';
 import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '@/store/store';
 import { setAccessLogs, setMemoriesSuccess, setSelectedMemory, setRelatedMemories } from '@/store/memoriesSlice';
 import { getApiUrl } from "@/lib/api-url";
+import { parseApiError } from "@/lib/api-errors";
+
+export interface DeletionPolicy {
+  memory_delete_allowed: boolean;
+  bulk_delete_allowed: boolean;
+  message: string;
+}
 
 // Define the new simplified memory type
 export interface SimpleMemory {
@@ -94,6 +101,7 @@ interface UseMemoriesApiReturn {
   deleteMemories: (memoryIds: string[]) => Promise<void>;
   updateMemory: (memoryId: string, content: string) => Promise<void>;
   updateMemoryState: (memoryIds: string[], state: string) => Promise<void>;
+  deletionPolicy: DeletionPolicy | null;
   isLoading: boolean;
   error: string | null;
   hasUpdates: number;
@@ -105,10 +113,35 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [hasUpdates, setHasUpdates] = useState<number>(0);
+  const [deletionPolicy, setDeletionPolicy] = useState<DeletionPolicy | null>(null);
   const dispatch = useDispatch<AppDispatch>();
   const user_id = useSelector((state: RootState) => state.profile.userId);
   const memories = useSelector((state: RootState) => state.memories.memories);
   const selectedMemory = useSelector((state: RootState) => state.memories.selectedMemory);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await axios.get<DeletionPolicy>(
+          `${getApiUrl()}/api/v1/memories/deletion-policy`,
+        );
+        if (!cancelled) setDeletionPolicy(response.data);
+      } catch {
+        if (!cancelled) {
+          setDeletionPolicy({
+            memory_delete_allowed: false,
+            bulk_delete_allowed: false,
+            message:
+              "Não foi possível verificar a política de exclusão neste servidor.",
+          });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   
   const fetchMemories = useCallback(async (
@@ -185,13 +218,29 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
   };
 
   const deleteMemories = async (memory_ids: string[]) => {
+    if (deletionPolicy && !deletionPolicy.memory_delete_allowed) {
+      const blocked = new Error(deletionPolicy.message);
+      setError(deletionPolicy.message);
+      throw blocked;
+    }
+    if (
+      memory_ids.length > 1 &&
+      deletionPolicy &&
+      !deletionPolicy.bulk_delete_allowed
+    ) {
+      const msg =
+        "Exclusão em lote desabilitada. Defina MEM0_ALLOW_BULK_DELETE=1 no servidor.";
+      setError(msg);
+      throw new Error(msg);
+    }
     try {
-      await axios.delete(`${getApiUrl()}/api/v1/memories/`, {
-        data: { memory_ids, user_id }
+      await axios.post(`${getApiUrl()}/api/v1/memories/actions/delete`, {
+        memory_ids,
+        user_id,
       });
       dispatch(setMemoriesSuccess(memories.filter((memory: Memory) => !memory_ids.includes(memory.id))));
-    } catch (err: any) {
-      const errorMessage = err.message || 'Falha ao excluir memórias';
+    } catch (err: unknown) {
+      const errorMessage = parseApiError(err, "Falha ao excluir memórias");
       setError(errorMessage);
       setIsLoading(false);
       throw new Error(errorMessage);
@@ -349,6 +398,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
     deleteMemories,
     updateMemory,
     updateMemoryState,
+    deletionPolicy,
     isLoading,
     error,
     hasUpdates,

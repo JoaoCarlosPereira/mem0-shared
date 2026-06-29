@@ -4,6 +4,7 @@ from uuid import UUID
 from app.database import get_db
 from app.models import App, Memory, MemoryAccessLog, MemoryState, Project
 from app.utils.project_apps import merge_app_sources, project_to_app_id, resolve_project_name
+from app.utils.project_delete import delete_app_or_project
 from app.utils.read_audit import (
     count_distinct_memories_accessed,
     list_project_accessed_memories,
@@ -11,10 +12,18 @@ from app.utils.read_audit import (
 )
 from app.utils.vector_stats import count_project_memories, list_shared_memories
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session, joinedload
 
 router = APIRouter(prefix="/api/v1/apps", tags=["apps"])
+
+
+class DeleteProjectRequest(BaseModel):
+    """Strong confirmation: user must type the exact project name."""
+
+    confirm_name: str = Field(..., min_length=1)
+    user_id: Optional[str] = None
 
 
 def get_app_or_404(db: Session, app_id: UUID) -> App:
@@ -317,3 +326,26 @@ async def update_app_details(
     app.is_active = is_active
     db.commit()
     return {"status": "success", "message": "Updated app details successfully"}
+
+
+@router.post("/{app_id}/actions/delete")
+async def delete_app(
+    app_id: UUID,
+    request: DeleteProjectRequest,
+    db: Session = Depends(get_db),
+):
+    """Delete a project and all associated memories (requires confirm_name match)."""
+    result = delete_app_or_project(
+        db,
+        app_id,
+        confirm_name=request.confirm_name,
+        user_id=request.user_id,
+    )
+    return {
+        "status": "success",
+        "message": (
+            f"Project '{result['project']}' deleted "
+            f"({result['deleted_memories']} memories removed)."
+        ),
+        **result,
+    }

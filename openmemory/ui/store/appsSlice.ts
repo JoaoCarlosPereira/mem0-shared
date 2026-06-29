@@ -212,6 +212,12 @@ const appsSlice = createSlice({
     setSortDirection: (state, action: PayloadAction<'asc' | 'desc'>) => {
       state.filters.sortDirection = action.payload;
     },
+    removeApp: (state, action: PayloadAction<string>) => {
+      const appId = action.payload;
+      state.apps = state.apps.filter((app) => app.id !== appId);
+      state.listTotal = Math.max(0, state.listTotal - 1);
+      state.selectedApp = initialState.selectedApp;
+    },
   },
 });
 
@@ -234,6 +240,7 @@ export const {
   setActiveFilter,
   setSortBy,
   setSortDirection,
+  removeApp,
 } = appsSlice.actions;
 
 export default appsSlice.reducer;

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Edit,
   MoreHorizontal,
@@ -48,20 +49,40 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { formatDate } from "@/lib/helpers";
+import { ConfirmDeleteDialog } from "@/components/shared/ConfirmDeleteDialog";
 
 export function MemoryTable() {
   const { toast } = useToast();
   const router = useRouter();
   const dispatch = useDispatch();
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const selectedMemoryIds = useSelector(
     (state: RootState) => state.memories.selectedMemoryIds
   );
   const memories = useSelector((state: RootState) => state.memories.memories);
 
-  const { deleteMemories, updateMemoryState, isLoading } = useMemoriesApi();
+  const { deleteMemories, updateMemoryState, isLoading, deletionPolicy } = useMemoriesApi();
 
-  const handleDeleteMemory = (id: string) => {
-    deleteMemories([id]);
+  const handleDeleteMemory = async (id: string) => {
+    setDeleting(true);
+    try {
+      await deleteMemories([id]);
+      toast({
+        title: "Memória excluída",
+        description: "A memória foi removida com sucesso.",
+      });
+      setDeleteTargetId(null);
+    } catch (error) {
+      toast({
+        title: "Não foi possível excluir",
+        description:
+          error instanceof Error ? error.message : "Falha ao excluir memória",
+        variant: "destructive",
+      });
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const handleSelectAll = (checked: boolean) => {
@@ -288,7 +309,8 @@ export function MemoryTable() {
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
                       className="cursor-pointer text-red-500 focus:text-red-500"
-                      onClick={() => handleDeleteMemory(memory.id)}
+                      disabled={deletionPolicy?.memory_delete_allowed === false}
+                      onClick={() => setDeleteTargetId(memory.id)}
                     >
                       <Trash2 className="mr-2 h-4 w-4" />
                       Excluir
@@ -300,6 +322,18 @@ export function MemoryTable() {
           ))}
         </TableBody>
       </Table>
+      <ConfirmDeleteDialog
+        open={deleteTargetId !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTargetId(null);
+        }}
+        title="Excluir memória?"
+        description="Esta ação remove a memória permanentemente. Não pode ser desfeita."
+        loading={deleting}
+        onConfirm={() => {
+          if (deleteTargetId) void handleDeleteMemory(deleteTargetId);
+        }}
+      />
     </div>
   );
 }

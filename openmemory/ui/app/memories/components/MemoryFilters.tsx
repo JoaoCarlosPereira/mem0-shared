@@ -15,28 +15,40 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useRouter, useSearchParams } from "next/navigation";
 import { debounce } from "lodash";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import FilterComponent from "./FilterComponent";
 import { clearFilters } from "@/store/filtersSlice";
+import { ConfirmDeleteDialog } from "@/components/shared/ConfirmDeleteDialog";
 
 export function MemoryFilters() {
   const dispatch = useDispatch();
   const selectedMemoryIds = useSelector(
     (state: RootState) => state.memories.selectedMemoryIds
   );
-  const { deleteMemories, updateMemoryState, fetchMemories } = useMemoriesApi();
+  const { deleteMemories, updateMemoryState, fetchMemories, deletionPolicy } =
+    useMemoriesApi();
   const router = useRouter();
   const searchParams = useSearchParams();
   const activeFilters = useSelector((state: RootState) => state.filters.apps);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const handleDeleteSelected = async () => {
+    setDeleting(true);
     try {
       await deleteMemories(selectedMemoryIds);
       dispatch(clearSelection());
+      toast.success("Memória(s) excluída(s) com sucesso.");
+      setBulkDeleteOpen(false);
     } catch (error) {
-      console.error("Failed to delete memories:", error);
+      toast.error(
+        error instanceof Error ? error.message : "Falha ao excluir memórias",
+      );
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -148,8 +160,13 @@ export function MemoryFilters() {
                   Retomar Selecionadas
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={handleDeleteSelected}
+                  onClick={() => setBulkDeleteOpen(true)}
                   className="text-red-500"
+                  disabled={
+                    deletionPolicy?.memory_delete_allowed === false ||
+                    (selectedMemoryIds.length > 1 &&
+                      deletionPolicy?.bulk_delete_allowed === false)
+                  }
                 >
                   <FiTrash2 className="mr-2 h-4 w-4" />
                   Excluir Selecionadas
@@ -159,6 +176,15 @@ export function MemoryFilters() {
           </>
         )}
       </div>
+      <ConfirmDeleteDialog
+        open={bulkDeleteOpen}
+        onOpenChange={setBulkDeleteOpen}
+        title={`Excluir ${selectedMemoryIds.length} memória(s)?`}
+        description="Esta ação remove as memórias selecionadas permanentemente. Não pode ser desfeita."
+        confirmLabel="Excluir selecionadas"
+        loading={deleting}
+        onConfirm={handleDeleteSelected}
+      />
     </div>
   );
 }

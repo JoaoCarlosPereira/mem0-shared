@@ -21,6 +21,7 @@ import {
   setSelectedAppError,
 } from '@/store/appsSlice';
 import { getApiUrl } from "@/lib/api-url";
+import { parseApiError } from "@/lib/api-errors";
 
 interface ApiResponse {
   total: number;
@@ -59,6 +60,7 @@ interface UseAppsApiReturn {
   fetchAppMemories: (appId: string, page?: number, pageSize?: number) => Promise<void>;
   fetchAppAccessedMemories: (appId: string, page?: number, pageSize?: number) => Promise<void>;
   updateAppDetails: (appId: string, details: { is_active: boolean }) => Promise<void>;
+  deleteApp: (appId: string, confirmName: string) => Promise<{ deleted_memories: number; project: string }>;
   isLoading: boolean;
   error: string | null;
 }
@@ -197,12 +199,37 @@ export const useAppsApi = (): UseAppsApiReturn => {
     }
   };
 
+  const deleteApp = async (appId: string, confirmName: string) => {
+    setIsLoading(true);
+    try {
+      const response = await axios.post<{
+        deleted_memories: number;
+        project: string;
+        message: string;
+      }>(`${getApiUrl()}/api/v1/apps/${appId}/actions/delete`, {
+        confirm_name: confirmName,
+        user_id,
+      });
+      setIsLoading(false);
+      return {
+        deleted_memories: response.data.deleted_memories,
+        project: response.data.project,
+      };
+    } catch (err: unknown) {
+      const errorMessage = parseApiError(err, "Falha ao excluir projeto");
+      setError(errorMessage);
+      setIsLoading(false);
+      throw new Error(errorMessage);
+    }
+  };
+
   return {
     fetchApps,
     fetchAppDetails,
     fetchAppMemories,
     fetchAppAccessedMemories,
     updateAppDetails,
+    deleteApp,
     isLoading,
     error
   };
