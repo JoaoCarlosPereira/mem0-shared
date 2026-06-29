@@ -100,7 +100,7 @@ class GovernanceQueue:
             db.close()
 
     def mark_done(self, job_id: str) -> None:
-        self._set_status(job_id, GovernanceJobStatus.done)
+        self._set_status(job_id, GovernanceJobStatus.done, clear_error=True)
 
     def mark_failed(self, job_id: str, error: str, attempts: Optional[int] = None) -> None:
         self._set_status(job_id, GovernanceJobStatus.failed, error=error, attempts=attempts)
@@ -146,6 +146,7 @@ class GovernanceQueue:
         status: GovernanceJobStatus,
         error: Optional[str] = None,
         attempts: Optional[int] = None,
+        clear_error: bool = False,
     ) -> None:
         db = self._session()
         try:
@@ -157,7 +158,9 @@ class GovernanceQueue:
             if row is None:
                 return
             row.status = status
-            if error is not None:
+            if clear_error:
+                row.error = None
+            elif error is not None:
                 row.error = error
             if attempts is not None:
                 row.attempts = attempts

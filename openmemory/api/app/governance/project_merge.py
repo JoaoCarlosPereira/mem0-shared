@@ -19,6 +19,7 @@ from app.models import (
     Project,
     WriteAuditLog,
     WriteQueueJob,
+    WriteQueueStatus,
 )
 from app.utils.projects import upsert_project
 from app.utils.read_cache import read_cache
@@ -195,6 +196,28 @@ def relocate_project_memories(
     return moved
 
 
+def _merge_governance_schedules(db: Session, *, canonical: str, alias: str) -> None:
+    """Merge alias schedule rows into canonical without PK collisions."""
+    alias_rows = db.query(GovernanceSchedule).filter(GovernanceSchedule.scope == alias).all()
+    for alias_row in alias_rows:
+        canonical_row = (
+            db.query(GovernanceSchedule)
+            .filter(
+                GovernanceSchedule.job_type == alias_row.job_type,
+                GovernanceSchedule.scope == canonical,
+            )
+            .first()
+        )
+        if canonical_row is None:
+            alias_row.scope = canonical
+            continue
+        alias_ts = alias_row.last_run_at
+        canonical_ts = canonical_row.last_run_at
+        if alias_ts is not None and (canonical_ts is None or alias_ts > canonical_ts):
+            canonical_row.last_run_at = alias_ts
+        db.delete(alias_row)
+
+
 def _merge_sql_references(db: Session, *, canonical: str, alias: str) -> None:
     db.query(WriteQueueJob).filter(WriteQueueJob.project == alias).update(
         {WriteQueueJob.project: canonical},
@@ -208,10 +231,7 @@ def _merge_sql_references(db: Session, *, canonical: str, alias: str) -> None:
         {GovernanceJob.project: canonical},
         synchronize_session=False,
     )
-    db.query(GovernanceSchedule).filter(GovernanceSchedule.scope == alias).update(
-        {GovernanceSchedule.scope: canonical},
-        synchronize_session=False,
-    )
+    _merge_governance_schedules(db, canonical=canonical, alias=alias)
 
     alias_policy = (
         db.query(GovernancePolicy).filter(GovernancePolicy.project_name == alias).first()
