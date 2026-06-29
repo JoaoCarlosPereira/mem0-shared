@@ -103,3 +103,20 @@ def test_api_delete_succeeds_when_guard_disabled(db_factory, monkeypatch):
 
     assert resp.status_code == 200
     mock_client.delete.assert_called_once_with(str(mem_id))
+
+
+def test_deletion_policy_endpoint_default_blocked(db_factory):
+    client = _client(db_factory)
+    response = client.get("/api/v1/memories/deletion-policy")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["memory_delete_allowed"] is False
+    assert "desabilitada" in body["message"].lower()
+
+
+def test_deletion_policy_endpoint_when_enabled(db_factory, monkeypatch):
+    monkeypatch.setenv("MEM0_ALLOW_MEMORY_DELETE", "1")
+    client = _client(db_factory)
+    response = client.get("/api/v1/memories/deletion-policy")
+    assert response.status_code == 200
+    assert response.json()["memory_delete_allowed"] is True

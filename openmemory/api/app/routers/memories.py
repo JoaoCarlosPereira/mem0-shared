@@ -192,6 +192,24 @@ async def list_memories(
     )
 
 
+@router.get("/deletion-policy")
+async def memory_deletion_policy():
+    """Read-only delete guard status for the memories UI (fail-closed by default)."""
+    from app.utils.deletion_guard import deletion_guard_status
+
+    status = deletion_guard_status()
+    allowed = status["memory_delete_allowed"]
+    return {
+        **status,
+        "message": (
+            "Exclusão de memórias desabilitada neste servidor (proteção fail-closed). "
+            "Defina MEM0_ALLOW_MEMORY_DELETE=1 para habilitar exclusões deliberadas."
+            if not allowed
+            else "Exclusão habilitada — confirme cada ação na interface antes de remover."
+        ),
+    }
+
+
 # Get all categories
 @router.get("/categories")
 async def get_categories(
