@@ -1,8 +1,8 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, validator
 
 from app.utils.datetime_format import format_utc_iso
 
@@ -147,3 +147,71 @@ class AdminOverviewResponse(BaseModel):
     governance_queue_queued: int
     governance_queue_processing: int
     governance_queue_failed: int
+
+
+# --------------------------------------------------------------------------- #
+# Backup (task_01 / ADR-001, ADR-002, ADR-003)
+# --------------------------------------------------------------------------- #
+class BackupPolicySchema(BaseModel):
+    """Configuração do backup autônomo, persistida em ``Config(key="backup_policy")``.
+
+    Ver TechSpec, seção "Modelos de Dados". A validação de ``local_dir`` gravável é
+    feita na camada de endpoint (PUT), pois depende do filesystem do container.
+    """
+
+    enabled: bool = False
+    frequency: Literal["daily", "weekly"] = "daily"
+    run_at: str = "03:00"  # HH:MM, horário off-peak
+    timezone: str = "America/Sao_Paulo"  # IANA
+    local_dir: str = "/mnt/backups"
+    retention: int = Field(5, ge=1, le=50)
+    mirror_s3: bool = False
+
+    @field_validator("run_at")
+    @classmethod
+    def _valid_run_at(cls, v: str) -> str:
+        parts = v.split(":")
+        if len(parts) != 2:
+            raise ValueError("run_at deve estar no formato HH:MM")
+        try:
+            hh, mm = int(parts[0]), int(parts[1])
+        except ValueError as exc:
+            raise ValueError("run_at deve estar no formato HH:MM") from exc
+        if not (0 <= hh <= 23 and 0 <= mm <= 59):
+            raise ValueError("run_at fora do intervalo 00:00–23:59")
+        return f"{hh:02d}:{mm:02d}"
+
+    @field_validator("timezone")
+    @classmethod
+    def _valid_timezone(cls, v: str) -> str:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"timezone IANA inválida: {v}") from exc
+        return v
+
+
+class BackupArchiveInfo(BaseModel):
+    name: str
+    created_at: Optional[datetime] = None
+    size: int = 0
+    points_count: Optional[int] = None
+    location: str = "local"  # local | s3
+
+
+class BackupStatusResponse(BaseModel):
+    last_backup: Optional[str] = None
+    rpo_age_seconds: Optional[float] = None
+    archives: int = 0
+    last_error: Optional[str] = None
+
+
+class BackupListResponse(BaseModel):
+    archives: List[BackupArchiveInfo] = Field(default_factory=list)
+
+
+class BackupRestoreRequest(BaseModel):
+    archive: str
+    confirm: str

@@ -16,6 +16,7 @@
 #   ./scripts/bootstrap-scale.sh
 #   ./scripts/bootstrap-scale.sh --skip-detect    # produção com URLs explícitas no .env
 #   ./scripts/bootstrap-scale.sh --migrate-sqlite /path/to/openmemory.db
+#   ./scripts/bootstrap-scale.sh --restore-from /path/to/backup.zip  # DR: restaura de um .zip
 #
 # Ollama externo: por padrão os containers usam http://host.docker.internal:11434.
 # Para um Ollama em outra máquina, defina no .env: OLLAMA_LLM_URL, OLLAMA_EMBED_URL,
@@ -30,19 +31,27 @@ PROXY_PORT="${PROXY_PORT:-8765}"
 TIMEOUT="${TIMEOUT:-300}"
 SKIP_DETECT=0
 SQLITE_SOURCE=""
+RESTORE_FROM=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --skip-detect) SKIP_DETECT=1; shift ;;
     --migrate-sqlite) SQLITE_SOURCE="$2"; shift 2 ;;
     --migrate-sqlite=*) SQLITE_SOURCE="${1#*=}"; shift ;;
+    --restore-from) RESTORE_FROM="$2"; shift 2 ;;
+    --restore-from=*) RESTORE_FROM="${1#*=}"; shift ;;
     -h|--help)
-      sed -n '2,23p' "$0"
+      sed -n '2,24p' "$0"
       exit 0
       ;;
     *) echo "Argumento desconhecido: $1" >&2; exit 2 ;;
   esac
 done
+
+if [ -n "$RESTORE_FROM" ] && [ ! -f "$RESTORE_FROM" ]; then
+  echo "ERRO: arquivo de backup não encontrado: $RESTORE_FROM" >&2
+  exit 2
+fi
 
 echo "==> Verificando pré-requisitos (docker, docker compose v2, curl)..."
 command -v docker >/dev/null 2>&1 || { echo "ERRO: Docker não encontrado." >&2; exit 1; }
@@ -96,6 +105,17 @@ docker compose -f "$COMPOSE_FILE" run --rm --no-deps openmemory-mcp alembic upgr
 if [ -n "$SQLITE_SOURCE" ]; then
   echo "==> Migração guiada SQLite -> PostgreSQL (requer python3 no host)..."
   python3 scripts/migrate_sqlite_to_postgres.py "$SQLITE_SOURCE"
+fi
+
+# Restore opcional de desastre (ADR-004): aplica um .zip ANTES de liberar a stack
+# de aplicação, em container one-shot (mesmo padrão do alembic upgrade). Sem a
+# flag, a instalação segue normal (stack vazia). O snapshot de segurança NÃO se
+# aplica aqui (ambiente novo) — ver app/scripts/restore_backup.py.
+if [ -n "$RESTORE_FROM" ]; then
+  echo "==> Restaurando estado a partir de ${RESTORE_FROM} (one-shot)..."
+  docker compose -f "$COMPOSE_FILE" run --rm --no-deps \
+    -v "$(realpath "$RESTORE_FROM"):/restore/backup.zip:ro" \
+    openmemory-mcp python -m app.scripts.restore_backup /restore/backup.zip
 fi
 
 if [ "$SKIP_DETECT" -eq 0 ] && [ -z "${OLLAMA_EMBED_URL:-}" ] && [ -z "${EMBEDDER_BASE_URL:-}" ]; then

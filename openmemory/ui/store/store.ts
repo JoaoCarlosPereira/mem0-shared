@@ -7,6 +7,7 @@ import filtersReducer from './filtersSlice';
 import configReducer from './configSlice';
 import adminReducer from './adminSlice';
 import queuesReducer from './queuesSlice';
+import backupReducer from './backupSlice';
 
 export const store = configureStore({
   reducer: {
@@ -18,6 +19,7 @@ export const store = configureStore({
     config: configReducer,
     admin: adminReducer,
     queues: queuesReducer,
+    backup: backupReducer,
   },
 });
 

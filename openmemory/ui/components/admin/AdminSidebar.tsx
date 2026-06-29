@@ -10,6 +10,7 @@ import {
   Database,
   Shield,
   ScrollText,
+  HardDrive,
 } from "lucide-react";
 import { selectFailedCount } from "@/store/queuesSlice";
 import { APP_NAME } from "@/lib/branding";
@@ -25,6 +26,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Filas", href: "/admin/queues", icon: ListOrdered },
   { label: "Projetos", href: "/admin/projects", icon: Database },
   { label: "Governança", href: "/admin/governance", icon: Shield },
+  { label: "Backup", href: "/admin/backup", icon: HardDrive },
   { label: "Log de Auditoria", href: "/admin/audit", icon: ScrollText },
 ];
 

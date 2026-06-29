@@ -20,7 +20,7 @@ from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -35,12 +35,18 @@ from app.models import (
 )
 from app.schemas import (
     AdminOverviewResponse,
+    BackupListResponse,
+    BackupPolicySchema,
+    BackupRestoreRequest,
+    BackupStatusResponse,
     PaginatedWriteAuditResponse,
     PaginatedWriteQueueResponse,
     WriteAuditLogResponse,
     WriteQueueJobResponse,
 )
 from app.utils.backup import BackupService
+from app.utils.backup_archive import BackupArchive
+from app.utils.backup_policy import get_backup_policy, save_backup_policy
 from app.utils.metrics import PROJECT_MEMORY_COUNT, PROJECT_SIZE_OVER_THRESHOLD
 from app.utils.migration_control import MigrationControl, MigrationError, default_count_fn
 from app.utils.promotion import PromotionService, default_promotion_service
@@ -228,39 +234,80 @@ def promote_project(
 
 
 # --------------------------------------------------------------------------- #
-# Backup / restore (task_03 / ADR-003)
+# Backup / restore (task_04 / ADR-003, ADR-005)
+#
+# Os endpoints operam sobre BackupArchive (.zip unificado + rotação FIFO em
+# diretório local, espelho S3 opcional). run/restore rodam em background (202).
+# Restore exige confirmação forte (confirm == nome do arquivo) e dispara o
+# snapshot de segurança automático (ver BackupArchive.restore / ADR-005).
 # --------------------------------------------------------------------------- #
-class RestoreRequest(BaseModel):
-    key_prefix: str
+def _backup_archive(db: Session = Depends(get_db)) -> BackupArchive:
+    """Build a BackupArchive wired to the live backends and persisted policy."""
+    return BackupArchive(BackupService(), get_backup_policy(db))
+
+
+def _ensure_writable(path: str) -> None:
+    try:
+        os.makedirs(path, exist_ok=True)
+        if not os.access(path, os.W_OK):
+            raise PermissionError(path)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"local_dir não gravável: {path}") from exc
 
 
 @router.post("/backup/run", status_code=202)
 def backup_run(
     background: BackgroundTasks,
-    service: BackupService = Depends(_backup_service),
+    archive: BackupArchive = Depends(_backup_archive),
 ) -> dict:
     """Dispara um backup completo (Qdrant + PostgreSQL) em background."""
-    background.add_task(service.run_backup)
+    background.add_task(archive.create)
     return {"status": "accepted"}
 
 
-@router.get("/backup/status")
-def backup_status(service: BackupService = Depends(_backup_service)) -> dict:
-    """Último backup, total de objetos e idade (RPO corrente)."""
-    return service.status()
+@router.get("/backup/status", response_model=BackupStatusResponse)
+def backup_status(archive: BackupArchive = Depends(_backup_archive)) -> BackupStatusResponse:
+    """Último backup, nº de cópias, idade (RPO) e último erro."""
+    return BackupStatusResponse(**archive.status())
+
+
+@router.get("/backup/list", response_model=BackupListResponse)
+def backup_list(archive: BackupArchive = Depends(_backup_archive)) -> BackupListResponse:
+    """Lista as cópias disponíveis (local + S3 quando espelhado)."""
+    return BackupListResponse(archives=archive.list())
+
+
+@router.get("/backup/policy", response_model=BackupPolicySchema)
+def backup_policy_get(db: Session = Depends(get_db)) -> BackupPolicySchema:
+    """Retorna a política de backup atual (defaults se ausente)."""
+    return get_backup_policy(db)
+
+
+@router.put("/backup/policy", response_model=BackupPolicySchema)
+def backup_policy_put(payload: dict, db: Session = Depends(get_db)) -> BackupPolicySchema:
+    """Valida (schema + local_dir gravável) e persiste a política de backup."""
+    try:
+        policy = BackupPolicySchema(**payload)
+    except ValidationError as exc:
+        detail = [{"campo": list(e.get("loc", [])), "erro": e.get("msg")} for e in exc.errors()]
+        raise HTTPException(status_code=400, detail=detail) from exc
+    _ensure_writable(policy.local_dir)
+    return save_backup_policy(db, policy)
 
 
 @router.post("/backup/restore", status_code=202)
 def backup_restore(
-    req: RestoreRequest,
+    req: BackupRestoreRequest,
     background: BackgroundTasks,
-    service: BackupService = Depends(_backup_service),
+    archive: BackupArchive = Depends(_backup_archive),
 ) -> dict:
-    """Inicia restauração a partir de um prefixo de backup; 404 se inexistente."""
-    if not service.exists(req.key_prefix):
-        raise HTTPException(status_code=404, detail=f"no backup under {req.key_prefix}")
-    background.add_task(service.restore, req.key_prefix)
-    return {"status": "accepted", "key_prefix": req.key_prefix}
+    """Restore guiado: 404 se o arquivo não existe; 400 se a confirmação não bater."""
+    if not archive.has(req.archive):
+        raise HTTPException(status_code=404, detail=f"backup inexistente: {req.archive}")
+    if req.confirm != req.archive:
+        raise HTTPException(status_code=400, detail="confirmação não corresponde ao backup")
+    background.add_task(archive.restore, archive.path_for(req.archive))
+    return {"status": "accepted", "archive": req.archive}
 
 
 # --------------------------------------------------------------------------- #

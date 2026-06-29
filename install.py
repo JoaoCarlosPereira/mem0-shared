@@ -34,10 +34,18 @@ Uso:
 Atualização (preserva memórias):
   python install.py --update                          # atualiza no lugar, mantém dados/.env
   python install.py --update --no-pull                # rebuild sem 'git pull' (código atual)
+  python install.py --update --backup-dir /srv/mem0-backups   # define o destino dos .zip
 
   O --update faz: git pull (best-effort) → rebuild das imagens → migrations
   aditivas (produção) → recria os containers no lugar. NUNCA remove volumes,
   então Qdrant + SQLite/PostgreSQL e os segredos do .env permanecem intactos.
+
+  Traz automaticamente as funcionalidades novas presentes no compose (ex.: o
+  serviço openmemory-backup-worker e o volume de backup local /mnt/backups), pois
+  recria os containers a partir do compose atual. O sistema de backup NÃO adiciona
+  migração nova (reusa a tabela Config), então a atualização é puramente aditiva.
+  Como salvaguarda, o --update mede o points_count do Qdrant antes e depois e avisa
+  se algo mudar (as memórias vivem no volume, que é preservado).
 """
 
 import argparse
@@ -130,6 +138,61 @@ def set_env(file_path, key, value):
 def _get_json(url):
     with urllib.request.urlopen(url, timeout=5) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def qdrant_total_points(port=6333):
+    """Soma o points_count de todas as coleções do Qdrant (ou None se indisponível).
+
+    Salvaguarda da atualização (regra CRITICAL — proteção de memórias): comparamos
+    o total antes/depois do recreate para detectar perda. Best-effort: qualquer
+    falha de leitura retorna None (sem bloquear o update).
+    """
+    try:
+        cols = _get_json(f"http://127.0.0.1:{port}/collections")
+    except Exception:
+        return None
+    names = [c.get("name") for c in cols.get("result", {}).get("collections", [])]
+    total = 0
+    for n in names:
+        try:
+            info = _get_json(f"http://127.0.0.1:{port}/collections/{n}")
+        except Exception:
+            return None
+        cnt = info.get("result", {}).get("points_count")
+        if cnt is not None:
+            total += int(cnt)
+    return total
+
+
+def wait_qdrant_points(timeout, port=6333):
+    """Aguarda o Qdrant responder e retorna o points_count total (ou None)."""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        last = qdrant_total_points(port)
+        if last is not None:
+            return last
+        time.sleep(2)
+    return last
+
+
+def ensure_backup_dir(compose_env, args):
+    """Garante LOCAL_BACKUP_DIR no .env e cria o diretório de host dos backups .zip.
+
+    Apenas prepara o DESTINO dos .zip (montado em /mnt/backups na API e no
+    backup-worker). Não toca em memórias. Sem --backup-dir, usa o valor atual do
+    .env ou o default ./backups (relativo ao diretório do compose).
+    """
+    configured = args.backup_dir or read_env(compose_env, "LOCAL_BACKUP_DIR") or "./backups"
+    p = Path(configured)
+    host_path = p if p.is_absolute() else (COMPOSE_DIR / configured)
+    try:
+        host_path.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        warn(f"Não consegui criar o diretório de backup {host_path}: {e}")
+    if args.backup_dir:
+        set_env(compose_env, "LOCAL_BACKUP_DIR", configured)
+    ok(f"Backup local: {host_path} (montado em /mnt/backups na API e no worker).")
 
 
 def detect_ollama_models(ollama_url):
@@ -554,6 +617,20 @@ def run_update(args):
     ok("As memórias e segredos são preservados: nenhum volume será removido e o "
        ".env atual é mantido.")
 
+    compose_env = COMPOSE_DIR / ".env"
+
+    # 0. Funcionalidades novas do compose: garante o destino do backup local
+    #    (serviço openmemory-backup-worker + volume /mnt/backups são criados pelo
+    #    force-recreate a partir do compose atual; aqui só preparamos o diretório).
+    ensure_backup_dir(compose_env, args)
+
+    # Salvaguarda (proteção de memórias): mede o Qdrant ANTES de recriar.
+    points_before = qdrant_total_points()
+    if points_before is not None:
+        ok(f"Qdrant antes da atualização: {points_before} pontos (memórias).")
+    else:
+        warn("Não consegui ler o points_count do Qdrant agora (seguindo a atualização).")
+
     # 1. Código novo (opcional) ----------------------------------------------
     if not args.no_pull:
         git_pull()
@@ -588,12 +665,29 @@ def run_update(args):
         die("Falha ao aplicar as migrations. Os dados NÃO foram alterados.")
     ok("Schema do PostgreSQL atualizado (dados preservados).")
 
-    # 4. Recria o stack completo (inclui a UI) — volumes preservados ----------
-    # --force-recreate: garante que NENHUM container fique na imagem antiga;
-    # --remove-orphans: remove serviços que saíram do compose. Volumes intactos.
-    log("Recriando TODOS os containers na versão nova (force-recreate, sem tocar em volumes)")
-    if dc("up", "-d", "--force-recreate", "--remove-orphans").returncode != 0:
-        die("Falha ao recriar os containers do stack de produção.")
+    # 4. Recria SOMENTE os serviços de aplicação na versão nova ---------------
+    # Serviços com estado (Qdrant/PostgreSQL/Redis/PgBouncer) NÃO são recriados:
+    # seus containers permanecem no ar e os dados intactos. Só os containers de
+    # aplicação — que não guardam estado próprio (os dados vivem em Qdrant/Postgres)
+    # — sobem na imagem nova. Isso evita reiniciar/recriar o mem0_store (Qdrant)
+    # por engano (regra CRITICAL de proteção de memórias).
+    app_services = [
+        "openmemory-mcp",
+        "openmemory-write-worker",
+        "openmemory-governance-worker",
+        "openmemory-backup-worker",
+        "openmemory-ui",
+    ]
+    log("Recriando apenas os serviços de aplicação na versão nova "
+        "(Qdrant/PostgreSQL/Redis/PgBouncer preservados — sem recreate)")
+    if dc("up", "-d", "--no-deps", "--force-recreate", *app_services).returncode != 0:
+        die("Falha ao recriar os serviços de aplicação.")
+    # Garante o restante do stack no ar (Traefik, observabilidade, MinIO) SEM
+    # force-recreate: containers já em execução (inclui os com estado) ficam
+    # intocados; --remove-orphans só remove serviços que saíram do compose.
+    log("Subindo serviços auxiliares (sem recreate dos containers já no ar)")
+    if dc("up", "-d", "--remove-orphans").returncode != 0:
+        die("Falha ao subir os serviços auxiliares do stack.")
     port = int(args.proxy_port)
 
     # 5. Validação ------------------------------------------------------------
@@ -605,12 +699,34 @@ def run_update(args):
         die("/health não respondeu saudável a tempo (os dados estão preservados).")
     ok(f"/health saudável ({detail}).")
 
+    # 6. Salvaguarda: confere o Qdrant DEPOIS (memórias preservadas no volume) -
+    if points_before is not None:
+        points_after = wait_qdrant_points(30)
+        if points_after is None:
+            warn("Qdrant no ar, mas não consegui reler o points_count para conferir.")
+        elif points_after < points_before:
+            warn(f"ATENÇÃO: points_count caiu de {points_before} para {points_after}. "
+                 "O volume mem0_storage NÃO foi removido — o Qdrant pode ainda estar "
+                 "reindexando. Verifique http://localhost:6333/collections/openmemory "
+                 "e, se necessário, restaure um backup (.zip) pela aba Admin → Backup.")
+        else:
+            ok(f"Qdrant após a atualização: {points_after} pontos — memórias preservadas.")
+
+    # Confere se o novo worker de backup subiu (funcionalidade nova).
+    bw = dc("ps", "openmemory-backup-worker", capture_output=True, text=True)
+    if bw.returncode == 0 and "openmemory-backup-worker" in (bw.stdout or ""):
+        ok("Serviço openmemory-backup-worker no ar (agendamento de backup disponível).")
+    else:
+        warn("Não confirmei o openmemory-backup-worker em execução — verifique com "
+             "'docker compose -f docker-compose.scale.yml ps openmemory-backup-worker'.")
+
     log("Atualização concluída 🎉 — versão nova no ar, memórias intactas.")
     print(f"""
-  UI/Admin:   http://localhost:3000   (painel em /admin)
+  UI/Admin:   http://localhost:3000   (painel em /admin → Backup)
   Proxy MCP:  http://localhost:{port}
   Health:     http://localhost:{port}/health
-  Dados preservados: Qdrant + PostgreSQL (volume mem0_pgdata) + segredos do .env.""")
+  Dados preservados: Qdrant + PostgreSQL (volume mem0_pgdata) + segredos do .env.
+  Backup: configure destino/agenda/retenção e restore na aba Admin → Backup.""")
     return 0
 
 
@@ -899,6 +1015,9 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
     log("Definindo o local de salvamento (Qdrant)")
     configure_storage_scale(args.data_dir, interactive=not args.yes, compose_env=compose_env)
 
+    # Destino do backup local (.zip) — funcionalidade de backup (ADR-003).
+    ensure_backup_dir(compose_env, args)
+
     # Orquestração ------------------------------------------------------------
     log("Subindo infraestrutura base (PostgreSQL, PgBouncer, Redis, Qdrant)")
     if dc("up", "-d", "postgres", "pgbouncer", "redis", "mem0_store").returncode != 0:
@@ -986,6 +1105,10 @@ def parse_args(argv):
     p.add_argument("--data-dir", default=None,
                    help="Diretório no host para salvar as memórias (Qdrant + SQLite). "
                         "Vazio/omitido = volumes Docker gerenciados (padrão).")
+    p.add_argument("--backup-dir", default=os.environ.get("LOCAL_BACKUP_DIR"),
+                   help="Diretorio no host para os backups .zip (montado em /mnt/backups). "
+                        "Vazio/omitido = mantem o atual ou usa ./backups. Tambem "
+                        "configuravel depois na UI (Admin > Backup).")
     p.add_argument("--yes", "-y", action="store_true", help="Não-interativo (usa --llm/--embedder).")
     p.add_argument("--skip-models", action="store_true", help="Não mexe nos modelos do .env.")
     # --- Atualização in-place (preserva memórias) -----------------------------

@@ -104,6 +104,56 @@ class BackupService:
         cols = qc.get_collections().collections
         return [c.name for c in cols]
 
+    # -- collect (reutilizado por BackupArchive, task_02) ------------------
+    def collect_qdrant_snapshots(self, qc=None) -> "dict[str, bytes]":
+        """Snapshot nativo de cada coleção como ``{nome: bytes}`` (vazio se sem Qdrant)."""
+        qc = qc if qc is not None else self._qdrant()
+        out: "dict[str, bytes]" = {}
+        if qc is None:
+            return out
+        for name in self._collections(qc):
+            snapshot = qc.create_snapshot(collection_name=name)
+            out[name] = qc.download_snapshot(
+                collection_name=name, snapshot_name=_snap_name(snapshot)
+            )
+        return out
+
+    def collect_pg_dump(self) -> Optional[bytes]:
+        """Dump gzip do PostgreSQL, ou ``None`` quando o backend não é PostgreSQL."""
+        if not is_postgresql(self._db_url):
+            return None
+        return self._pg_dump(self._db_url)
+
+    def qdrant_points_count(self, qc=None) -> Optional[int]:
+        """Total de pontos somando as coleções (best-effort; ``None`` se indisponível)."""
+        qc = qc if qc is not None else self._qdrant()
+        if qc is None:
+            return None
+        total, found = 0, False
+        for name in self._collections(qc):
+            try:
+                info = qc.get_collection(name)
+            except Exception:  # noqa: BLE001 — métrica best-effort, não deve falhar o backup
+                continue
+            cnt = getattr(info, "points_count", None)
+            if cnt is not None:
+                total += int(cnt)
+                found = True
+        return total if found else None
+
+    # -- restore primitives (reutilizado por BackupArchive, task_03) -------
+    def apply_pg_dump(self, dump: bytes) -> None:
+        """Aplica um dump gzip do PostgreSQL via ``psql`` (a partir de bytes)."""
+        sql = gzip.decompress(dump)
+        subprocess.run(["psql", "--dbname", self._db_url], input=sql, check=True)
+
+    def recover_qdrant_snapshot(self, name: str, data: bytes, qc=None) -> None:
+        """Recupera uma coleção do Qdrant a partir dos bytes do snapshot."""
+        qc = qc if qc is not None else self._qdrant()
+        if qc is None:
+            return
+        qc.recover_snapshot(collection_name=name, location=data)
+
     # -- backup ------------------------------------------------------------
     def run_backup(self, prefix: str = "backups") -> BackupResult:
         started = time.perf_counter()
@@ -112,17 +162,13 @@ class BackupService:
         result = BackupResult(key_prefix=f"{prefix}/{date_key}")
         try:
             s3 = self._s3_client()
-            qc = self._qdrant()
-            if qc is not None:
-                for name in self._collections(qc):
-                    snapshot = qc.create_snapshot(collection_name=name)
-                    data = qc.download_snapshot(collection_name=name, snapshot_name=_snap_name(snapshot))
-                    key = f"{result.key_prefix}/qdrant/{name}.snapshot"
-                    s3.put_object(Bucket=self._bucket, Key=key, Body=data)
-                    result.qdrant_objects.append(key)
+            for name, data in self.collect_qdrant_snapshots().items():
+                key = f"{result.key_prefix}/qdrant/{name}.snapshot"
+                s3.put_object(Bucket=self._bucket, Key=key, Body=data)
+                result.qdrant_objects.append(key)
 
-            if is_postgresql(self._db_url):
-                dump = self._pg_dump(self._db_url)
+            dump = self.collect_pg_dump()
+            if dump is not None:
                 key = f"{result.key_prefix}/postgres/dump.sql.gz"
                 s3.put_object(Bucket=self._bucket, Key=key, Body=dump)
                 result.postgres_object = key

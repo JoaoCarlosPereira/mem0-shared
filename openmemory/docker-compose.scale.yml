@@ -120,6 +120,12 @@ services:
         condition: service_healthy
       traefik:
         condition: service_started
+    # Diretório local de backup (.zip), montado para restore/list/status e backup
+    # manual via /admin/backup/* (task_06 / ADR-003). Alinhado ao local_dir padrão
+    # da BackupPolicy (/mnt/backups). Defina LOCAL_BACKUP_DIR no .env para apontar
+    # a um caminho da LAN. NÃO substitui os volumes mem0_storage/mem0_pgdata.
+    volumes:
+      - ${LOCAL_BACKUP_DIR:-./backups}:/mnt/backups
     command: >
       sh -c "uvicorn main:app --host 0.0.0.0 --port 8765 --workers 2"
 
@@ -157,6 +163,28 @@ services:
       redis:
         condition: service_healthy
     command: python -m app.workers.governance_worker
+
+  # Backup autônomo (task_06 / ADR-002). Lê a BackupPolicy (Config) e dispara
+  # BackupArchive.create() conforme a agenda; respeita enabled=False por padrão
+  # (não faz backup até ser configurado na UI). Singleton; grava no diretório
+  # local montado e, se mirror_s3, espelha no bucket.
+  openmemory-backup-worker:
+    <<: *api-common
+    container_name: openmemory_backup_worker
+    environment:
+      <<: *api-env
+      RUN_EMBEDDED_WORKER: "false"
+      BACKUP_WORKER_SLEEP: ${BACKUP_WORKER_SLEEP:-300}
+    volumes:
+      - ${LOCAL_BACKUP_DIR:-./backups}:/mnt/backups
+    depends_on:
+      mem0_store:
+        condition: service_started
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: python -m app.workers.backup_worker
 
   # Blue-green partition migration (Fase 2 / task_06 / ADR-003). Run on demand to
   # copy the existing base into the partitioned (green) collection; isolated from
