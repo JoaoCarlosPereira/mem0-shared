@@ -10,4 +10,6 @@ export interface Memory {
   created_at: number
   app_name: string
   state: "active" | "paused" | "archived" | "deleted"
+  // Grupo (equipe) do autor da memória (task_09). Ausente/null => sem grupo resolvível.
+  group?: string | null
 }

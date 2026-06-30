@@ -146,18 +146,47 @@ class Project(Base):
     shard_key = Column(String, nullable=True)
 
 
+# Nome do grupo padrão ao qual usuários sem grupo explícito são associados
+# (ADR-001/ADR-002). Mantido como constante para ser compartilhado entre o modelo,
+# a migração e a lógica de grupo (fallback de leitura e gestão de membros).
+DEFAULT_GROUP_NAME = "Default"
+
+
+class Group(Base):
+    """Equipe da empresa à qual usuários pertencem (ADR-002).
+
+    Cada usuário pertence a no máximo um grupo (``users.group_id``). A associação
+    memória→grupo é indireta e dinâmica: resolvida via o grupo atual do autor no
+    momento da leitura, nunca persistida no payload do vetor.
+    """
+
+    __tablename__ = "groups"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    name = Column(String, nullable=False, unique=True, index=True)
+    created_at = Column(DateTime, default=get_current_utc_time, index=True)
+    updated_at = Column(DateTime,
+                        default=get_current_utc_time,
+                        onupdate=get_current_utc_time)
+
+    members = relationship("User", back_populates="group")
+
+
 class User(Base):
     __tablename__ = "users"
     id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
     user_id = Column(String, nullable=False, unique=True, index=True)
     name = Column(String, nullable=True, index=True)
     email = Column(String, unique=True, nullable=True, index=True)
+    # FK nullable para retrocompatibilidade: usuários sem grupo explícito são
+    # tratados como pertencentes ao grupo Default pela lógica de grupo (ADR-002).
+    group_id = Column(UUID, ForeignKey("groups.id"), nullable=True, index=True)
     metadata_ = Column('metadata', JSON, default=dict)
     created_at = Column(DateTime, default=get_current_utc_time, index=True)
     updated_at = Column(DateTime,
                         default=get_current_utc_time,
                         onupdate=get_current_utc_time)
 
+    group = relationship("Group", back_populates="members")
     apps = relationship("App", back_populates="owner")
     memories = relationship("Memory", back_populates="user")
 

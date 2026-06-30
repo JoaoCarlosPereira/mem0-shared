@@ -59,3 +59,42 @@ def test_write_queue_index_exists(pg_url, monkeypatch):
     indexes = {idx["name"] for idx in inspect(eng).get_indexes("write_queue")}
     eng.dispose()
     assert "idx_write_queue_status_created" in indexes
+
+
+def test_groups_migration_creates_table_column_and_default(pg_url, monkeypatch, tmp_path):
+    """task_01/ADR-002: groups + users.group_id criados e Default semeado/backfill."""
+    monkeypatch.setenv("DATABASE_URL", pg_url)
+    from alembic import command
+    from alembic.config import Config
+
+    ini = tmp_path / "alembic.ini"
+    ini.write_text(
+        """
+[alembic]
+script_location = alembic
+sqlalchemy.url = driver://user:pass@localhost/dbname
+""".strip()
+    )
+    cfg = Config(str(ini))
+    cfg.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
+    command.upgrade(cfg, "head")
+
+    from sqlalchemy import create_engine, inspect, text
+
+    eng = create_engine(pg_url)
+    insp = inspect(eng)
+    assert "groups" in set(insp.get_table_names())
+    user_cols = {c["name"] for c in insp.get_columns("users")}
+    assert "group_id" in user_cols
+
+    with eng.connect() as conn:
+        default_count = conn.execute(
+            text("SELECT count(*) FROM groups WHERE name = 'Default'")
+        ).scalar()
+        orphan_users = conn.execute(
+            text("SELECT count(*) FROM users WHERE group_id IS NULL")
+        ).scalar()
+    eng.dispose()
+
+    assert default_count == 1, "deve existir exatamente um grupo Default"
+    assert orphan_users == 0, "todos os usuários existentes devem apontar para um grupo"

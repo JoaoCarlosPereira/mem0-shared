@@ -42,6 +42,7 @@ from app.utils.metrics import (
 )
 from app.utils.env import safe_load_dotenv
 from app.utils.db import get_user_and_app
+from app.utils.groups import ensure_user_group, group_of_hostname
 from app.utils.identity import resolve_hostname
 from app.utils.memory import get_memory_client_safe
 from app.utils.partitioning import bind_active_collection
@@ -67,6 +68,9 @@ mcp = FastMCP("mem0-mcp-server")
 # Context variables for user_id and client_name
 user_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("user_id")
 client_name_var: contextvars.ContextVar[str] = contextvars.ContextVar("client_name")
+# Grupo informado na URL de conexão MCP (``?group=``) — ADR-004. Atribuição ao usuário
+# ocorre apenas na criação/quando ainda sem grupo; usado só nesse momento.
+group_var: contextvars.ContextVar[str] = contextvars.ContextVar("group")
 
 # Read-path defaults (task_03 / ADR-003): keep top_k bounded so project-scoped
 # reads stay low-latency on the single shared collection.
@@ -185,6 +189,7 @@ async def _fetch_all_memories(memory_client, top_k: int = DEFAULT_LIST_TOP_K) ->
             "created_at": payload.get("created_at"),
             "updated_at": payload.get("updated_at"),
             "project": payload.get("project"),
+            "owner": payload.get("hostname"),
         })
     return results
 
@@ -199,6 +204,9 @@ async def search_memory(query: str, project: str, rerank: bool = False) -> str:
         return "Error: project not provided"
 
     started = time.perf_counter()
+    # Grupo do solicitante (ADR-003): resolvido a partir do hostname da conexão MCP.
+    # Usado apenas para ordenação (boost), nunca para filtrar — a leitura é global.
+    requester_group = group_of_hostname(resolve_hostname(user_id_var.get(None)))
     try:
         memory_client = get_memory_client_safe()
         if not memory_client:
@@ -237,7 +245,11 @@ async def search_memory(query: str, project: str, rerank: bool = False) -> str:
                     results = await _fetch_all_memories(
                         memory_client, DEFAULT_SEARCH_TOP_K
                     )
-                    rank_search_results(results, preferred_project=project)
+                    rank_search_results(
+                        results,
+                        preferred_project=project,
+                        requester_group=requester_group,
+                    )
                     return json.dumps(
                         {"results": results, "degraded": "list_fallback"},
                         indent=2,
@@ -263,13 +275,19 @@ async def search_memory(query: str, project: str, rerank: bool = False) -> str:
                     "created_at": payload.get("created_at"),
                     "updated_at": payload.get("updated_at"),
                     "project": payload.get("project"),
+                    "owner": payload.get("hostname"),
                     "score": score,
                 })
             read_cache.set_search(
                 project, query, DEFAULT_SEARCH_TOP_K, filter_hash, results
             )
 
-        rank_search_results(results, preferred_project=project)
+        # Ranqueamento aplicado APÓS o cache (group-agnóstico): solicitantes de grupos
+        # diferentes compartilham o mesmo conjunto cacheado, mas recebem ordenações
+        # próprias conforme o seu grupo (ADR-003).
+        rank_search_results(
+            results, preferred_project=project, requester_group=requester_group
+        )
 
         return json.dumps({"results": results}, indent=2)
     except Exception as e:
@@ -492,6 +510,10 @@ async def handle_sse(request: Request):
     user_token = user_id_var.set(uid or "")
     client_name = request.path_params.get("client_name")
     client_token = client_name_var.set(client_name or "")
+    # Grupo opcional via query string (ADR-004): aplicado só na criação do usuário.
+    group = request.query_params.get("group")
+    group_token = group_var.set(group or "")
+    ensure_user_group(uid, group)
 
     try:
         # NOTE: request._send is the raw ASGI `send` callable. Starlette does not
@@ -512,6 +534,7 @@ async def handle_sse(request: Request):
         # Clean up context variables
         user_id_var.reset(user_token)
         client_name_var.reset(client_token)
+        group_var.reset(group_token)
 
 
 @mcp_router.post("/messages/")
@@ -562,6 +585,10 @@ async def handle_streamable_http(request: Request):
     user_token = user_id_var.set(uid or "")
     client_name = request.path_params.get("client_name")
     client_token = client_name_var.set(client_name or "")
+    # Grupo opcional via query string (ADR-004): aplicado só na criação do usuário.
+    group = request.query_params.get("group")
+    group_token = group_var.set(group or "")
+    ensure_user_group(uid, group)
 
     # Intercept the ASGI messages the transport sends so we can return them
     # as a single Response to FastAPI.  Without this, FastAPI would attempt to
@@ -605,6 +632,7 @@ async def handle_streamable_http(request: Request):
     finally:
         user_id_var.reset(user_token)
         client_name_var.reset(client_token)
+        group_var.reset(group_token)
 
     if not response_started:
         return Response(status_code=500, content=b"Transport did not produce a response")

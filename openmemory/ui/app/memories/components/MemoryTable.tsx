@@ -164,6 +164,9 @@ export function MemoryTable() {
                 Criado por
               </div>
             </TableHead>
+            <TableHead className="w-[120px] border-zinc-700">
+              <div className="flex items-center justify-center">Grupo</div>
+            </TableHead>
             <TableHead className="w-[140px] border-zinc-700">
               <div className="flex items-center w-full justify-center">
                 <CiCalendar className="mr-1" size={16} />
@@ -249,6 +252,14 @@ export function MemoryTable() {
                   appName={memory.app_name}
                   metadata={memory.metadata}
                 />
+              </TableCell>
+              <TableCell className="w-[120px] text-center">
+                <span
+                  className="inline-block rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-300"
+                  aria-label="Grupo do autor"
+                >
+                  {memory.group ?? "—"}
+                </span>
               </TableCell>
               <TableCell className="w-[140px] text-center">
                 {formatDate(memory.created_at)}

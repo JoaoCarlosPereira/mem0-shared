@@ -101,6 +101,7 @@ function CommandBlock({
 
 export const Install = () => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [group, setGroup] = useState("");
   const mcpBase = getMcpBaseUrl();
   const defaultShell = installShellVariants[0];
 
@@ -125,6 +126,20 @@ export const Install = () => {
         <code className="text-zinc-400">$(hostname)</code>) — não use o usuário
         Linux do servidor.
       </p>
+
+      <div className="mb-6 max-w-md space-y-2">
+        <label htmlFor="install-group" className="text-xs text-zinc-500">
+          Grupo (equipe) — opcional. Vazio entra no grupo Default.
+        </label>
+        <input
+          id="install-group"
+          type="text"
+          value={group}
+          onChange={(e) => setGroup(e.target.value)}
+          placeholder="ex.: Equipe Backend"
+          className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 text-sm text-gray-300 placeholder:text-zinc-600 focus:outline-none focus:border-primary"
+        />
+      </div>
 
       <div className="hidden">
         <div className="data-[state=active]:bg-[linear-gradient(to_top,_rgba(239,108,60,0.3),_rgba(239,108,60,0))] data-[state=active]:border-[#EF6C3C]"></div>
@@ -173,7 +188,7 @@ export const Install = () => {
             <CardContent className="py-4 space-y-4">
               <CommandBlock
                 label={defaultShell.label}
-                command={mcpSseUrl(mcpBase, "openmemory", defaultShell.hostnameExpr)}
+                command={mcpSseUrl(mcpBase, "openmemory", defaultShell.hostnameExpr, group)}
                 copyKey="mcp-ps"
                 copiedKey={copiedKey}
                 onCopied={markCopied}
@@ -184,6 +199,7 @@ export const Install = () => {
                   mcpBase,
                   "openmemory",
                   installShellVariants[1].hostnameExpr,
+                  group,
                 )}
                 copyKey="mcp-bash"
                 copiedKey={copiedKey}
@@ -207,7 +223,7 @@ export const Install = () => {
                   <CommandBlock
                     key={`${key}-${variant.id}`}
                     label={variant.label}
-                    command={installLocalCommand(mcpBase, key, variant.hostnameExpr)}
+                    command={installLocalCommand(mcpBase, key, variant.hostnameExpr, group)}
                     copyKey={`${key}-${variant.id}`}
                     copiedKey={copiedKey}
                     onCopied={markCopied}
