@@ -25,8 +25,7 @@ accepted and ignored (the local server is trust-on-LAN; auth is out of scope).
 import logging
 from typing import Any, Optional
 
-from app.utils.groups import group_of_hostname
-from app.utils.identity import resolve_hostname
+from app.utils.groups import ensure_user_registered, requester_group_for_mcp
 from app.utils.memory import get_memory_client
 from app.utils.partitioning import bind_active_collection
 from app.utils.read_audit import record_memory_reads
@@ -63,27 +62,33 @@ def _walk_clauses(filters: Any):
             yield from _walk_clauses(clause)
 
 
-def _extract_scope(filters: Any) -> tuple[Optional[str], dict, bool]:
-    """Return (project, metadata_filters, is_global) from a cloud filter tree.
+def _extract_scope(filters: Any) -> tuple[Optional[str], dict, bool, Optional[str]]:
+    """Return (project, metadata_filters, is_global, requester_hostname).
 
     ``project`` comes from an ``app_id`` clause. ``metadata_filters`` collects
     any ``{"metadata": {...}}`` clauses for Python-side post-filtering. A
     ``{"user_id": "*"}`` clause flags a global (cross-project) read.
+    ``requester_hostname`` is the first concrete ``user_id`` (hostname) in filters,
+    used to resolve the reader's group from ``users.group_id`` — not for filtering.
     """
     project: Optional[str] = None
     metadata_filters: dict = {}
     is_global = False
+    requester_hostname: Optional[str] = None
     for clause in _walk_clauses(filters):
         if not isinstance(clause, dict):
             continue
         if clause.get("app_id"):
             project = str(clause["app_id"])
-        if clause.get("user_id") == "*":
+        uid = clause.get("user_id")
+        if uid == "*":
             is_global = True
+        elif uid and requester_hostname is None:
+            requester_hostname = str(uid)
         meta = clause.get("metadata")
         if isinstance(meta, dict):
             metadata_filters.update(meta)
-    return project, metadata_filters, is_global
+    return project, metadata_filters, is_global, requester_hostname
 
 
 def _payload_matches_metadata(payload: dict, wanted: dict) -> bool:
@@ -133,15 +138,12 @@ async def search(request: SearchRequest, http_request: Request) -> dict:
     if not client or not request.query:
         return {"results": []}
 
-    project, metadata_filters, is_global = _extract_scope(request.filters)
+    project, metadata_filters, is_global, requester_hostname = _extract_scope(request.filters)
     preferred_project = None if is_global else project
 
-    # Grupo do solicitante (ADR-003): paridade com o caminho MCP. O shim REST não
-    # carrega identidade no path, então o host vem do header opcional
-    # ``x-openmemory-host``; ausente => grupo None => sem boost (não-regressivo).
-    requester_group = group_of_hostname(
-        resolve_hostname(http_request.headers.get("x-openmemory-host"))
-    )
+    # Grupo do solicitante: user_id nos filters (plugin) ou header legado → users.group_id.
+    reader_host = requester_hostname or http_request.headers.get("x-openmemory-host")
+    requester_group = requester_group_for_mcp(reader_host)
 
     bind_active_collection(client)
 
@@ -254,6 +256,8 @@ async def add(request: AddRequest) -> dict:
     metadata.setdefault("project", project)
     metadata.setdefault("source_app", "openmemory")
 
+    ensure_user_registered(request.user_id)
+
     # Writes target the active collection (blue-green, ADR-003).
     bind_active_collection(client)
 
@@ -288,8 +292,11 @@ async def list_memories(request: Request, body: ListRequest) -> dict:
     if not client:
         return {"count": 0, "results": []}
 
-    project, metadata_filters, is_global = _extract_scope(body.filters)
+    project, metadata_filters, is_global, requester_hostname = _extract_scope(body.filters)
     vs_filters: dict = {} if is_global else {"project": project} if project else {}
+
+    reader_host = requester_hostname or request.headers.get("x-openmemory-host")
+    requester_group = requester_group_for_mcp(reader_host)
 
     # List scans the active collection with the project filter (ADR-003).
     bind_active_collection(client)
@@ -320,8 +327,15 @@ async def list_memories(request: Request, body: ListRequest) -> dict:
             "memory": payload.get("data"),
             "created_at": payload.get("created_at"),
             "updated_at": payload.get("updated_at"),
+            "owner": payload.get("hostname"),
             "metadata": payload,
         })
+
+    rank_search_results(
+        results,
+        preferred_project=None if is_global else project,
+        requester_group=requester_group,
+    )
 
     count = len(results)
     page_results = results[:page_size]

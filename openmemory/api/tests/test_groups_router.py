@@ -155,10 +155,13 @@ def test_add_member_moves_user_and_invalidates_cache(client, factory, monkeypatc
     assert any(m["user_id"] == "host-move" for m in members)
 
 
-def test_add_member_unknown_user_returns_404(client):
+def test_add_member_creates_user_when_missing(client):
     gid = client.post("/admin/groups", json={"name": "Z"}).json()["id"]
-    r = client.post(f"/admin/groups/{gid}/members", json={"user_id": "nao-existe"})
-    assert r.status_code == 404
+    r = client.post(f"/admin/groups/{gid}/members", json={"user_id": "host-novo"})
+    assert r.status_code == 200
+    assert r.json()["user_id"] == "host-novo"
+    members = client.get(f"/admin/groups/{gid}/members").json()["members"]
+    assert any(m["user_id"] == "host-novo" for m in members)
 
 
 def test_remove_member_moves_to_default(client, factory, monkeypatch):

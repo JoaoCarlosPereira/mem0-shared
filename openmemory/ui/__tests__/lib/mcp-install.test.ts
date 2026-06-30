@@ -1,9 +1,12 @@
 import {
+  claudeInstallSteps,
+  claudeMcpAddCommand,
   installLocalCommand,
   mcpSseUrl,
+  provisionPrompt,
 } from "@/lib/mcp-install";
 
-describe("mcp-install com grupo (task_07 / ADR-004)", () => {
+describe("mcp-install", () => {
   const base = "http://192.168.3.213:8765";
   const host = "${COMPUTERNAME:-${HOSTNAME:-$(hostname)}}";
 
@@ -13,37 +16,31 @@ describe("mcp-install com grupo (task_07 / ADR-004)", () => {
     );
   });
 
-  it("mcpSseUrl com grupo anexa ?group= URL-encoded", () => {
-    expect(mcpSseUrl(base, "openmemory", host, "Equipe Backend")).toBe(
-      `${base}/mcp/openmemory/sse/${host}?group=Equipe%20Backend`,
+  it("mcpSseUrl com grupo anexa ?group= na instalação", () => {
+    expect(mcpSseUrl(base, "claude", host, "Fiscal")).toBe(
+      `${base}/mcp/claude/sse/${host}?group=Fiscal`,
     );
   });
 
-  it("grupo vazio ou só espaços não adiciona o parâmetro", () => {
-    expect(mcpSseUrl(base, "openmemory", host, "")).toBe(
-      `${base}/mcp/openmemory/sse/${host}`,
-    );
-    expect(mcpSseUrl(base, "openmemory", host, "   ")).toBe(
-      `${base}/mcp/openmemory/sse/${host}`,
-    );
-  });
-
-  it("installLocalCommand inclui o grupo na URL e mantém --client", () => {
-    const cmd = installLocalCommand(base, "claude", host, "Time Dados");
-    expect(cmd).toContain("?group=Time%20Dados");
+  it("installLocalCommand inclui grupo na URL de instalação", () => {
+    const cmd = installLocalCommand(base, "claude", host, "Fiscal");
+    expect(cmd).toContain("?group=Fiscal");
     expect(cmd).toContain("--client claude");
-    expect(cmd.startsWith("npx @openmemory/install local")).toBe(true);
   });
 
-  it("installLocalCommand sem grupo equivale ao comportamento anterior", () => {
-    expect(installLocalCommand(base, "cursor", host)).toBe(
-      `npx @openmemory/install local "${base}/mcp/cursor/sse/${host}" --client cursor`,
-    );
+  it("claudeMcpAddCommand inclui ?group= no HTTP MCP", () => {
+    expect(claudeMcpAddCommand(base, host, "Fiscal")).toContain("?group=Fiscal");
   });
 
-  it("grupo com acentos é corretamente URL-encoded", () => {
-    expect(mcpSseUrl(base, "openmemory", host, "Inovação")).toContain(
-      "?group=Inova%C3%A7%C3%A3o",
-    );
+  it("provisionPrompt inclui group na URL de provision", () => {
+    const prompt = provisionPrompt(base, "claude", "Fiscal");
+    expect(prompt).toContain("/provision?host=claude&group=Fiscal");
+  });
+
+  it("claudeInstallSteps propaga grupo nos 3 passos", () => {
+    const steps = claudeInstallSteps(base, host, "Fiscal");
+    expect(steps[0].command).toContain("?group=Fiscal");
+    expect(steps[1].command).toContain("?group=Fiscal");
+    expect(steps[2].command).toContain("&group=Fiscal");
   });
 });

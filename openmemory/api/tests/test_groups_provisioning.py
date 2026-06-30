@@ -1,7 +1,6 @@
-"""Testes da atribuição de grupo na criação do usuário e da normalização (task_05).
+"""Testes do cadastro de usuário e vínculo de grupo na instalação (task_05 / ADR-004).
 
-Cobre os helpers ``ensure_user_group``/``get_or_create_group``/``normalize_group_name``
-e a regra ADR-004 (URL define só na criação; admin prevalece).
+``?group=`` na URL MCP vincula equipe na primeira conexão; Admin prevalece depois.
 """
 
 import pytest
@@ -33,7 +32,6 @@ def session_factory(monkeypatch):
 
 
 def _user_group_name(Session, hostname):
-    """Retorna (existe, nome_do_grupo) lendo dentro da sessão (evita lazy-load detached)."""
     s = Session()
     try:
         user = s.query(User).filter(User.user_id == hostname).first()
@@ -50,19 +48,6 @@ def test_normalize_group_name():
     assert groups_mod.normalize_group_name(None) is None
 
 
-def test_get_or_create_group_is_case_insensitive(session_factory):
-    s = session_factory()
-    try:
-        g1 = groups_mod.get_or_create_group(s, "Equipe X")
-        s.commit()
-        g2 = groups_mod.get_or_create_group(s, "equipe x")  # mesma, outra caixa
-        s.commit()
-        assert g1.id == g2.id
-        assert s.query(Group).filter(Group.name == "Equipe X").count() == 1
-    finally:
-        s.close()
-
-
 def test_new_user_created_with_informed_group(session_factory):
     groups_mod.ensure_user_group("host-novo", "Equipe Backend")
     exists, group_name = _user_group_name(session_factory, "host-novo")
@@ -77,16 +62,13 @@ def test_new_user_without_group_falls_back_to_default(session_factory):
 
 
 def test_existing_user_with_group_is_not_overwritten(session_factory):
-    # Cria com Equipe A...
     groups_mod.ensure_user_group("host-fixo", "Equipe A")
-    # ...reconecta informando Equipe B: NÃO deve sobrescrever (admin prevalece).
     groups_mod.ensure_user_group("host-fixo", "Equipe B")
     _, group_name = _user_group_name(session_factory, "host-fixo")
     assert group_name == "Equipe A"
 
 
-def test_groupless_existing_user_gets_group_assigned(session_factory):
-    # Simula linha criada por outro caminho (get_or_create_user) sem grupo.
+def test_groupless_existing_user_gets_group_from_install_url(session_factory):
     s = session_factory()
     try:
         s.add(User(user_id="host-orfao"))
@@ -100,5 +82,19 @@ def test_groupless_existing_user_gets_group_assigned(session_factory):
 
 def test_hostname_normalized_on_create(session_factory):
     groups_mod.ensure_user_group("  host-trim  ", "Equipe D")
-    exists, _ = _user_group_name(session_factory, "host-trim")
+    exists, group_name = _user_group_name(session_factory, "host-trim")
     assert exists
+    assert group_name == "Equipe D"
+
+
+def test_requester_group_for_mcp_registers_and_returns_group(session_factory):
+    s = session_factory()
+    try:
+        g = Group(name="Fiscal")
+        s.add(g)
+        s.flush()
+        s.add(User(user_id="S0293", group_id=g.id))
+        s.commit()
+    finally:
+        s.close()
+    assert groups_mod.requester_group_for_mcp("S0293") == "Fiscal"

@@ -9,7 +9,6 @@ from app.database import Base
 from app.models import App, Group, Memory, User
 from app.routers.memories import memory_group_name
 
-
 @pytest.fixture
 def session():
     engine = create_engine(
@@ -53,6 +52,30 @@ def test_memory_group_name_returns_author_group(session):
 def test_memory_group_name_none_when_user_has_no_group(session):
     mem = _memory_with(session, "host-b", None)
     assert memory_group_name(mem) is None
+
+
+def test_memory_group_name_from_metadata_hostname_over_sql_owner(session):
+    """Autor Qdrant (hostname no metadata) prevalece sobre o dono SQL da linha."""
+    group = Group(name="Equipe Fiscal")
+    session.add(group)
+    session.flush()
+    author = User(user_id="S0293", group_id=group.id)
+    owner = User(user_id="openmemory")
+    session.add_all([author, owner])
+    session.flush()
+    app = App(owner_id=owner.id, name="cli")
+    session.add(app)
+    session.flush()
+    mem = Memory(
+        user_id=owner.id,
+        app_id=app.id,
+        content="x",
+        metadata_={"hostname": "S0293"},
+    )
+    session.add(mem)
+    session.commit()
+    loaded = session.query(Memory).filter(Memory.id == mem.id).one()
+    assert memory_group_name(loaded) == "Equipe Fiscal"
 
 
 def test_memory_response_includes_group_field():

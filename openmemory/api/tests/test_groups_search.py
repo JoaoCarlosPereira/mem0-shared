@@ -56,7 +56,7 @@ async def test_search_result_includes_owner_from_payload(patched_client):
     mcp_server.user_id_var.set("host-req")
     mcp_server.client_name_var.set("cursor")
 
-    with patch.object(mcp_server, "group_of_hostname", return_value=None):
+    with patch.object(mcp_server, "requester_group_for_mcp", return_value=None):
         out = await search_memory("coffee", project="A")
     data = json.loads(out)
     assert data["results"][0]["owner"] == "host-x"
@@ -69,7 +69,7 @@ async def test_missing_hostname_yields_owner_none(patched_client):
     mcp_server.user_id_var.set("host-req")
     mcp_server.client_name_var.set("cursor")
 
-    with patch.object(mcp_server, "group_of_hostname", return_value=None):
+    with patch.object(mcp_server, "requester_group_for_mcp", return_value=None):
         out = await search_memory("coffee", project="A")
     data = json.loads(out)
     assert data["results"][0]["owner"] is None
@@ -88,9 +88,7 @@ async def test_same_group_result_is_boosted_in_output(patched_client):
 
     author_groups = {"host-a": "Equipe A", "host-b": "Equipe B"}
     with (
-        # grupo do solicitante = Equipe A
-        patch.object(mcp_server, "group_of_hostname", return_value="Equipe A"),
-        # grupo do autor resolvido dentro do ranqueamento
+        patch.object(mcp_server, "requester_group_for_mcp", return_value="Equipe A"),
         patch.object(recency, "group_of_hostname", side_effect=lambda h: author_groups.get(h)),
         patch.object(recency, "SEARCH_RECENCY_HALFLIFE_DAYS", 0.0),
     ):
@@ -108,7 +106,6 @@ async def test_requester_group_resolved_from_user_id_var(patched_client):
     mcp_server.user_id_var.set("host-solicitante")
     mcp_server.client_name_var.set("cursor")
 
-    with patch.object(mcp_server, "group_of_hostname", return_value="G") as resolver:
+    with patch.object(mcp_server, "requester_group_for_mcp", return_value="G") as resolver:
         await search_memory("c", project="A")
-    # O grupo do solicitante é resolvido a partir do hostname normalizado da conexão.
-    resolver.assert_any_call("host-solicitante")
+    resolver.assert_called_once_with("host-solicitante")

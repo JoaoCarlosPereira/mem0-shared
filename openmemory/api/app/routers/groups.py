@@ -162,7 +162,9 @@ def add_member(group_id: UUID, payload: MemberAdd, db: Session = Depends(get_db)
     group = _get_group_or_404(db, group_id)
     user = db.query(User).filter(User.user_id == payload.user_id).first()
     if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
+        user = User(user_id=payload.user_id.strip())
+        db.add(user)
+        db.flush()
     user.group_id = group.id
     db.commit()
     invalidate_group_cache(user.user_id)

@@ -105,8 +105,9 @@ class TestSharedFilterEndpoint:
                     "state": "active",
                     "app_id": None,
                     "app_name": "sysmovs",
+                    "created_by_hostname": "S0293",
                     "categories": [],
-                    "metadata_": {"project": "sysmovs"},
+                    "metadata_": {"project": "sysmovs", "hostname": "S0293"},
                 }
             ],
             "total": 1,
@@ -115,10 +116,16 @@ class TestSharedFilterEndpoint:
             "pages": 1,
         }
         client = _memories_client(db_factory)
-        with patch(
-            "app.utils.vector_stats.list_shared_memories",
-            return_value=payload,
-        ) as mock_list:
+        with (
+            patch(
+                "app.utils.vector_stats.list_shared_memories",
+                return_value=payload,
+            ) as mock_list,
+            patch(
+                "app.routers.memories.group_name_for_hostname",
+                return_value="Default",
+            ),
+        ):
             resp = client.post(
                 "/api/v1/memories/shared-filter",
                 json={"user_id": "root", "page": 1, "size": 10},
@@ -129,6 +136,7 @@ class TestSharedFilterEndpoint:
         assert body["total"] == 1
         assert body["items"][0]["content"] == "shared fact"
         assert body["items"][0]["app_name"] == "sysmovs"
+        assert body["items"][0]["group"] == "Default"
         mock_list.assert_called_once()
 
     def test_shared_filter_source_routes_through_filter(self, db_factory):

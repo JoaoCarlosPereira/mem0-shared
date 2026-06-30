@@ -8,6 +8,7 @@ import Image from "next/image";
 import { getMcpBaseUrl } from "@/lib/api-url";
 import { APP_NAME, APP_TAGLINE } from "@/lib/branding";
 import {
+  claudeInstallSteps,
   installLocalCommand,
   installShellVariants,
   mcpSseUrl,
@@ -124,19 +125,23 @@ export const Install = () => {
         <code className="text-zinc-400">%COMPUTERNAME%</code> /{" "}
         <code className="text-zinc-400">$env:COMPUTERNAME</code> /{" "}
         <code className="text-zinc-400">$(hostname)</code>) — não use o usuário
-        Linux do servidor.
+        Linux do servidor. Informe o <strong className="text-zinc-400 font-medium">grupo
+        (equipe)</strong> abaixo — ele é vinculado ao hostname na{" "}
+        <strong className="text-zinc-400 font-medium">primeira conexão MCP</strong>{" "}
+        durante a instalação (parâmetro <code className="text-zinc-400">?group=</code>
+        na URL). Depois disso, leituras e escritas usam o cadastro do usuário.
       </p>
 
       <div className="mb-6 max-w-md space-y-2">
         <label htmlFor="install-group" className="text-xs text-zinc-500">
-          Grupo (equipe) — opcional. Vazio entra no grupo Default.
+          Grupo (equipe) — vinculado na instalação. Vazio usa Default.
         </label>
         <input
           id="install-group"
           type="text"
           value={group}
           onChange={(e) => setGroup(e.target.value)}
-          placeholder="ex.: Equipe Backend"
+          placeholder="ex.: Fiscal"
           className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 text-sm text-gray-300 placeholder:text-zinc-600 focus:outline-none focus:border-primary"
         />
       </div>
@@ -214,21 +219,46 @@ export const Install = () => {
             <Card className="bg-zinc-900 border-zinc-800">
               <CardHeader className="py-4">
                 <CardTitle className="text-white text-xl">
-                  Comando de instalação — {key.charAt(0).toUpperCase() + key.slice(1)}
+                  {key === "claude"
+                    ? "Instalação — Claude"
+                    : `Comando de instalação — ${key.charAt(0).toUpperCase() + key.slice(1)}`}
                 </CardTitle>
+                {key === "claude" && (
+                  <p className="text-sm text-zinc-500 mt-1">
+                    Execute os passos na ordem, na máquina onde o Claude está instalado.
+                  </p>
+                )}
               </CardHeader>
               <hr className="border-zinc-800" />
-              <CardContent className="py-4 space-y-4">
-                {installShellVariants.map((variant) => (
-                  <CommandBlock
-                    key={`${key}-${variant.id}`}
-                    label={variant.label}
-                    command={installLocalCommand(mcpBase, key, variant.hostnameExpr, group)}
-                    copyKey={`${key}-${variant.id}`}
-                    copiedKey={copiedKey}
-                    onCopied={markCopied}
-                  />
-                ))}
+              <CardContent className="py-4 space-y-8">
+                {key === "claude"
+                  ? installShellVariants.map((variant) => (
+                      <div key={`${key}-${variant.id}`} className="space-y-4">
+                        <h3 className="text-sm font-medium text-zinc-300">{variant.label}</h3>
+                        {claudeInstallSteps(mcpBase, variant.hostnameExpr, group).map(
+                          ({ step, title, command }) => (
+                            <CommandBlock
+                              key={`${key}-${variant.id}-step-${step}`}
+                              label={`Passo ${step}: ${title}`}
+                              command={command}
+                              copyKey={`${key}-${variant.id}-step-${step}`}
+                              copiedKey={copiedKey}
+                              onCopied={markCopied}
+                            />
+                          ),
+                        )}
+                      </div>
+                    ))
+                  : installShellVariants.map((variant) => (
+                      <CommandBlock
+                        key={`${key}-${variant.id}`}
+                        label={variant.label}
+                        command={installLocalCommand(mcpBase, key, variant.hostnameExpr, group)}
+                        copyKey={`${key}-${variant.id}`}
+                        copiedKey={copiedKey}
+                        onCopied={markCopied}
+                      />
+                    ))}
               </CardContent>
             </Card>
           </TabsContent>

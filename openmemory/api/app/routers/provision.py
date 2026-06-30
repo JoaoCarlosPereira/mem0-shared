@@ -16,9 +16,12 @@ idempotent (replace mem0 entries, never append). ``GET /provision/protocol``
 returns a plain-text behavioral protocol for clients without lifecycle hooks.
 """
 
+from typing import Optional
+
 from fastapi import APIRouter, Request
 
 from app.utils.discovery_url import resolve_discovery_base_url
+from app.utils.groups import normalize_group_name
 
 router = APIRouter(prefix="/provision", tags=["provision"])
 
@@ -49,14 +52,23 @@ MODES = [
 ]
 
 
-def _mcp_config(host: str, base_url: str) -> dict:
+def _group_query_suffix(group: Optional[str]) -> str:
+    from urllib.parse import quote
+
+    name = normalize_group_name(group)
+    return f"?group={quote(name)}" if name else ""
+
+
+def _mcp_config(host: str, base_url: str, group: Optional[str] = None) -> dict:
     """Host-specific MCP config block pointing at this local server.
 
     ``{hostname}`` is a placeholder the recipe tells the agent to replace with
     the machine hostname (attribution only; reads are project-shared).
+    Optional ``group`` appends ``?group=`` for first-connect team binding (ADR-004).
     """
-    sse_url = f"{base_url}/mcp/{host}/sse/{{hostname}}"
-    http_url = f"{base_url}/mcp/{host}/http/{{hostname}}"
+    gq = _group_query_suffix(group)
+    sse_url = f"{base_url}/mcp/{host}/sse/{{hostname}}{gq}"
+    http_url = f"{base_url}/mcp/{host}/http/{{hostname}}{gq}"
     if host == "codex":
         # Codex reads MCP servers from ~/.codex/config.toml (TOML).
         return {
@@ -94,6 +106,7 @@ def _recipe(host: str) -> list:
             "step": "mcp",
             "action": "Escrever/mesclar o bloco mcp_config no arquivo do host. "
                       "Substituir o token {hostname} pelo hostname da máquina. "
+                      "Preservar ``?group=`` na URL se presente (vincula equipe na 1ª conexão). "
                       "Idempotente: substituir a entrada 'mem0' existente, nunca anexar.",
         },
         {
@@ -121,14 +134,14 @@ def _recipe(host: str) -> list:
     ]
 
 
-def _payload(request: Request, host: str) -> dict:
+def _payload(request: Request, host: str, group: Optional[str] = None) -> dict:
     base_url = resolve_discovery_base_url(request)
     return {
         "version": PROVISION_VERSION,
         "host": host,
         "base_url": base_url,
         "local_only": True,
-        "mcp_config": _mcp_config(host, base_url),
+        "mcp_config": _mcp_config(host, base_url, group),
         "env": {
             "OPENMEMORY_API_BASE": base_url,
             "MEM0_LOCAL_ONLY": "1",
@@ -153,11 +166,15 @@ def _payload(request: Request, host: str) -> dict:
 
 @router.get("")
 @router.get("/")
-async def get_provision(request: Request, host: str = "claude-code") -> dict:
+async def get_provision(
+    request: Request,
+    host: str = "claude-code",
+    group: Optional[str] = None,
+) -> dict:
     """Return the provisioning manifest for the given host."""
     if host not in SUPPORTED_HOSTS:
         host = "claude-code"
-    return _payload(request, host)
+    return _payload(request, host, group)
 
 
 _PROTOCOL_TEXT = """\

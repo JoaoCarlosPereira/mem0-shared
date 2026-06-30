@@ -78,6 +78,15 @@ def group_of_hostname(hostname: Optional[str]) -> Optional[str]:
     return name
 
 
+def requester_group_for_mcp(hostname: Optional[str]) -> Optional[str]:
+    """Garante cadastro e retorna o grupo do usuário (leitura/escrita MCP).
+
+    Não lê ``?group=`` — usa apenas ``users.group_id`` já vinculado na instalação.
+    """
+    ensure_user_registered(hostname)
+    return group_of_hostname(hostname)
+
+
 def invalidate_group_cache(hostname: Optional[str] = None) -> None:
     """Invalida o cache de grupos.
 
@@ -125,13 +134,21 @@ def get_or_create_group(db, name: Optional[str]):
     return group
 
 
-def ensure_user_group(hostname: Optional[str], group_name: Optional[str]) -> None:
-    """Garante que o usuário do ``hostname`` exista e tenha um grupo (ADR-004).
+def ensure_user_registered(hostname: Optional[str]) -> None:
+    """Garante cadastro do hostname com Default se ainda não tiver grupo.
 
-    O grupo informado é aplicado **apenas quando o usuário ainda não tem grupo**
-    (criação ou linha sem grupo): o administrador permanece como fonte da verdade e
-    reconexões não sobrescrevem ajustes feitos na UI. Grupo ausente recai no Default.
-    Best-effort: qualquer falha é silenciada para não derrubar a conexão MCP.
+    Usado em leitura/escrita MCP (sem ``?group=`` na URL). Não sobrescreve grupo existente.
+    """
+    ensure_user_group(hostname, None)
+
+
+def ensure_user_group(hostname: Optional[str], group_name: Optional[str] = None) -> None:
+    """Vincula o hostname a um grupo na **primeira conexão** (instalação do plugin).
+
+    O ``group_name`` da URL ``?group=`` (instalação) é aplicado **somente** quando o
+    usuário ainda não tem grupo (criação ou linha sem ``group_id``). Reconexões e o
+    Admin prevalecem — não sobrescrevem ajustes posteriores. Ausente recai no Default.
+    Best-effort: falhas não derrubam a conexão MCP.
     """
     key = resolve_hostname(hostname)
     from app.database import SessionLocal
@@ -141,7 +158,7 @@ def ensure_user_group(hostname: Optional[str], group_name: Optional[str]) -> Non
     try:
         user = db.query(User).filter(User.user_id == key).first()
         if user is not None and user.group_id is not None:
-            return  # já tem grupo: não sobrescreve (admin prevalece)
+            return
         group = get_or_create_group(db, group_name)
         if user is None:
             user = User(user_id=key, group_id=group.id)

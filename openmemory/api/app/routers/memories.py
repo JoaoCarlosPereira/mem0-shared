@@ -99,14 +99,47 @@ def get_accessible_memory_ids(db: Session, app_id: UUID) -> Set[UUID]:
     return allowed_memory_ids
 
 
-def memory_group_name(memory) -> Optional[str]:
-    """Grupo (equipe) do autor da memória, via Memory → User → Group (task_09).
+def _author_hostname_from_memory(memory) -> Optional[str]:
+    """Hostname do autor (ADR-003): metadata do vetor tem prioridade sobre o dono SQL."""
+    from app.utils.identity import resolve_hostname
 
-    Retorna None quando o autor ou o grupo não são resolvíveis (etiqueta neutra na UI).
+    meta = getattr(memory, "metadata_", None) or {}
+    if isinstance(meta, dict):
+        raw = meta.get("hostname") or meta.get("user_id")
+        if raw:
+            return resolve_hostname(str(raw))
+    user = getattr(memory, "user", None)
+    if user is not None and getattr(user, "user_id", None):
+        return resolve_hostname(user.user_id)
+    return None
+
+
+def memory_group_name(memory) -> Optional[str]:
+    """Grupo (equipe) do autor da memória via hostname → User → Group (task_09).
+
+    Para memórias compartilhadas (Qdrant), o autor é o ``hostname`` no payload,
+    não o usuário SQL dono da linha. Retorna None quando o grupo não é resolvível.
     """
+    from app.utils.groups import group_of_hostname
+
+    hostname = _author_hostname_from_memory(memory)
+    if hostname:
+        group = group_of_hostname(hostname)
+        if group:
+            return group
     user = getattr(memory, "user", None)
     group = getattr(user, "group", None) if user is not None else None
     return group.name if group is not None else None
+
+
+def group_name_for_hostname(hostname: Optional[str]) -> Optional[str]:
+    """Resolve o grupo do autor a partir do hostname (listagem Qdrant / shared-filter)."""
+    from app.utils.groups import group_of_hostname
+    from app.utils.identity import resolve_hostname
+
+    if not hostname:
+        return None
+    return group_of_hostname(resolve_hostname(hostname))
 
 
 # List all memories with filtering
@@ -178,7 +211,8 @@ async def list_memories(
     # Add eager loading for app and categories
     query = query.options(
         joinedload(Memory.app),
-        joinedload(Memory.categories)
+        joinedload(Memory.categories),
+        joinedload(Memory.user).joinedload(User.group),
     ).distinct(Memory.id)
 
     # Get paginated results with transformer
@@ -388,7 +422,8 @@ async def get_memory(
             "created_by_hostname": memory.user.user_id if memory.user else None,
             "created_by_client": memory.app.name if memory.app else None,
             "categories": [category.name for category in memory.categories],
-            "metadata_": memory.metadata_
+            "metadata_": memory.metadata_,
+            "group": memory_group_name(memory),
         }
 
     from app.utils.vector_stats import get_shared_memory_by_id
@@ -407,6 +442,7 @@ async def get_memory(
             client_name="openmemory",
             items=[{"id": str(memory_id), "project": proj, "metadata_": shared.get("metadata_")}],
         )
+        shared["group"] = group_name_for_hostname(shared.get("created_by_hostname"))
         return shared
 
     raise HTTPException(status_code=404, detail="Memory not found")
@@ -677,6 +713,7 @@ class SharedMemoryResponse(BaseModel):
     created_by_client: Optional[str] = None
     categories: List[str] = Field(default_factory=list)
     metadata_: Optional[dict] = None
+    group: Optional[str] = None
 
 
 class SharedMemoriesPage(BaseModel):
@@ -715,6 +752,7 @@ async def filter_shared_memories(request: FilterMemoriesRequest):
             created_by_client=item.get("created_by_client"),
             categories=item["categories"],
             metadata_=item.get("metadata_"),
+            group=group_name_for_hostname(item.get("created_by_hostname")),
         )
         for item in data["items"]
     ]
