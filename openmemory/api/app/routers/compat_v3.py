@@ -25,6 +25,8 @@ accepted and ignored (the local server is trust-on-LAN; auth is out of scope).
 import logging
 from typing import Any, Optional
 
+from app.utils.groups import group_of_hostname
+from app.utils.identity import resolve_hostname
 from app.utils.memory import get_memory_client
 from app.utils.partitioning import bind_active_collection
 from app.utils.read_audit import record_memory_reads
@@ -108,6 +110,7 @@ def _hit_to_result(h) -> dict:
         "created_at": payload.get("created_at"),
         "updated_at": payload.get("updated_at"),
         "project": payload.get("project"),
+        "owner": payload.get("hostname"),
         "metadata": payload,
     }
 
@@ -124,7 +127,7 @@ class SearchRequest(BaseModel):
 
 
 @router.post("/search/")
-async def search(request: SearchRequest) -> dict:
+async def search(request: SearchRequest, http_request: Request) -> dict:
     """Semantic search across all projects, ranked by relevance and recency."""
     client = _memory_client()
     if not client or not request.query:
@@ -132,6 +135,13 @@ async def search(request: SearchRequest) -> dict:
 
     project, metadata_filters, is_global = _extract_scope(request.filters)
     preferred_project = None if is_global else project
+
+    # Grupo do solicitante (ADR-003): paridade com o caminho MCP. O shim REST não
+    # carrega identidade no path, então o host vem do header opcional
+    # ``x-openmemory-host``; ausente => grupo None => sem boost (não-regressivo).
+    requester_group = group_of_hostname(
+        resolve_hostname(http_request.headers.get("x-openmemory-host"))
+    )
 
     bind_active_collection(client)
 
@@ -180,7 +190,9 @@ async def search(request: SearchRequest) -> dict:
     # app.mcp_server.search_memory). The `rerank` arg is kept for backward
     # compatibility but no longer gates ordering; set MEM0_SEARCH_RECENCY_WEIGHT=0
     # for pure semantic order.
-    rank_search_results(results, preferred_project=preferred_project)
+    rank_search_results(
+        results, preferred_project=preferred_project, requester_group=requester_group
+    )
     results = results[:top_k]
 
     record_memory_reads(

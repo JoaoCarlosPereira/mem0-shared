@@ -36,6 +36,7 @@ interface ApiMemoryItem {
   categories: string[];
   metadata_?: Record<string, any>;
   app_name: string;
+  group?: string | null;
 }
 
 // Define the shape of the API response
@@ -183,7 +184,8 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
         metadata: item.metadata_,
         categories: item.categories as Category[],
         client: 'api',
-        app_name: item.app_name
+        app_name: item.app_name,
+        group: item.group ?? null,
       }));
       setIsLoading(false);
       dispatch(setMemoriesSuccess(adaptedMemories));

@@ -99,6 +99,16 @@ def get_accessible_memory_ids(db: Session, app_id: UUID) -> Set[UUID]:
     return allowed_memory_ids
 
 
+def memory_group_name(memory) -> Optional[str]:
+    """Grupo (equipe) do autor da memória, via Memory → User → Group (task_09).
+
+    Retorna None quando o autor ou o grupo não são resolvíveis (etiqueta neutra na UI).
+    """
+    user = getattr(memory, "user", None)
+    group = getattr(user, "group", None) if user is not None else None
+    return group.name if group is not None else None
+
+
 # List all memories with filtering
 @router.get("/", response_model=Page[MemoryResponse])
 async def list_memories(
@@ -184,7 +194,8 @@ async def list_memories(
                 app_id=memory.app_id,
                 app_name=memory.app.name if memory.app else None,
                 categories=[category.name for category in memory.categories],
-                metadata_=memory.metadata_
+                metadata_=memory.metadata_,
+                group=memory_group_name(memory),
             )
             for memory in items
             if check_memory_access_permissions(db, memory, app_id)
@@ -828,7 +839,8 @@ async def filter_memories(
                 app_id=memory.app_id,
                 app_name=memory.app.name if memory.app else None,
                 categories=[category.name for category in memory.categories],
-                metadata_=memory.metadata_
+                metadata_=memory.metadata_,
+                group=memory_group_name(memory),
             )
             for memory in items
         ]
@@ -892,7 +904,8 @@ async def get_related_memories(
                 app_id=memory.app_id,
                 app_name=memory.app.name if memory.app else None,
                 categories=[category.name for category in memory.categories],
-                metadata_=memory.metadata_
+                metadata_=memory.metadata_,
+                group=memory_group_name(memory),
             )
             for memory in items
         ]

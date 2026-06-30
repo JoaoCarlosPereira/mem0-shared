@@ -52,6 +52,9 @@ class MemoryResponse(BaseModel):
     app_name: str
     categories: List[str]
     metadata_: Optional[dict] = None
+    # Grupo (equipe) do autor da memória, resolvido via Memory → User → Group
+    # (task_09 / ADR-003). None quando o autor/grupo não é resolvível.
+    group: Optional[str] = None
 
     @validator('created_at', pre=True)
     def convert_to_epoch(cls, v):

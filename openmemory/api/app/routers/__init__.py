@@ -8,6 +8,7 @@ from .backup import router as backup_router
 from .compat_v3 import router as compat_v3_router
 from .config import router as config_router
 from .discovery import router as discovery_router
+from .groups import router as groups_router
 from .health import router as health_router
 from .memories import router as memories_router
 from .ops_metrics import router as ops_metrics_router
@@ -30,4 +31,5 @@ __all__ = [
     "governance_router",
     "governance_project_merge_router",
     "governance_schedule_router",
+    "groups_router",
 ]

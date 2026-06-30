@@ -43,13 +43,18 @@ beforeEach(() => {
 });
 
 describe("AdminSidebar", () => {
-  it("renderiza os 5 itens de menu", () => {
+  it("renderiza os itens de menu, incluindo Grupos", () => {
     renderSidebar();
-    ["Visão Geral", "Filas", "Projetos", "Governança", "Log de Auditoria"].forEach(
-      (label) => {
-        expect(screen.getByText(label)).toBeInTheDocument();
-      },
-    );
+    [
+      "Visão Geral",
+      "Filas",
+      "Projetos",
+      "Grupos",
+      "Governança",
+      "Log de Auditoria",
+    ].forEach((label) => {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    });
   });
 
   it("marca Visão Geral como ativo quando pathname é /admin/overview", () => {

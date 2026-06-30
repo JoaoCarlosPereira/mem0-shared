@@ -27,6 +27,7 @@ from app.routers import (
     governance_router,
     governance_project_merge_router,
     governance_schedule_router,
+    groups_router,
     health_router,
     memories_router,
     ops_metrics_router,
@@ -125,6 +126,7 @@ app.include_router(admin_write_queue_router)
 app.include_router(governance_router)
 app.include_router(governance_project_merge_router)
 app.include_router(governance_schedule_router)
+app.include_router(groups_router)
 app.include_router(memories_router)
 app.include_router(apps_router)
 app.include_router(stats_router)

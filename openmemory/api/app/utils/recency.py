@@ -23,10 +23,17 @@ import datetime
 import os
 from typing import Optional
 
+from app.utils.groups import group_of_hostname
+
 SEARCH_RECENCY_HALFLIFE_DAYS = float(os.getenv("MEM0_SEARCH_RECENCY_HALFLIFE_DAYS", "90"))
 SEARCH_RECENCY_WEIGHT = float(os.getenv("MEM0_SEARCH_RECENCY_WEIGHT", "1.0"))
 SEARCH_PROJECT_BOOST_EXACT = float(os.getenv("MEM0_SEARCH_PROJECT_BOOST_EXACT", "0.1"))
 SEARCH_PROJECT_BOOST_FUZZY = float(os.getenv("MEM0_SEARCH_PROJECT_BOOST_FUZZY", "0.05"))
+
+# Multiplicador forte aplicado quando o autor da memória pertence ao mesmo grupo do
+# solicitante (ADR-003). Forte por padrão: prioriza o contexto da própria equipe sem
+# remover memórias de outros grupos. Calibrável por env, sem alteração de código.
+SEARCH_GROUP_BOOST = float(os.getenv("MEM0_SEARCH_GROUP_BOOST", "2.5"))
 
 
 def parse_ts(value):
@@ -80,12 +87,27 @@ def project_match_factor(result_project, preferred_project) -> float:
     return 1.0
 
 
-def rank_search_results(results, preferred_project=None):
-    """Order results by semantic score blended with recency and optional project boost.
+def group_match_factor(author_group, requester_group) -> float:
+    """Boost forte quando autor e solicitante são do mesmo grupo; neutro caso contrário.
 
-    Relevance and recency dominate ordering; ``preferred_project`` only applies a
-    small multiplicative boost when names match (exact or fuzzy). Wrong or missing
-    project names are never penalized.
+    Retorna :data:`SEARCH_GROUP_BOOST` somente quando ambos os grupos estão presentes e
+    são iguais. Resultados sem grupo de autor resolvível (ex.: memórias legadas sem
+    ``hostname`` no payload) ou solicitante sem grupo recebem ``1.0`` — nunca penalizados.
+    """
+    if not requester_group or not author_group:
+        return 1.0
+    return SEARCH_GROUP_BOOST if author_group == requester_group else 1.0
+
+
+def rank_search_results(results, preferred_project=None, requester_group=None):
+    """Order results by semantic score blended with recency, project and group boost.
+
+    Relevance and recency dominate ordering; ``preferred_project`` applies a small
+    multiplicative boost when names match. When ``requester_group`` is provided, results
+    whose author belongs to the same group receive a strong multiplicative boost
+    (ADR-003). The author group is resolved dynamically from each result's ``owner``
+    (the author hostname); reads remain global — group only affects ordering. Missing
+    project/owner/group never penalizes a result.
     """
     now = datetime.datetime.now(datetime.timezone.utc)
 
@@ -98,11 +120,17 @@ def rank_search_results(results, preferred_project=None):
             return str(meta["project"])
         return None
 
+    def _author_group(result) -> Optional[str]:
+        if not requester_group:
+            return None  # sem solicitante com grupo, evita lookups desnecessários
+        return group_of_hostname(result.get("owner"))
+
     def key(r):
         score = r.get("score")
         score = score if isinstance(score, (int, float)) else 0.0
         factor = recency_factor(r, now) ** SEARCH_RECENCY_WEIGHT
         factor *= project_match_factor(_project_name(r), preferred_project)
+        factor *= group_match_factor(_author_group(r), requester_group)
         return score * factor
 
     results.sort(key=key, reverse=True)
@@ -112,6 +140,6 @@ def rank_search_results(results, preferred_project=None):
 def recency_weighted_sort(results):
     """Order results in place by semantic score blended with recency.
 
-    Backward-compatible alias for ``rank_search_results`` without project boost.
+    Backward-compatible alias for ``rank_search_results`` without project/group boost.
     """
     return rank_search_results(results)
