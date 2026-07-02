@@ -50,6 +50,11 @@ from mem0.memory.notices import (
     get_temporal_feature_error_message,
     get_temporal_feature_error_message_async,
 )
+from mem0.memory.technical_content import (
+    build_technical_preservation_instructions,
+    enrich_extracted_memories,
+    has_technical_content,
+)
 from mem0.memory.utils import (
     extract_json,
     parse_messages,
@@ -105,6 +110,36 @@ def clear_last_llm_extraction_error() -> None:
 def _record_llm_extraction_error(exc: Exception) -> None:
     global _last_llm_extraction_error
     _last_llm_extraction_error = str(exc)
+
+
+def _build_additive_extraction_user_prompt(
+    *,
+    existing_memories,
+    parsed_messages,
+    last_messages,
+    custom_instr,
+    multilingual,
+):
+    technical_preservation_instructions = None
+    if has_technical_content(parsed_messages):
+        technical_preservation_instructions = build_technical_preservation_instructions()
+    return generate_additive_extraction_prompt(
+        existing_memories=existing_memories,
+        new_messages=parsed_messages,
+        last_k_messages=last_messages,
+        custom_instructions=custom_instr,
+        technical_preservation_instructions=technical_preservation_instructions,
+        use_input_language=bool(multilingual),
+    )
+
+
+def _apply_extraction_payload_fields(mem_metadata: dict, mem: dict) -> None:
+    raw_content = mem.get("raw_content")
+    if raw_content:
+        mem_metadata["raw_content"] = raw_content
+        mem_metadata["has_technical_content"] = True
+    if mem.get("memory_type"):
+        mem_metadata["memory_type"] = mem["memory_type"]
 
 
 # Fields that hold runtime auth/connection objects and must be preserved.
@@ -1010,12 +1045,12 @@ class Memory(MemoryBase):
 
         custom_instr = prompt or self.custom_instructions
 
-        user_prompt = generate_additive_extraction_prompt(
+        user_prompt = _build_additive_extraction_user_prompt(
             existing_memories=existing_memories,
-            new_messages=parsed_messages,
-            last_k_messages=last_messages,
-            custom_instructions=custom_instr,
-            use_input_language=bool(self.config.multilingual),
+            parsed_messages=parsed_messages,
+            last_messages=last_messages,
+            custom_instr=custom_instr,
+            multilingual=self.config.multilingual,
         )
 
         logger.info("Phase 2: LLM extraction | existing_memories=%d new_messages=%d agent_scoped=%s", len(existing_memories), len(parsed_messages), is_agent_scoped)
@@ -1057,6 +1092,8 @@ class Memory(MemoryBase):
             logger.error("Error parsing extraction response | error=%s", e)
             extracted_memories = []
             logger.info("Phase 2 complete | extracted=0 reason=parse_error elapsed_ms=%.1f", (time.perf_counter() - llm_start) * 1000)
+
+        extracted_memories = enrich_extracted_memories(extracted_memories, parsed_messages)
 
         if not extracted_memories:
             # Save messages even if nothing extracted
@@ -1122,6 +1159,7 @@ class Memory(MemoryBase):
             mem_metadata["updated_at"] = mem_metadata["created_at"]
             if mem.get("attributed_to"):
                 mem_metadata["attributed_to"] = mem["attributed_to"]
+            _apply_extraction_payload_fields(mem_metadata, mem)
 
             records.append((memory_id, text, embed_map[text], mem_metadata))
 
@@ -2801,12 +2839,12 @@ class AsyncMemory(MemoryBase):
 
         custom_instr = prompt or self.custom_instructions
 
-        user_prompt = generate_additive_extraction_prompt(
+        user_prompt = _build_additive_extraction_user_prompt(
             existing_memories=existing_memories,
-            new_messages=parsed_messages,
-            last_k_messages=last_messages,
-            custom_instructions=custom_instr,
-            use_input_language=bool(self.config.multilingual),
+            parsed_messages=parsed_messages,
+            last_messages=last_messages,
+            custom_instr=custom_instr,
+            multilingual=self.config.multilingual,
         )
 
         try:
@@ -2837,6 +2875,8 @@ class AsyncMemory(MemoryBase):
         except Exception as e:
             logger.error(f"Error parsing extraction response (async): {e}")
             extracted_memories = []
+
+        extracted_memories = enrich_extracted_memories(extracted_memories, parsed_messages)
 
         if not extracted_memories:
             await asyncio.to_thread(self.db.save_messages, messages, session_scope)
@@ -2887,6 +2927,7 @@ class AsyncMemory(MemoryBase):
             mem_metadata["updated_at"] = mem_metadata["created_at"]
             if mem.get("attributed_to"):
                 mem_metadata["attributed_to"] = mem["attributed_to"]
+            _apply_extraction_payload_fields(mem_metadata, mem)
 
             records.append((memory_id, text, embed_map[text], mem_metadata))
 

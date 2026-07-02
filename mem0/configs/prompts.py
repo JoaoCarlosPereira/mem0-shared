@@ -904,6 +904,62 @@ Output:
 Three key lessons: (1) The existing memory "John has a dog named Max" does NOT mean all Max-related information is captured — the camping trip is a new event with specific activities (hiking, swimming) and must be extracted and linked. (2) Maria is a named speaker in the "assistant" role but shares a genuine personal fact (new cat Bailey) — this MUST be extracted with the same rigor as user facts. Her echo ("that sounds amazing", "camping is soul-nourishing") is correctly skipped, but her personal fact is not. (3) Sara's name and the birthday trip are separate factual details that each deserve their own extraction.
 
 
+## Technical Content Preservation (CRITICAL — Highest Priority)
+
+Your role is to extract value and organize memories — NOT to erase, rewrite, or replace technical information.
+
+When New Messages contain code, scripts, shell commands, SQL, JSON, XML, YAML, Docker Compose, configuration files, logs, stack traces, error messages, execution parameters, Delphi/Python/JavaScript/shell snippets, or any structured technical content:
+
+1. **Preserve verbatim**: Keep the original technical block with high fidelity in `raw_content`.
+2. **Dual-layer output**: `text` explains what the technical content represents; `raw_content` holds the original unchanged block. The summary must NOT replace the raw block.
+3. **When in doubt, preserve**: If summarizing would drop flags, paths, ports, versions, table/column names, function names, imports, parameters, or error text — preserve instead.
+4. **No rewriting**: Do NOT fix, translate, reformat, or "improve" code/commands/logs. Do NOT remove comments, imports, variables, file paths, URLs, ports, or command flags.
+5. **No vague technical memories**: Forbidden outputs include "User sent a script", "User works with code", "User configured a service", or "User had an error" without the actual technical details.
+6. **Technical content is valuable by itself**: A full command, config snippet, or stack trace may be the most important memory — store it.
+7. **No fabrication**: If you infer context, say so in `text`; never invent missing commands, paths, or error details. The original input remains authoritative in `raw_content`.
+
+### Technical Content Word Limit Exception
+
+The 15-80 word guideline applies to interpretive `text` only. `raw_content` has NO word limit — include the full original block.
+
+### Example 13: Shell Command — Preserve Full Command
+
+New Messages:
+[{"role": "user", "content": "Use this to start llama.cpp on the GPU server:\n./llama-cli --model /models/Qwen3-35B.gguf --n-gpu-layers 35 --ctx-size 8192 --batch-size 512 --threads 8 --port 8080"}]
+Observation Date: 2025-07-02
+
+Output:
+{"memory": [
+  {"id": "0", "text": "User runs llama.cpp with model /models/Qwen3-35B.gguf using GPU offload (35 layers), 8192 context, batch 512, 8 threads, on port 8080", "attributed_to": "user", "raw_content": "./llama-cli --model /models/Qwen3-35B.gguf --n-gpu-layers 35 --ctx-size 8192 --batch-size 512 --threads 8 --port 8080"}
+]}
+
+WRONG: {"memory": [{"id": "0", "text": "User uses a command to run llama.cpp", "attributed_to": "user"}]}
+
+
+### Example 14: Mixed Explanation + Code Block
+
+New Messages:
+[{"role": "user", "content": "Fix for the OpenMemory worker timeout — increase the semaphore in write_worker.py:\n```python\ndef __init__(self, concurrency: int = 4):\n    self._semaphore = asyncio.Semaphore(concurrency)\n```"}]
+Observation Date: 2025-07-02
+
+Output:
+{"memory": [
+  {"id": "0", "text": "User fixed OpenMemory write worker timeout by increasing asyncio.Semaphore concurrency (default 4) in write_worker.py __init__", "attributed_to": "user", "raw_content": "def __init__(self, concurrency: int = 4):\n    self._semaphore = asyncio.Semaphore(concurrency)"}
+]}
+
+
+### Example 15: SQL + Error Log
+
+New Messages:
+[{"role": "user", "content": "Query that fails on prod:\nSELECT u.id, u.email FROM users u JOIN orders o ON o.user_id = u.id WHERE o.status = 'pending';\nError: ERROR: relation \"orders\" does not exist at character 42"}]
+Observation Date: 2025-07-02
+
+Output:
+{"memory": [
+  {"id": "0", "text": "User's pending-orders query fails in production because relation 'orders' does not exist (PostgreSQL error at character 42)", "attributed_to": "user", "raw_content": "SELECT u.id, u.email FROM users u JOIN orders o ON o.user_id = u.id WHERE o.status = 'pending';\nError: ERROR: relation \"orders\" does not exist at character 42"}
+]}
+
+
 # CRITICAL: Exhaustive Extraction Checklist
 
 Before producing output, mentally scan the ENTIRE conversation — every single message — and verify:
@@ -923,7 +979,7 @@ Return ONLY valid JSON parsable by json.loads(). No text, reasoning, explanation
 
 {
   "memory": [
-    {"id": "0", "text": "First extracted memory", "attributed_to": "user", "linked_memory_ids": ["uuid-of-related-existing-memory"]},
+    {"id": "0", "text": "First extracted memory", "attributed_to": "user", "raw_content": "optional verbatim technical block", "linked_memory_ids": ["uuid-of-related-existing-memory"]},
     {"id": "1", "text": "Second extracted memory", "attributed_to": "assistant"}
   ]
 }
@@ -931,7 +987,8 @@ Return ONLY valid JSON parsable by json.loads(). No text, reasoning, explanation
 ## Fields
 
 - **id** (string, required): Sequential integers as strings starting at "0".
-- **text** (string, required): A contextually rich, self-contained factual statement (15-80 words).
+- **text** (string, required): A contextually rich, self-contained factual statement (15-80 words for non-technical content; technical interpretive summaries may be longer). Must include specific names, paths, flags, versions, and parameters when present in the source — never reduce to a generic description.
+- **raw_content** (string, optional): Verbatim original technical block (code, command, SQL, JSON/YAML, log, stack trace, config). Required when New Messages contain structured technical content. Must be copied exactly — no rewriting.
 - **attributed_to** (string, required): Who this memory is about. Use "user" for facts stated by or about the user (preferences, plans, personal facts). Use "assistant" for information provided by the assistant (recommendations, confirmations, plans created, information researched).
 - **linked_memory_ids** (array of strings, optional): IDs of Existing Memories that this new memory relates to. Use the exact IDs from the Existing Memories list. Omit or pass [] if no existing memories are related.
 
@@ -1023,6 +1080,7 @@ def generate_additive_extraction_prompt(
     current_date=None,
     timestamp=None,
     custom_instructions=None,
+    technical_preservation_instructions=None,
     use_input_language=False,
 ):
     """Build the user prompt for additive (ADD-only) extraction with linking.
@@ -1043,6 +1101,9 @@ def generate_additive_extraction_prompt(
 
     if custom_instructions:
         sections.append(f"## Custom Instructions\n{custom_instructions}")
+
+    if technical_preservation_instructions:
+        sections.append(f"## Technical Content Preservation\n{technical_preservation_instructions}")
 
     if use_input_language:
         sections.append(
