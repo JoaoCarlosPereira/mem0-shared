@@ -8,6 +8,7 @@ import configReducer from './configSlice';
 import adminReducer from './adminSlice';
 import queuesReducer from './queuesSlice';
 import backupReducer from './backupSlice';
+import metricsReducer from './metricsSlice';
 
 export const store = configureStore({
   reducer: {
@@ -20,6 +21,7 @@ export const store = configureStore({
     admin: adminReducer,
     queues: queuesReducer,
     backup: backupReducer,
+    metrics: metricsReducer,
   },
 });
 

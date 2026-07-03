@@ -11,6 +11,7 @@ from .discovery import router as discovery_router
 from .groups import router as groups_router
 from .health import router as health_router
 from .memories import router as memories_router
+from .metrics import router as metrics_router
 from .ops_metrics import router as ops_metrics_router
 from .provision import router as provision_router
 from .stats import router as stats_router
@@ -27,6 +28,7 @@ __all__ = [
     "compat_v3_router",
     "provision_router",
     "health_router",
+    "metrics_router",
     "ops_metrics_router",
     "governance_router",
     "governance_project_merge_router",

@@ -8,6 +8,7 @@ from app.utils.categorization import get_categories_for_memory
 from sqlalchemy import (
     JSON,
     UUID,
+    BigInteger,
     Boolean,
     Column,
     DateTime,
@@ -434,6 +435,44 @@ class MigrationState(Base):
     )
     updated_at = Column(
         DateTime, default=get_current_utc_time, onupdate=get_current_utc_time
+    )
+
+
+class TokenUsageLog(Base):
+    """Registro de consumo de tokens por chamada LLM/embedding (métricas).
+
+    Uma linha por chamada instrumentada ao backend de IA (extração, update,
+    embedding de busca/gravação). A atribuição (project/agent/user) vem do
+    contexto da operação em curso (ver ``app.utils.token_usage_wrapper``);
+    ``operation_type`` é a operação de memória (add, search, update, embed).
+    Falhas também são registradas (``success=False`` + ``error``) para que a
+    cobertura de instrumentação seja auditável.
+    """
+
+    __tablename__ = "token_usage_logs"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    created_at = Column(
+        DateTime, nullable=False, default=get_current_utc_time, index=True
+    )
+    project = Column(String, nullable=False, index=True)
+    agent = Column(String, nullable=False, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    operation_type = Column(String, nullable=False, index=True)
+    model = Column(String, nullable=False, index=True)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    total_tokens = Column(Integer, nullable=False, default=0)
+    cache_read_tokens = Column(Integer, nullable=False, default=0)
+    cache_write_tokens = Column(Integer, nullable=False, default=0)
+    duration_ms = Column(BigInteger, nullable=True)
+    success = Column(Boolean, nullable=False, default=True)
+    error = Column(Text, nullable=True)
+    trace_id = Column(String, nullable=True)
+
+    __table_args__ = (
+        Index("idx_token_usage_project_time", "project", "created_at"),
+        Index("idx_token_usage_agent_time", "agent", "created_at"),
+        Index("idx_token_usage_user_time", "user_id", "created_at"),
     )
 
 

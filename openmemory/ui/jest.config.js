@@ -22,7 +22,10 @@ const customJestConfig = {
     "store/queuesSlice.ts",
     "hooks/useAdminApi.ts",
     "hooks/useQueuesApi.ts",
+    "hooks/useMetricsApi.ts",
+    "store/metricsSlice.ts",
     "components/admin/**/*.{ts,tsx}",
+    "components/metrics/**/*.{ts,tsx}",
     "app/admin/**/*.{ts,tsx}",
   ],
 };

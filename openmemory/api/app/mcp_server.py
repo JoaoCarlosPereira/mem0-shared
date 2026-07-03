@@ -49,6 +49,7 @@ from app.utils.partitioning import bind_active_collection
 from app.utils.permissions import check_memory_access_permissions
 from app.utils.read_cache import read_cache
 from app.utils.recency import rank_search_results
+from app.utils.token_usage_wrapper import usage_attribution
 from app.utils.write_queue import WriteJob, write_queue
 from fastapi import FastAPI, Request
 from fastapi.routing import APIRouter
@@ -232,9 +233,17 @@ async def search_memory(query: str, project: str, rerank: bool = False) -> str:
             else:
                 EMBED_CACHE_MISS.inc()
                 try:
-                    embeddings = await anyio.to_thread.run_sync(
-                        lambda: memory_client.embedding_model.embed(query, "search")
-                    )
+                    # Atribuição de tokens da embedding de busca (task_06);
+                    # cache hit não consome tokens, por isso só aqui.
+                    with usage_attribution(
+                        project=project,
+                        agent=client_name_var.get(None) or DEFAULT_CLIENT_NAME,
+                        user_id=resolve_hostname(user_id_var.get(None)),
+                        operation_type="search",
+                    ):
+                        embeddings = await anyio.to_thread.run_sync(
+                            lambda: memory_client.embedding_model.embed(query, "search")
+                        )
                     read_cache.set_embedding(embed_model, query, embeddings)
                 except Exception as embed_err:  # noqa: BLE001
                     logging.warning(
