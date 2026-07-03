@@ -1089,6 +1089,11 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
     # para a MESMA URL de descoberta (IP da LAN:proxy_port) para que navegadores
     # remotos alcancem a API — o entrypoint da UI aplica esse valor no bundle.
     set_env(compose_env, "NEXT_PUBLIC_API_URL", discovery_url)
+    # NEXT_PUBLIC_MCP_URL: URL direta que os comandos de instalação MCP exibem.
+    # Fixada no discovery URL (IP da LAN:proxy_port) para que, mesmo acessando a
+    # UI por um hostname (ex.: https://memorias.sysmo.com.br), os agentes
+    # conectem no IP:8765 real — e não em hostname:8765 (porta não roteada).
+    set_env(compose_env, "NEXT_PUBLIC_MCP_URL", discovery_url)
     ui_url = discovery_url.replace(f":{args.proxy_port}", ":3000")
 
     # Login Google na UI (feature auth Google) --------------------------------
