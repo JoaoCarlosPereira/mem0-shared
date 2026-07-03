@@ -19,7 +19,9 @@ from app.models import App, User
 from app.routers import (
     admin_router,
     admin_write_queue_router,
+    agent_tokens_router,
     apps_router,
+    auth_router,
     backup_router,
     compat_v3_router,
     config_router,
@@ -122,6 +124,8 @@ create_default_app()
 setup_mcp_server(app)
 
 # Include routers
+app.include_router(auth_router)
+app.include_router(agent_tokens_router)
 app.include_router(admin_router)
 app.include_router(admin_write_queue_router)
 app.include_router(governance_router)

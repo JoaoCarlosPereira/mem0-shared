@@ -52,21 +52,40 @@ MODES = [
 ]
 
 
-def _group_query_suffix(group: Optional[str]) -> str:
+def _query_suffix(group: Optional[str], token: Optional[str] = None) -> str:
+    """Query string das URLs MCP: ``?token=`` (auth do agente) e/ou ``?group=``.
+
+    O token vem primeiro (credencial — ADR-003 da feature auth Google); o valor
+    nunca é logado por este módulo.
+    """
     from urllib.parse import quote
 
+    parts = []
+    tok = (token or "").strip()
+    if tok:
+        parts.append(f"token={quote(tok)}")
     name = normalize_group_name(group)
-    return f"?group={quote(name)}" if name else ""
+    if name:
+        parts.append(f"group={quote(name)}")
+    return f"?{'&'.join(parts)}" if parts else ""
 
 
-def _mcp_config(host: str, base_url: str, group: Optional[str] = None) -> dict:
+def _mcp_config(
+    host: str,
+    base_url: str,
+    group: Optional[str] = None,
+    token: Optional[str] = None,
+) -> dict:
     """Host-specific MCP config block pointing at this local server.
 
     ``{hostname}`` is a placeholder the recipe tells the agent to replace with
     the machine hostname (attribution only; reads are project-shared).
     Optional ``group`` appends ``?group=`` for first-connect team binding (ADR-004).
+    Optional ``token`` embeds ``?token=`` so the agent authenticates as the
+    person who generated it (feature auth Google, ADR-003); without it the
+    legacy hostname-only flow remains unchanged.
     """
-    gq = _group_query_suffix(group)
+    gq = _query_suffix(group, token)
     sse_url = f"{base_url}/mcp/{host}/sse/{{hostname}}{gq}"
     http_url = f"{base_url}/mcp/{host}/http/{{hostname}}{gq}"
     if host == "codex":
@@ -105,8 +124,9 @@ def _recipe(host: str) -> list:
         {
             "step": "mcp",
             "action": "Escrever/mesclar o bloco mcp_config no arquivo do host. "
-                      "Substituir o token {hostname} pelo hostname da máquina. "
-                      "Preservar ``?group=`` na URL se presente (vincula equipe na 1ª conexão). "
+                      "Substituir o placeholder {hostname} pelo hostname da máquina. "
+                      "Preservar ``?token=`` (credencial do usuário — tratar como "
+                      "segredo, não exibir em logs) e ``?group=`` na URL se presentes. "
                       "Idempotente: substituir a entrada 'mem0' existente, nunca anexar.",
         },
         {
@@ -134,18 +154,26 @@ def _recipe(host: str) -> list:
     ]
 
 
-def _payload(request: Request, host: str, group: Optional[str] = None) -> dict:
+def _payload(
+    request: Request,
+    host: str,
+    group: Optional[str] = None,
+    token: Optional[str] = None,
+) -> dict:
     base_url = resolve_discovery_base_url(request)
     return {
         "version": PROVISION_VERSION,
         "host": host,
         "base_url": base_url,
         "local_only": True,
-        "mcp_config": _mcp_config(host, base_url, group),
+        "mcp_config": _mcp_config(host, base_url, group, token),
         "env": {
             "OPENMEMORY_API_BASE": base_url,
             "MEM0_LOCAL_ONLY": "1",
-            "MEM0_API_KEY": "local",
+            # Com token de agente, as chamadas REST do plugin também autenticam
+            # (o AuthMiddleware reconhece o prefixo omtk_); sem token, mantém o
+            # placeholder legado.
+            "MEM0_API_KEY": (token or "").strip() or "local",
             "MEM0_TELEMETRY": "false",
         },
         "hints": {
@@ -170,11 +198,17 @@ async def get_provision(
     request: Request,
     host: str = "claude-code",
     group: Optional[str] = None,
+    token: Optional[str] = None,
 ) -> dict:
-    """Return the provisioning manifest for the given host."""
+    """Return the provisioning manifest for the given host.
+
+    ``token`` (opcional): token de agente do usuário, embutido como ``?token=``
+    nas URLs MCP e como ``MEM0_API_KEY`` no env — sem ele a receita é idêntica
+    ao fluxo legado.
+    """
     if host not in SUPPORTED_HOSTS:
         host = "claude-code"
-    return _payload(request, host, group)
+    return _payload(request, host, group, token)
 
 
 _PROTOCOL_TEXT = """\
