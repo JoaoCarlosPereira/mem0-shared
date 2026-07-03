@@ -98,3 +98,51 @@ sqlalchemy.url = driver://user:pass@localhost/dbname
 
     assert default_count == 1, "deve existir exatamente um grupo Default"
     assert orphan_users == 0, "todos os usuários existentes devem apontar para um grupo"
+
+
+def test_identity_migration_tables_columns_and_backfill(pg_url, monkeypatch, tmp_path):
+    """task_01 auth Google/ADR-004: machines/agent_tokens/link_audit_logs + backfill."""
+    monkeypatch.setenv("DATABASE_URL", pg_url)
+    from alembic import command
+    from alembic.config import Config
+
+    ini = tmp_path / "alembic.ini"
+    ini.write_text(
+        """
+[alembic]
+script_location = alembic
+sqlalchemy.url = driver://user:pass@localhost/dbname
+""".strip()
+    )
+    cfg = Config(str(ini))
+    cfg.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
+    command.upgrade(cfg, "head")
+
+    from sqlalchemy import create_engine, inspect, text
+
+    eng = create_engine(pg_url)
+    insp = inspect(eng)
+    tables = set(insp.get_table_names())
+    for name in ("machines", "agent_tokens", "link_audit_logs"):
+        assert name in tables
+    user_cols = {c["name"] for c in insp.get_columns("users")}
+    assert {"google_sub", "display_name", "avatar_url", "user_type"} <= user_cols
+
+    indexes = {idx["name"] for idx in insp.get_indexes("agent_tokens")}
+    assert "uq_agent_tokens_active_user" in indexes, "índice parcial de 1 token ativo"
+
+    with eng.connect() as conn:
+        null_types = conn.execute(
+            text("SELECT count(*) FROM users WHERE user_type IS NULL")
+        ).scalar()
+        orphan_machines = conn.execute(
+            text(
+                "SELECT count(*) FROM users u"
+                " LEFT JOIN machines m ON m.hostname = u.user_id"
+                " WHERE m.id IS NULL AND u.user_type = 'legacy_host'"
+            )
+        ).scalar()
+    eng.dispose()
+
+    assert null_types == 0, "user_type deve estar preenchido em todas as linhas"
+    assert orphan_machines == 0, "todo usuário legado deve ter linha em machines"

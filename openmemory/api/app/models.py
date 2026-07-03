@@ -74,6 +74,18 @@ class MigrationStatus(enum.Enum):
     done = "done"
 
 
+class MachineStatus(enum.Enum):
+    """Estado do vínculo máquina→pessoa (feature auth Google, ADR-004).
+
+    ``unlinked``: máquina conhecida (legado ou nova) sem dono; ``linked``:
+    vinculada a um usuário ``person``; ``conflict``: vínculo disputado por mais
+    de uma conta — nunca resolvido automaticamente (tratamento na Fase 2).
+    """
+    unlinked = "unlinked"
+    linked = "linked"
+    conflict = "conflict"
+
+
 class PartitionTier(enum.Enum):
     """Partition tier of a project in the shared Qdrant collection (ADR-002).
 
@@ -172,6 +184,14 @@ class Group(Base):
     members = relationship("User", back_populates="group")
 
 
+# Tipos de linha em ``users`` (ADR-004): ``legacy_host`` é a linha histórica cujo
+# ``user_id`` guarda um hostname; ``person`` é a pessoa autenticada via Google,
+# cujo ``user_id`` técnico é o ``google_sub``. String simples (não Enum nativo)
+# para manter o ALTER TABLE aditivo trivial em ambos os dialetos.
+USER_TYPE_PERSON = "person"
+USER_TYPE_LEGACY_HOST = "legacy_host"
+
+
 class User(Base):
     __tablename__ = "users"
     id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
@@ -181,6 +201,18 @@ class User(Base):
     # FK nullable para retrocompatibilidade: usuários sem grupo explícito são
     # tratados como pertencentes ao grupo Default pela lógica de grupo (ADR-002).
     group_id = Column(UUID, ForeignKey("groups.id"), nullable=True, index=True)
+    # Identidade Google (ADR-004): ``google_sub`` é o claim ``sub`` do ID token —
+    # estável e nunca reutilizado; é a chave da pessoa (o e-mail é informativo).
+    google_sub = Column(String, unique=True, nullable=True, index=True)
+    display_name = Column(String, nullable=True)
+    avatar_url = Column(String, nullable=True)
+    user_type = Column(
+        String,
+        nullable=False,
+        default=USER_TYPE_LEGACY_HOST,
+        server_default=USER_TYPE_LEGACY_HOST,
+        index=True,
+    )
     metadata_ = Column('metadata', JSON, default=dict)
     created_at = Column(DateTime, default=get_current_utc_time, index=True)
     updated_at = Column(DateTime,
@@ -190,6 +222,90 @@ class User(Base):
     group = relationship("Group", back_populates="members")
     apps = relationship("App", back_populates="owner")
     memories = relationship("Memory", back_populates="user")
+
+
+class Machine(Base):
+    """Computador/host usado por uma pessoa (ADR-004/ADR-005).
+
+    Uma linha por hostname. O vínculo ``linked_user_id`` → pessoa é a base da
+    resolução dinâmica hostname→pessoa (as memórias no Qdrant continuam com o
+    payload ``hostname`` intocado). ``legacy_user_id`` aponta a linha histórica
+    de ``users`` cujo ``user_id`` é este hostname, quando existir.
+    """
+
+    __tablename__ = "machines"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    hostname = Column(String, nullable=False, unique=True, index=True)
+    linked_user_id = Column(UUID, ForeignKey("users.id"), nullable=True, index=True)
+    legacy_user_id = Column(UUID, ForeignKey("users.id"), nullable=True, index=True)
+    status = Column(
+        Enum(MachineStatus),
+        nullable=False,
+        default=MachineStatus.unlinked,
+        server_default=MachineStatus.unlinked.value,
+        index=True,
+    )
+    linked_at = Column(DateTime, nullable=True)
+    linked_by = Column(UUID, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=get_current_utc_time, index=True)
+    updated_at = Column(DateTime,
+                        default=get_current_utc_time,
+                        onupdate=get_current_utc_time)
+
+    linked_user = relationship("User", foreign_keys=[linked_user_id])
+    legacy_user = relationship("User", foreign_keys=[legacy_user_id])
+
+
+class AgentToken(Base):
+    """Credencial dos agentes MCP de um usuário ``person`` (ADR-003/ADR-008).
+
+    Gerado UMA única vez por conta, imutável e permanentemente exibível na tela
+    de instalação (decisão de produto — ADR-008): o valor em claro fica em
+    ``token_value``; o ``token_hash`` (SHA-256) continua sendo o índice usado
+    pelo middleware para autenticar. ``revoked_at`` permanece como válvula de
+    emergência administrativa (UPDATE direto no banco) — não há rotação via API.
+    """
+
+    __tablename__ = "agent_tokens"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    user_id = Column(UUID, ForeignKey("users.id"), nullable=False, index=True)
+    token_hash = Column(String, nullable=False, index=True)
+    token_value = Column(String, nullable=True)
+    prefix = Column(String, nullable=False)
+    created_at = Column(DateTime, default=get_current_utc_time, index=True)
+    revoked_at = Column(DateTime, nullable=True)
+    last_used_at = Column(DateTime, nullable=True)
+
+    user = relationship("User")
+
+    __table_args__ = (
+        Index(
+            "uq_agent_tokens_active_user",
+            "user_id",
+            unique=True,
+            postgresql_where=sa.text("revoked_at IS NULL"),
+            sqlite_where=sa.text("revoked_at IS NULL"),
+        ),
+    )
+
+
+class LinkAuditLog(Base):
+    """Trilha auditável dos vínculos máquina↔pessoa (PRD "Regras de migração").
+
+    Uma linha por transição (``link``, ``unlink``, ``conflict_detected``,
+    ``conflict_resolved``) com o ator e detalhes em JSON.
+    """
+
+    __tablename__ = "link_audit_logs"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    machine_id = Column(UUID, ForeignKey("machines.id"), nullable=False, index=True)
+    actor_user_id = Column(UUID, ForeignKey("users.id"), nullable=True, index=True)
+    action = Column(String, nullable=False, index=True)
+    detail = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=get_current_utc_time, index=True)
+
+    machine = relationship("Machine")
+    actor = relationship("User")
 
 
 class App(Base):
