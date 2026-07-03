@@ -71,6 +71,51 @@ class TestScaleGovernanceWorker:
         assert script.exists()
 
 
+class TestBootstrapGoogleAuthSetup:
+    """task_10/feature auth Google: o bootstrap pede/gera tudo que o login
+    Google precisa (domínio, client id/secret, URL da UI, segredos de sessão),
+    sem nunca bloquear a instalação (fail-closed => fluxo legado segue)."""
+
+    @pytest.fixture(scope="class")
+    def script(self):
+        return (ROOT / "scripts" / "bootstrap-scale.sh").read_text(encoding="utf-8")
+
+    def test_flag_skip_auth_setup_existe(self, script):
+        assert "--skip-auth-setup" in script
+        assert "SKIP_AUTH_SETUP=1" in script
+
+    def test_pergunta_dominio_e_credenciais(self, script):
+        for needle in (
+            "AUTH_ALLOWED_DOMAIN",
+            "GOOGLE_CLIENT_ID",
+            "GOOGLE_CLIENT_SECRET",
+            "NEXTAUTH_URL",
+        ):
+            assert needle in script, f"bootstrap deve tratar {needle}"
+
+    def test_segredos_gerados_automaticamente(self, script):
+        assert "gen_secret" in script
+        assert "AUTH_JWT_SECRET" in script
+        assert "NEXTAUTH_SECRET" in script
+        assert "openssl rand" in script
+
+    def test_client_secret_nao_ecoa_no_terminal(self, script):
+        # read -s: o valor digitado do client secret não aparece na tela.
+        assert 'read -r -s -p "    GOOGLE_CLIENT_SECRET' in script
+
+    def test_nao_interativo_nao_bloqueia(self, script):
+        # Sem TTY o bootstrap segue com o fluxo legado (fail-closed), sem exit.
+        assert "sem TTY" in script
+        assert "fluxo legado segue ativo" in script
+
+    def test_escrita_idempotente_no_env(self, script):
+        # Só escreve chaves ausentes — re-rodar o bootstrap não duplica/reescreve.
+        assert "set_env_if_missing" in script
+
+    def test_redirect_uri_informado_ao_usuario(self, script):
+        assert "/api/auth/callback/google" in script
+
+
 class TestBootstrapDetection:
     def test_detect_ollama_when_tags_respond(self):
         from app.utils.model_detection import detect_ollama_models

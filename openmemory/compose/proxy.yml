@@ -8,6 +8,12 @@ services:
     # (404 em tudo). O install.py detecta e grava a versão do daemon no .env.
     environment:
       - DOCKER_API_VERSION=${DOCKER_API_VERSION:-1.44}
+    # ATENÇÃO (feature auth Google, ADR-003): NÃO habilitar --accesslog sem
+    # tratar a query string — o campo RequestPath do access log do Traefik
+    # inclui `?token=` (credencial dos agentes MCP). Se o access log for
+    # necessário, habilite com drop do caminho, ex.:
+    #   - --accesslog=true
+    #   - --accesslog.fields.names.RequestPath=drop
     command:
       - --ping=true
       - --api.dashboard=false
@@ -15,10 +21,21 @@ services:
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
       - --entrypoints.web.transport.respondingTimeouts.readTimeout=0
+      # HTTPS da UI (feature auth Google, ADR-009): entrypoint TLS + certificado
+      # via arquivo dinâmico. Sem certificado em ${TLS_CERT_DIR}, o Traefik loga
+      # erro e serve o autoassinado default — o restante do stack não é afetado.
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=0
+      - --providers.file.filename=/etc/traefik/dynamic/tls.yml
     ports:
       - "${PROXY_PORT:-8765}:80"
+      - "${PROXY_TLS_PORT:-443}:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/tls.yml:/etc/traefik/dynamic/tls.yml:ro
+      # Certificado da UI (ex.: memorias.sysmo.com.br): coloque fullchain/key em
+      # ${TLS_CERT_DIR} (default openmemory/certs) como ui.crt / ui.key.
+      - ${TLS_CERT_DIR:-../certs}:/certs:ro
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
       interval: 10s

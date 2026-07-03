@@ -51,6 +51,21 @@ x-api-common: &api-common
     AUTH_MODE: ${AUTH_MODE:-warn}
     # Caminho do secret de tokens (ex.: Docker secret montado em /run/secrets).
     AUTH_TOKENS_FILE: ${AUTH_TOKENS_FILE:-/run/secrets/team_tokens}
+    # Auth Google + identidade (feature auth Google, ADR-002/ADR-006/ADR-007).
+    # AUTH_JWT_SECRET assina o JWT de sessão da UI (>= 32 bytes; defina no .env
+    # ou monte como secret). AUTH_ALLOWED_DOMAIN restringe o login ao domínio
+    # Google Workspace da empresa. GOOGLE_CLIENT_ID valida o `aud` do ID token;
+    # GOOGLE_CLIENT_SECRET é exigido pelo polling do Device Flow (ADR-007).
+    # Sem AUTH_JWT_SECRET/AUTH_ALLOWED_DOMAIN o login Google fica desabilitado
+    # (fail-closed) e o fluxo legado por hostname segue intacto.
+    AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
+    AUTH_ALLOWED_DOMAIN: ${AUTH_ALLOWED_DOMAIN:-}
+    GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+    # Client OAuth separado p/ device flow (tipo "TVs"; ADR-009) — opcional,
+    # fallback para GOOGLE_CLIENT_ID/SECRET quando ausente.
+    GOOGLE_DEVICE_CLIENT_ID: ${GOOGLE_DEVICE_CLIENT_ID:-}
+    GOOGLE_DEVICE_CLIENT_SECRET: ${GOOGLE_DEVICE_CLIENT_SECRET:-}
     # Tracing OTLP (task_08 / ADR-004).
     OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
     OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-}
@@ -128,8 +143,12 @@ services:
     # a um caminho da LAN. NÃO substitui os volumes mem0_storage/mem0_pgdata.
     volumes:
       - ${LOCAL_BACKUP_DIR:-./backups}:/mnt/backups
+    # --no-access-log: o access log do uvicorn imprime a URL completa com query
+    # string, o que vazaria o ?token= dos agentes (ADR-003). A observabilidade
+    # de requisições vem do logging estruturado (request_id/auth_method) e das
+    # trilhas write/read_audit_logs — que nunca contêm o token.
     command: >
-      sh -c "uvicorn main:app --host 0.0.0.0 --port 8765 --workers 2"
+      sh -c "uvicorn main:app --host 0.0.0.0 --port 8765 --workers 2 --no-access-log"
 
   openmemory-write-worker:
     <<: *api-common
@@ -217,6 +236,14 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
+    # HTTPS via Traefik (ADR-009): https://${UI_HOSTNAME} → UI. O acesso direto
+    # http://IP:3000 continua funcionando (porta publicada acima).
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.openmemory-ui.rule=Host(`${UI_HOSTNAME:-memorias.sysmo.com.br}`)
+      - traefik.http.routers.openmemory-ui.entrypoints=websecure
+      - traefik.http.routers.openmemory-ui.tls=true
+      - traefik.http.services.openmemory-ui.loadbalancer.server.port=3000
     depends_on:
       openmemory-mcp:
         condition: service_started
@@ -225,6 +252,13 @@ services:
       - API_INTERNAL_URL=http://openmemory-mcp:8765
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-/api-proxy}
       - NEXT_PUBLIC_USER_ID=${OPENMEMORY_UI_USER_ID:-openmemory}
+      # Login Google na UI (feature auth Google, ADR-002). Segredos de servidor
+      # (não passam pelo sed de NEXT_PUBLIC_* do entrypoint): defina no .env.
+      # NEXTAUTH_URL deve ser a URL da UI acessível na LAN (ex.: http://IP:3000).
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-}
+      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
 
 volumes:
   mem0_storage:

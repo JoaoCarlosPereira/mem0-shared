@@ -1,0 +1,4 @@
+# Certificados TLS da UI (ADR-009) — NUNCA versionar chaves.
+*
+!.gitignore
+!README.md
