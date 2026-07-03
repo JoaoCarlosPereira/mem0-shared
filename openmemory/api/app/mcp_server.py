@@ -42,6 +42,7 @@ from app.utils.metrics import (
 )
 from app.utils.env import safe_load_dotenv
 from app.utils.db import get_user_and_app
+from app.utils.attribution import author_hostname_from_payload
 from app.utils.groups import ensure_user_group, ensure_user_registered, requester_group_for_mcp
 from app.utils.identity import resolve_hostname
 from app.utils.memory import get_memory_client_safe
@@ -190,7 +191,7 @@ async def _fetch_all_memories(memory_client, top_k: int = DEFAULT_LIST_TOP_K) ->
             "created_at": payload.get("created_at"),
             "updated_at": payload.get("updated_at"),
             "project": payload.get("project"),
-            "owner": payload.get("hostname"),
+            "owner": author_hostname_from_payload(payload),
         })
     return results
 
@@ -283,7 +284,7 @@ async def search_memory(query: str, project: str, rerank: bool = False) -> str:
                     "created_at": payload.get("created_at"),
                     "updated_at": payload.get("updated_at"),
                     "project": payload.get("project"),
-                    "owner": payload.get("hostname"),
+                    "owner": author_hostname_from_payload(payload),
                     "score": score,
                 })
             read_cache.set_search(
@@ -354,7 +355,7 @@ async def list_memories(project: str) -> str:
                 "created_at": payload.get("created_at"),
                 "updated_at": payload.get("updated_at"),
                 "project": payload.get("project"),
-                "owner": payload.get("hostname"),
+                "owner": author_hostname_from_payload(payload),
             })
 
         rank_search_results(

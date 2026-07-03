@@ -13,6 +13,7 @@ import {
   ScrollText,
   HardDrive,
   Users,
+  UserCircle2,
 } from "lucide-react";
 import { selectSidebarFailedCount } from "@/store/queuesSlice";
 import { useQueueFailedAlerts } from "@/hooks/useQueueFailedAlerts";
@@ -29,6 +30,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Filas", href: "/admin/queues", icon: ListOrdered },
   { label: "Projetos", href: "/admin/projects", icon: Database },
   { label: "Grupos", href: "/admin/groups", icon: Users },
+  { label: "Usuários", href: "/admin/users", icon: UserCircle2 },
   { label: "Governança", href: "/admin/governance", icon: Shield },
   { label: "Métricas", href: "/admin/metrics", icon: BarChart3 },
   { label: "Backup", href: "/admin/backup", icon: HardDrive },

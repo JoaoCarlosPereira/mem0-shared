@@ -173,12 +173,9 @@ def list_shared_memories(
 
 def _attribution_from_payload(payload: dict[str, Any]) -> dict[str, Optional[str]]:
     """Extract write-time attribution stored in Qdrant payload (ADR-003)."""
-    hostname = payload.get("hostname") or payload.get("user_id")
-    client = payload.get("mcp_client")
-    return {
-        "created_by_hostname": str(hostname) if hostname else None,
-        "created_by_client": str(client) if client else None,
-    }
+    from app.utils.attribution import attribution_from_payload
+
+    return attribution_from_payload(payload)
 
 
 def get_shared_memory_by_id(memory_id: str) -> Optional[dict[str, Any]]:
@@ -220,3 +217,50 @@ def get_shared_memory_by_id(memory_id: str) -> Optional[dict[str, Any]]:
     except Exception:  # noqa: BLE001
         logger.exception("failed to get shared memory %s", memory_id)
         return None
+
+
+def get_shared_memories_by_ids(memory_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Batch-fetch memory points from Qdrant by ID."""
+    if not memory_ids:
+        return {}
+    _, vs = _vector_store()
+    if vs is None:
+        return {}
+    try:
+        records = vs.client.retrieve(
+            collection_name=vs.collection_name,
+            ids=memory_ids,
+            with_payload=True,
+            with_vectors=False,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("failed to batch-get shared memories")
+        return {}
+
+    out: dict[str, dict[str, Any]] = {}
+    for rec in records or []:
+        payload = getattr(rec, "payload", {}) or {}
+        mid = str(getattr(rec, "id", ""))
+        if not mid:
+            continue
+        created = payload.get("created_at")
+        created_ts = 0
+        if created:
+            try:
+                created_ts = int(
+                    datetime.fromisoformat(str(created).replace("Z", "+00:00")).timestamp()
+                )
+            except ValueError:
+                created_ts = 0
+        out[mid] = {
+            "id": mid,
+            "text": payload.get("data") or "",
+            "created_at": created_ts,
+            "state": payload.get("state") or "active",
+            "app_id": None,
+            "app_name": payload.get("project") or "shared",
+            "categories": [],
+            "metadata_": payload,
+            **_attribution_from_payload(payload),
+        }
+    return out

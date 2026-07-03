@@ -250,6 +250,8 @@ export function MemoryTable() {
               <TableCell className="w-[140px] text-center">
                 <AttributionLabel
                   appName={memory.app_name}
+                  clientName={memory.created_by_client}
+                  hostname={memory.created_by_hostname}
                   metadata={memory.metadata}
                 />
               </TableCell>

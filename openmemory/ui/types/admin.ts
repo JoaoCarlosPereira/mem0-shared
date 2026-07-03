@@ -154,3 +154,88 @@ export type WriteAuditFilter = {
   to_date?: string;
   page: number;
 };
+
+// Analytics dashboard — espelha /admin/analytics/*
+export type UsageLevel =
+  | "ativo"
+  | "escrita"
+  | "leitura"
+  | "inativo"
+  | "sem_atividade";
+
+export type GroupAnalytics = {
+  id: string;
+  name: string;
+  member_count: number;
+  active_members_7d: number;
+  writes_total: number;
+  writes_24h: number;
+  writes_7d: number;
+  reads_total: number;
+  reads_24h: number;
+  reads_7d: number;
+};
+
+export type UserAnalytics = {
+  id?: string | null;
+  user_id: string;
+  name?: string | null;
+  group_id?: string | null;
+  group_name?: string | null;
+  created_at?: string | null;
+  writes_total: number;
+  writes_24h: number;
+  writes_7d: number;
+  reads_total: number;
+  reads_24h: number;
+  reads_7d: number;
+  distinct_memories_read: number;
+  last_write_at?: string | null;
+  last_read_at?: string | null;
+  usage_level: UsageLevel;
+};
+
+export type UserAnalyticsDetail = UserAnalytics & {
+  writes_30d: number;
+  reads_30d: number;
+  distinct_projects_written: number;
+  distinct_projects_read: number;
+  recent_writes: {
+    id: string;
+    job_id?: string | null;
+    project: string;
+    client_name: string | null;
+    action: string;
+    created_at: string;
+    text?: string | null;
+    text_preview?: string | null;
+  }[];
+  recent_reads: {
+    id: string;
+    project: string;
+    memory_id: string;
+    access_type: string;
+    source: string;
+    client_name: string | null;
+    accessed_at: string;
+    memory_preview?: string | null;
+    memory_text?: string | null;
+  }[];
+};
+
+export type AnalyticsOverview = {
+  total_users: number;
+  total_groups: number;
+  active_users_7d: number;
+  writes_total: number;
+  writes_24h: number;
+  writes_7d: number;
+  reads_total: number;
+  reads_24h: number;
+  reads_7d: number;
+};
+
+export type GroupAnalyticsDetail = {
+  group: GroupAnalytics;
+  members: UserAnalytics[];
+};

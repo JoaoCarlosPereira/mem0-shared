@@ -25,7 +25,9 @@ accepted and ignored (the local server is trust-on-LAN; auth is out of scope).
 import logging
 from typing import Any, Optional
 
+from app.utils.attribution import author_hostname_from_payload
 from app.utils.groups import ensure_user_registered, requester_group_for_mcp
+from app.utils.identity import resolve_hostname
 from app.utils.memory import get_memory_client
 from app.utils.partitioning import bind_active_collection
 from app.utils.read_audit import record_memory_reads
@@ -46,6 +48,16 @@ def _memory_client():
     except Exception as e:  # noqa: BLE001
         logging.warning("compat_v3: memory client unavailable: %s", e)
         return None
+
+
+def _reader_audit_attrs(
+    http_request: Request,
+    reader_host: Optional[str],
+) -> tuple[str, Optional[str]]:
+    """Hostname + client for read-audit rows (parity with MCP wrappers)."""
+    hostname = resolve_hostname(reader_host)
+    client_name = http_request.headers.get("x-client-name", "").strip() or None
+    return hostname, client_name
 
 
 def _walk_clauses(filters: Any):
@@ -115,7 +127,7 @@ def _hit_to_result(h) -> dict:
         "created_at": payload.get("created_at"),
         "updated_at": payload.get("updated_at"),
         "project": payload.get("project"),
-        "owner": payload.get("hostname"),
+        "owner": author_hostname_from_payload(payload),
         "metadata": payload,
     }
 
@@ -197,11 +209,14 @@ async def search(request: SearchRequest, http_request: Request) -> dict:
     )
     results = results[:top_k]
 
+    audit_host, audit_client = _reader_audit_attrs(http_request, reader_host)
     record_memory_reads(
         project=project,
         memory_ids=[r.get("id") for r in results],
         access_type="search",
         source="compat_v3",
+        hostname=audit_host,
+        client_name=audit_client,
         query=request.query,
         items=results,
     )
@@ -255,6 +270,8 @@ async def add(request: AddRequest) -> dict:
     metadata = dict(request.metadata or {})
     metadata.setdefault("project", project)
     metadata.setdefault("source_app", "openmemory")
+    if request.user_id:
+        metadata.setdefault("hostname", resolve_hostname(request.user_id))
 
     ensure_user_registered(request.user_id)
 
@@ -327,7 +344,7 @@ async def list_memories(request: Request, body: ListRequest) -> dict:
             "memory": payload.get("data"),
             "created_at": payload.get("created_at"),
             "updated_at": payload.get("updated_at"),
-            "owner": payload.get("hostname"),
+            "owner": author_hostname_from_payload(payload),
             "metadata": payload,
         })
 
@@ -340,11 +357,14 @@ async def list_memories(request: Request, body: ListRequest) -> dict:
     count = len(results)
     page_results = results[:page_size]
 
+    audit_host, audit_client = _reader_audit_attrs(request, reader_host)
     record_memory_reads(
         project=project,
         memory_ids=[r.get("id") for r in page_results],
         access_type="list",
         source="compat_v3",
+        hostname=audit_host,
+        client_name=audit_client,
         items=page_results,
     )
 

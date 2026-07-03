@@ -32,6 +32,8 @@ const memories: Memory[] = [
     app_name: "cli",
     state: "active",
     group: "Equipe A",
+    created_by_hostname: "S0293",
+    created_by_client: "cursor",
   },
   {
     id: "m2",
@@ -65,6 +67,11 @@ describe("MemoryTable — etiqueta de grupo (task_09)", () => {
   it("renderiza o nome do grupo do autor", () => {
     renderTable();
     expect(screen.getByText("Equipe A")).toBeInTheDocument();
+  });
+
+  it("exibe o hostname do autor na coluna Criado por", () => {
+    renderTable();
+    expect(screen.getByText("S0293")).toBeInTheDocument();
   });
 
   it("usa rótulo neutro '—' para memória sem grupo", () => {

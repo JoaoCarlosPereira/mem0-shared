@@ -37,6 +37,8 @@ interface ApiMemoryItem {
   metadata_?: Record<string, any>;
   app_name: string;
   group?: string | null;
+  created_by_hostname?: string | null;
+  created_by_client?: string | null;
 }
 
 // Define the shape of the API response
@@ -186,6 +188,8 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
         client: 'api',
         app_name: item.app_name,
         group: item.group ?? null,
+        created_by_hostname: item.created_by_hostname ?? null,
+        created_by_client: item.created_by_client ?? null,
       }));
       setIsLoading(false);
       dispatch(setMemoriesSuccess(adaptedMemories));

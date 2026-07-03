@@ -72,6 +72,7 @@ describe("QueuesPage", () => {
   it("aba Write Queue ativa por padrão exibe o job", () => {
     renderPage();
     expect(screen.getByText("olá mundo")).toBeInTheDocument();
+    expect(screen.getByText("host1")).toBeInTheDocument();
   });
 
   it("erro da write queue é exibido em vermelho", () => {

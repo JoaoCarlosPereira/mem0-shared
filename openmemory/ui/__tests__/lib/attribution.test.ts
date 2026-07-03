@@ -32,6 +32,17 @@ describe("resolveAttribution", () => {
     expect(result.clientKey).toBe("claude");
   });
 
+  it("falls back to user_id in metadata when hostname is absent", () => {
+    const result = resolveAttribution({
+      appName: "sysmovs",
+      metadata: {
+        user_id: "S0293",
+        mcp_client: "cursor",
+      },
+    });
+    expect(result.label).toBe("S0293");
+  });
+
   it("falls back to client name when hostname is missing", () => {
     const result = resolveAttribution({
       clientName: "cursor",

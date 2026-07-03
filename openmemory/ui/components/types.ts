@@ -12,4 +12,6 @@ export interface Memory {
   state: "active" | "paused" | "archived" | "deleted"
   // Grupo (equipe) do autor da memória (task_09). Ausente/null => sem grupo resolvível.
   group?: string | null
+  created_by_hostname?: string | null
+  created_by_client?: string | null
 }

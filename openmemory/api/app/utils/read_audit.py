@@ -144,6 +144,22 @@ def _normalize_audit_hostname(hostname: Optional[str]) -> Optional[str]:
     return host or None
 
 
+def canonical_audit_hostname(hostname: Optional[str]) -> Optional[str]:
+    """Return the user hostname for analytics (strips ``ui:`` prefix)."""
+    return _normalize_audit_hostname(hostname)
+
+
+def read_audit_hostname_variants(hostname: str) -> list[str]:
+    """All ``read_audit_logs.hostname`` values that belong to one user."""
+    host = (hostname or "").strip()
+    if not host:
+        return []
+    if host.startswith("ui:"):
+        bare = host[3:].strip()
+        return [bare, host] if bare else [host]
+    return [host, f"ui:{host}"]
+
+
 def audit_log_display_name(
     *,
     client_name: Optional[str],

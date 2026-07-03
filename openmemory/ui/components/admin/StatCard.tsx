@@ -1,8 +1,9 @@
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import type { ReactNode } from "react";
 
 interface StatCardProps {
   title: string;
-  value: number | string;
+  value: number | string | ReactNode;
   // Destaque visual (borda/fundo vermelho) — usado para filas com failed > 0.
   alert?: boolean;
   // Texto auxiliar opcional (ex.: status do worker).

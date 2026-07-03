@@ -63,16 +63,18 @@ async def test_search_result_includes_owner_from_payload(patched_client):
 
 
 @pytest.mark.asyncio
-async def test_missing_hostname_yields_owner_none(patched_client):
+async def test_owner_falls_back_to_user_id_when_hostname_missing(patched_client):
     client = patched_client
-    client.vector_store.search.return_value = [_hit("1", "coffee", "A")]  # sem hostname
+    client.vector_store.search.return_value = [
+        _hit("1", "coffee", "A", user_id="host-y")
+    ]
     mcp_server.user_id_var.set("host-req")
     mcp_server.client_name_var.set("cursor")
 
     with patch.object(mcp_server, "requester_group_for_mcp", return_value=None):
         out = await search_memory("coffee", project="A")
     data = json.loads(out)
-    assert data["results"][0]["owner"] is None
+    assert data["results"][0]["owner"] == "host-y"
 
 
 @pytest.mark.asyncio
