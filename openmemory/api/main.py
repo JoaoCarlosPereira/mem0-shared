@@ -30,6 +30,7 @@ from app.routers import (
     groups_router,
     health_router,
     memories_router,
+    metrics_router,
     ops_metrics_router,
     provision_router,
     stats_router,
@@ -136,6 +137,7 @@ app.include_router(discovery_router)
 app.include_router(compat_v3_router)
 app.include_router(provision_router)
 app.include_router(health_router)
+app.include_router(metrics_router)
 app.include_router(ops_metrics_router)
 
 # Add pagination support
