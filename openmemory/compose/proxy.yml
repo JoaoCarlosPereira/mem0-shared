@@ -27,9 +27,17 @@ services:
       - --entrypoints.websecure.address=:443
       - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=0
       - --providers.file.filename=/etc/traefik/dynamic/tls.yml
+    # Porta TLS: default 8443 para NÃO disputar a 443 do host — em produção a
+    # empresa já tem um proxy (nginx/Traefik) terminando TLS na 443 para
+    # *.sysmo.com.br. Duas topologias suportadas (ADR-009):
+    #   (A) Proxy da empresa na 443 termina o TLS e encaminha
+    #       https://memorias.sysmo.com.br -> http://IP_DA_LAN:3000 (a UI). Neste
+    #       caso o TLS deste Traefik nem é usado; mantenha PROXY_TLS_PORT=8443.
+    #   (B) Este Traefik é o edge TLS: set PROXY_TLS_PORT=443 (com a 443 livre)
+    #       e coloque o certificado em ${TLS_CERT_DIR} (ui.crt/ui.key).
     ports:
       - "${PROXY_PORT:-8765}:80"
-      - "${PROXY_TLS_PORT:-443}:443"
+      - "${PROXY_TLS_PORT:-8443}:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/tls.yml:/etc/traefik/dynamic/tls.yml:ro

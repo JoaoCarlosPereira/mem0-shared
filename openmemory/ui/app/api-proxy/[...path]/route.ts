@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { sanitizeUpstreamHeaders } from "@/lib/proxy-headers";
+
 function internalBase(): string {
   return (process.env.API_INTERNAL_URL || "http://localhost:8765").replace(
     /\/$/,
@@ -14,21 +16,34 @@ async function proxyRequest(
   const suffix = pathSegments.length ? `/${pathSegments.join("/")}` : "";
   const target = `${internalBase()}${suffix}${req.nextUrl.search}`;
 
-  const headers = new Headers(req.headers);
-  headers.delete("host");
+  const headers = sanitizeUpstreamHeaders(req.headers);
 
   const hasBody = req.method !== "GET" && req.method !== "HEAD";
   const init: RequestInit = {
     method: req.method,
     headers,
+    redirect: "manual",
   };
   if (hasBody) {
     init.body = await req.arrayBuffer();
   }
 
-  const upstream = await fetch(target, init);
+  let upstream: Response;
+  try {
+    upstream = await fetch(target, init);
+  } catch (err) {
+    // Falha de conexão/transporte com a API interna: responde JSON 502 em vez
+    // de deixar o handler estourar (que viraria uma página HTML 500).
+    return NextResponse.json(
+      { detail: "upstream indisponível", error: String(err) },
+      { status: 502 },
+    );
+  }
+
   const responseHeaders = new Headers(upstream.headers);
   responseHeaders.delete("transfer-encoding");
+  responseHeaders.delete("content-encoding");
+  responseHeaders.delete("content-length");
 
   return new NextResponse(upstream.body, {
     status: upstream.status,

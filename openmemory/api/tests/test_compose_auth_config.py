@@ -117,6 +117,23 @@ def test_ui_roteada_por_hostname_no_websecure(compose):
     assert "loadbalancer.server.port=3000" in joined
 
 
+def test_traefik_nao_disputa_443_por_padrao(proxy):
+    # A porta TLS default é 8443 (host já tem proxy na 443) — evita conflito.
+    ports = [str(p) for p in proxy["services"]["traefik"]["ports"]]
+    tls_map = [p for p in ports if p.endswith(":443")]
+    assert tls_map and "8443" in tls_map[0], (
+        "default do PROXY_TLS_PORT deve ser 8443 para não conflitar com o proxy da empresa"
+    )
+
+
+def test_ui_expoe_mcp_url_para_comandos_de_instalacao(compose):
+    # Sem NEXT_PUBLIC_MCP_URL, comandos MCP sairiam com hostname:8765 (quebrado)
+    # quando a UI é acessada por hostname — a var fixa o IP:8765 real.
+    env_list = compose["services"]["openmemory-ui"]["environment"]
+    joined = "\n".join(str(e) for e in env_list)
+    assert "NEXT_PUBLIC_MCP_URL" in joined
+
+
 def test_api_env_tem_client_dedicado_do_device_flow(compose):
     env = compose["x-api-common"]["environment"]
     assert "GOOGLE_DEVICE_CLIENT_ID" in env
