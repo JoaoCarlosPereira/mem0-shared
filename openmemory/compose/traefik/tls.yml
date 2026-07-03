@@ -1,12 +1,24 @@
 # Configuração dinâmica de TLS do Traefik (feature auth Google, ADR-009).
 #
-# O certificado da UI (ex.: memorias.sysmo.com.br) é montado de
-# ${TLS_CERT_DIR:-openmemory/certs} como /certs/ui.crt e /certs/ui.key —
-# fullchain PEM + chave privada. Emissão recomendada: Let's Encrypt via
-# desafio DNS-01 (não exige exposição à internet) ou CA interna da empresa.
-# Sem os arquivos, o Traefik loga erro e serve o certificado default
-# (autoassinado) — o restante do stack segue intacto.
+# Topologia B (edge TLS neste Traefik) com o certificado WILDCARD *.sysmo.com.br
+# já existente na empresa. Aponte TLS_CERT_DIR (no openmemory/.env) para o
+# diretório dos certificados e garanta que os arquivos se chamem ui.crt / ui.key
+# dentro dele (renomeie, copie ou crie symlink). Exemplo do ambiente atual:
+#
+#   TLS_CERT_DIR=/home/sysmo-ia/ssl/sysmo.com.br
+#   ln -s <fullchain>.crt /home/sysmo-ia/ssl/sysmo.com.br/ui.crt
+#   ln -s <privkey>.key   /home/sysmo-ia/ssl/sysmo.com.br/ui.key
+#
+# O wildcard casa com memorias.sysmo.com.br por SNI; `defaultCertificate`
+# garante que o Traefik nunca sirva o autoassinado default. O file provider do
+# Traefik NÃO expande variáveis de ambiente — por isso os nomes são fixos
+# (ui.crt/ui.key) e o diretório é escolhido via bind mount (TLS_CERT_DIR).
 tls:
   certificates:
     - certFile: /certs/ui.crt
       keyFile: /certs/ui.key
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/ui.crt
+        keyFile: /certs/ui.key
