@@ -856,6 +856,12 @@ def get_memory_client(custom_instructions: str = None):
             print(f"Initializing memory client with config hash: {current_config_hash}")
             try:
                 _memory_client = Memory.from_config(config_dict=config)
+                # Métricas de consumo de tokens (task_06): instrumenta o SDK
+                # LLM/embedder uma única vez no build — cobre worker, MCP e
+                # routers sem duplicação. Best-effort: nunca levanta.
+                from app.utils.token_usage_wrapper import instrument_memory_client
+
+                instrument_memory_client(_memory_client)
                 _config_hash = current_config_hash
                 _client_is_local_only = is_local_only()
                 _cached_config_updated_at = db_updated_at

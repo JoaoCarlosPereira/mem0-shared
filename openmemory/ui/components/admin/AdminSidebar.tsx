@@ -5,6 +5,7 @@ import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useSelector } from "react-redux";
 import {
+  BarChart3,
   LayoutDashboard,
   ListOrdered,
   Database,
@@ -29,6 +30,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Projetos", href: "/admin/projects", icon: Database },
   { label: "Grupos", href: "/admin/groups", icon: Users },
   { label: "Governança", href: "/admin/governance", icon: Shield },
+  { label: "Métricas", href: "/admin/metrics", icon: BarChart3 },
   { label: "Backup", href: "/admin/backup", icon: HardDrive },
   { label: "Log de Auditoria", href: "/admin/audit", icon: ScrollText },
 ];

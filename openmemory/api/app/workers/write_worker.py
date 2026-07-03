@@ -39,6 +39,7 @@ from app.utils.metrics import (
 )
 from app.utils.projects import upsert_project as _default_upsert_project
 from app.utils.read_cache import read_cache
+from app.utils.token_usage_wrapper import usage_attribution
 from app.utils.write_queue import WriteJob
 from app.utils.write_queue import write_queue as _default_write_queue
 
@@ -292,19 +293,30 @@ class WriteWorker:
         # Writes target the active collection (blue-green, ADR-003).
         bind_active_collection(client)
         add = client.add
-        if asyncio.iscoroutinefunction(add):
-            return await add(job.text, **kwargs)
+        # Atribuição de consumo de tokens (task_06): as chamadas LLM/embedding
+        # internas ao add() são registradas contra este job. Contextvars
+        # propagam por asyncio.to_thread (o contexto é copiado para a thread).
+        attribution = usage_attribution(
+            project=job.project,
+            agent=job.client_name or "write-worker",
+            user_id=job.hostname,
+            operation_type="add",
+        )
+        with attribution:
+            if asyncio.iscoroutinefunction(add):
+                return await add(job.text, **kwargs)
 
-        # Call it; if the client returned a coroutine/awaitable (e.g. an async
-        # client wrapped so ``iscoroutinefunction`` does not detect it), await
-        # the result. Otherwise it is a sync client (the OpenMemory default) —
-        # offload to a thread so the LLM call does not block the event loop.
-        # We probe sync-ness with iscoroutinefunction first to avoid running a
-        # blocking sync ``add`` on the event loop thread.
-        result = await asyncio.to_thread(add, job.text, **kwargs)
-        if asyncio.iscoroutine(result) or asyncio.isfuture(result):
-            return await result
-        return result
+            # Call it; if the client returned a coroutine/awaitable (e.g. an
+            # async client wrapped so ``iscoroutinefunction`` does not detect
+            # it), await the result. Otherwise it is a sync client (the
+            # OpenMemory default) — offload to a thread so the LLM call does
+            # not block the event loop. We probe sync-ness with
+            # iscoroutinefunction first to avoid running a blocking sync
+            # ``add`` on the event loop thread.
+            result = await asyncio.to_thread(add, job.text, **kwargs)
+            if asyncio.iscoroutine(result) or asyncio.isfuture(result):
+                return await result
+            return result
 
     def _maybe_dual_write(self, client, result) -> None:
         """Mirror the just-written delta to the migration target (task_05 / ADR-003).

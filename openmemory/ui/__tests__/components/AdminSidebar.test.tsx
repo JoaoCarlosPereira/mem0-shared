@@ -43,7 +43,7 @@ beforeEach(() => {
 });
 
 describe("AdminSidebar", () => {
-  it("renderiza os itens de menu, incluindo Grupos", () => {
+  it("renderiza os itens de menu, incluindo Grupos e Métricas", () => {
     renderSidebar();
     [
       "Visão Geral",
@@ -51,10 +51,19 @@ describe("AdminSidebar", () => {
       "Projetos",
       "Grupos",
       "Governança",
+      "Métricas",
       "Log de Auditoria",
     ].forEach((label) => {
       expect(screen.getByText(label)).toBeInTheDocument();
     });
+  });
+
+  it("link de Métricas aponta para /admin/metrics e ativa pelo pathname", () => {
+    mockUsePathname.mockReturnValue("/admin/metrics");
+    renderSidebar();
+    const metrics = screen.getByText("Métricas").closest("a");
+    expect(metrics).toHaveAttribute("href", "/admin/metrics");
+    expect(metrics).toHaveAttribute("aria-current", "page");
   });
 
   it("marca Visão Geral como ativo quando pathname é /admin/overview", () => {
