@@ -10,6 +10,12 @@ jest.mock("next/navigation", () => ({
 jest.mock("@/app/memories/components/CreateMemoryDialog", () => ({
   CreateMemoryDialog: () => null,
 }));
+// Navbar renderiza <UserMenu/> (feature auth Google); sem SessionProvider no
+// teste, o hook é mockado como não autenticado (menu oculto).
+jest.mock("next-auth/react", () => ({
+  useSession: () => ({ data: null, status: "unauthenticated" }),
+  signOut: jest.fn(),
+}));
 
 import { store } from "@/store/store";
 import { Navbar } from "@/components/Navbar";

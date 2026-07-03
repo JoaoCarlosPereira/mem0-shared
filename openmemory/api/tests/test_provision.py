@@ -100,6 +100,52 @@ class TestPerHostMcpConfig:
         assert data["host"] == "claude-code"
 
 
+class TestAgentTokenInRecipe:
+    """task_06 (feature auth Google, ADR-003): ?token= embutido na receita."""
+
+    @pytest.mark.asyncio
+    async def test_sem_token_urls_identicas_ao_legado(self, client):
+        data = (await client.get("/provision?host=claude-code")).json()
+        url = data["mcp_config"]["content"]["mcpServers"]["mem0"]["url"]
+        assert "token=" not in url
+        assert data["env"]["MEM0_API_KEY"] == "local"
+
+    @pytest.mark.asyncio
+    async def test_token_embutido_na_url_e_no_env(self, client):
+        data = (await client.get("/provision?host=claude-code&token=omtk_abc123")).json()
+        url = data["mcp_config"]["content"]["mcpServers"]["mem0"]["url"]
+        assert url.endswith("/mcp/claude-code/http/{hostname}?token=omtk_abc123")
+        assert data["mcp_config"]["sse_url"].endswith("?token=omtk_abc123")
+        assert data["env"]["MEM0_API_KEY"] == "omtk_abc123"
+
+    @pytest.mark.asyncio
+    async def test_token_e_group_combinados_na_query(self, client):
+        data = (
+            await client.get(
+                "/provision?host=cursor&token=omtk_abc123&group=Equipe Fiscal"
+            )
+        ).json()
+        url = data["mcp_config"]["content"]["mcpServers"]["mem0"]["url"]
+        assert "?token=omtk_abc123&group=Equipe%20Fiscal" in url
+
+    @pytest.mark.asyncio
+    async def test_codex_toml_com_token_permanece_parseavel(self, client):
+        import tomllib
+
+        cfg = (
+            await client.get("/provision?host=codex&token=omtk_abc123")
+        ).json()["mcp_config"]
+        parsed = tomllib.loads(cfg["content"])
+        assert parsed["mcp_servers"]["mem0"]["url"].endswith("?token=omtk_abc123")
+
+    @pytest.mark.asyncio
+    async def test_token_vazio_equivale_a_ausente(self, client):
+        data = (await client.get("/provision?host=claude-code&token=")).json()
+        url = data["mcp_config"]["content"]["mcpServers"]["mem0"]["url"]
+        assert "token=" not in url
+        assert data["env"]["MEM0_API_KEY"] == "local"
+
+
 class TestProtocolAlias:
     @pytest.mark.asyncio
     async def test_protocol_returns_text(self, client):

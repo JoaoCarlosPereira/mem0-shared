@@ -19,9 +19,18 @@ export function mcpSsePath(client: string, hostnameExpr: string): string {
   return `/mcp/${client}/sse/${hostnameExpr}`;
 }
 
-function groupQuery(group?: string): string {
+/**
+ * Query string das URLs MCP. O ``?token=`` (credencial do usuário — feature
+ * auth Google, ADR-003) vem primeiro; ``?group=`` mantém o vínculo de equipe
+ * na primeira conexão. Ambos opcionais — sem eles a URL é o fluxo legado.
+ */
+function mcpQuery(group?: string, token?: string): string {
+  const parts: string[] = [];
+  const tok = (token ?? "").trim();
+  if (tok) parts.push(`token=${encodeURIComponent(tok)}`);
   const trimmed = (group ?? "").trim();
-  return trimmed ? `?group=${encodeURIComponent(trimmed)}` : "";
+  if (trimmed) parts.push(`group=${encodeURIComponent(trimmed)}`);
+  return parts.length ? `?${parts.join("&")}` : "";
 }
 
 export function mcpSseUrl(
@@ -29,8 +38,9 @@ export function mcpSseUrl(
   client: string,
   hostnameExpr: string,
   group?: string,
+  token?: string,
 ): string {
-  return `${baseUrl.replace(/\/$/, "")}${mcpSsePath(client, hostnameExpr)}${groupQuery(group)}`;
+  return `${baseUrl.replace(/\/$/, "")}${mcpSsePath(client, hostnameExpr)}${mcpQuery(group, token)}`;
 }
 
 export function installLocalCommand(
@@ -38,8 +48,9 @@ export function installLocalCommand(
   client: string,
   hostnameExpr: string,
   group?: string,
+  token?: string,
 ): string {
-  const url = mcpSseUrl(baseUrl, client, hostnameExpr, group);
+  const url = mcpSseUrl(baseUrl, client, hostnameExpr, group, token);
   return `npx @openmemory/install local "${url}" --client ${client}`;
 }
 
@@ -48,8 +59,9 @@ export function mcpHttpUrl(
   client: string,
   hostnameExpr: string,
   group?: string,
+  token?: string,
 ): string {
-  return `${baseUrl.replace(/\/$/, "")}/mcp/${client}/http/${hostnameExpr}${groupQuery(group)}`;
+  return `${baseUrl.replace(/\/$/, "")}/mcp/${client}/http/${hostnameExpr}${mcpQuery(group, token)}`;
 }
 
 /** Claude Code CLI — registra o servidor MCP HTTP no escopo do usuário. */
@@ -57,18 +69,26 @@ export function claudeMcpAddCommand(
   baseUrl: string,
   hostnameExpr: string,
   group?: string,
+  token?: string,
 ): string {
-  const url = mcpHttpUrl(baseUrl, "claude-code", hostnameExpr, group);
+  const url = mcpHttpUrl(baseUrl, "claude-code", hostnameExpr, group, token);
   return `claude mcp add --transport http mem0 "${url}" --scope user`;
 }
 
 /** Prompt para o agente executar a receita de provisionamento via curl. */
-export function provisionPrompt(baseUrl: string, host = "claude", group?: string): string {
+export function provisionPrompt(
+  baseUrl: string,
+  host = "claude",
+  group?: string,
+  token?: string,
+): string {
   const base = baseUrl.replace(/\/$/, "");
   const trimmed = (group ?? "").trim();
   const groupParam = trimmed ? `&group=${encodeURIComponent(trimmed)}` : "";
+  const tok = (token ?? "").trim();
+  const tokenParam = tok ? `&token=${encodeURIComponent(tok)}` : "";
   return (
-    `Leia ${base}/provision?host=${host}${groupParam} via curl e execute a receita retornada: ` +
+    `Leia ${base}/provision?host=${host}${groupParam}${tokenParam} via curl e execute a receita retornada: ` +
     "escreva o bloco MCP no arquivo indicado (substituindo {hostname} pelo hostname desta máquina), " +
     'defina as variáveis de ambiente do campo "env", apresente ao usuário as 3 opções de modo de memória ' +
     "(transforme em hook global) e grave a escolha. Confirme cada ação mutante com o usuário antes de executar."
@@ -86,22 +106,23 @@ export function claudeInstallSteps(
   baseUrl: string,
   hostnameExpr: string,
   group?: string,
+  token?: string,
 ): ClaudeInstallStep[] {
   return [
     {
       step: 1,
       title: "Instalar plugin e hooks",
-      command: installLocalCommand(baseUrl, "claude", hostnameExpr, group),
+      command: installLocalCommand(baseUrl, "claude", hostnameExpr, group, token),
     },
     {
       step: 2,
       title: "Registrar servidor MCP HTTP",
-      command: claudeMcpAddCommand(baseUrl, hostnameExpr, group),
+      command: claudeMcpAddCommand(baseUrl, hostnameExpr, group, token),
     },
     {
       step: 3,
       title: "Provisionamento via agente",
-      command: provisionPrompt(baseUrl, "claude", group),
+      command: provisionPrompt(baseUrl, "claude", group, token),
     },
   ];
 }

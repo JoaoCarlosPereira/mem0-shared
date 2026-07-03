@@ -12,7 +12,9 @@ Faz, ponta a ponta:
   1. Pré-requisitos (Docker + Docker Compose v2) e arquivos .env.
   2. Resolve LLM + embedder INDEPENDENTES (Ollama local e/ou API remota), testando
      a conexão das APIs; ajusta MEM0_LOCAL_ONLY conforme o egress.
-  3. Coleta segredos (PostgreSQL/Grafana/MinIO/API_KEY/auth de equipe).
+  3. Coleta segredos (PostgreSQL/Grafana/MinIO/API_KEY/auth de equipe) e o login
+     Google da UI (domínio Workspace + client id/secret OAuth; os segredos de
+     sessão AUTH_JWT_SECRET/NEXTAUTH_SECRET são gerados automaticamente).
   4. Sobe a infra base, roda migrations Alembic em container, sobe o stack completo
      e valida GET /health via proxy.
 
@@ -39,6 +41,10 @@ Atualização (preserva memórias):
   O --update faz: git pull (best-effort) → rebuild das imagens → migrations
   aditivas (produção) → recria os containers no lugar. NUNCA remove volumes,
   então Qdrant + SQLite/PostgreSQL e os segredos do .env permanecem intactos.
+  Funcionalidades novas que exigem configuração (ex.: login Google) são
+  perguntadas SÓ se ainda não configuradas (Enter em branco pula; flags
+  --google-domain/--google-client-id/--google-client-secret/--ui-url para
+  execuções não-interativas; --skip-google-auth desativa a pergunta).
 
   Traz automaticamente as funcionalidades novas presentes no compose (ex.: o
   serviço openmemory-backup-worker e o volume de backup local /mnt/backups), pois
@@ -624,6 +630,21 @@ def run_update(args):
     #    force-recreate a partir do compose atual; aqui só preparamos o diretório).
     ensure_backup_dir(compose_env, args)
 
+    # 0.5 Funcionalidade nova — login Google na UI: se ainda não configurado,
+    #     pergunta o necessário (domínio, client id/secret, URL da UI) e gera os
+    #     segredos de sessão. Enter em branco pula; nunca bloqueia a atualização
+    #     nem regrava valores/segredos existentes.
+    ui_url_guess = None
+    disc = read_env(compose_env, "OPENMEMORY_DISCOVERY_BASE_URL") \
+        or read_env(compose_env, "NEXT_PUBLIC_API_URL")
+    if disc and disc.startswith("http"):
+        ui_url_guess = disc.rstrip("/").replace(f":{args.proxy_port}", ":3000")
+    configure_google_auth(
+        args, compose_env,
+        interactive=(not args.yes) and sys.stdin.isatty(),
+        ui_url=ui_url_guess,
+    )
+
     # Salvaguarda (proteção de memórias): mede o Qdrant ANTES de recriar.
     points_before = qdrant_total_points()
     if points_before is not None:
@@ -949,6 +970,96 @@ def write_auth_tokens(api_env, value):
     set_env(api_env, "AUTH_TOKENS", value)
 
 
+# --------------------------------------------------------------------------- #
+# Login Google na UI (feature auth Google, ADR-002)
+# --------------------------------------------------------------------------- #
+def _gen_secret(nbytes=48):
+    """Segredo aleatório url-safe (>= 32 bytes) para JWT/sessão."""
+    import secrets as _secrets
+    return _secrets.token_urlsafe(nbytes)
+
+
+def configure_google_auth(args, compose_env, interactive, ui_url=None):
+    """Coleta e grava tudo que o login Google precisa (instalação e --update).
+
+    Pergunta (ou lê das flags --google-*) o domínio Workspace, o client ID/secret
+    OAuth e a URL da UI; gera automaticamente os segredos de sessão
+    (AUTH_JWT_SECRET/NEXTAUTH_SECRET) quando ausentes. Tudo vai para
+    openmemory/.env (interpolado pelo compose na API e na UI).
+
+    Fail-closed e NUNCA bloqueia: sem configuração o login fica desabilitado e o
+    fluxo legado por hostname continua. Idempotente: valores existentes são
+    preservados (Enter mantém); segredos nunca são regravados.
+    Retorna True se o login ficou configurado.
+    """
+    cur = {
+        "AUTH_ALLOWED_DOMAIN": args.google_domain
+        or read_env(compose_env, "AUTH_ALLOWED_DOMAIN") or "",
+        "GOOGLE_CLIENT_ID": args.google_client_id
+        or read_env(compose_env, "GOOGLE_CLIENT_ID") or "",
+        "GOOGLE_CLIENT_SECRET": args.google_client_secret
+        or read_env(compose_env, "GOOGLE_CLIENT_SECRET") or "",
+        "NEXTAUTH_URL": args.ui_url or read_env(compose_env, "NEXTAUTH_URL") or "",
+    }
+    required = ("AUTH_ALLOWED_DOMAIN", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET")
+    configured = all(cur[k] for k in required)
+
+    if not configured and interactive and not args.skip_google_auth:
+        log("Login Google na UI (opcional — identifica pessoas em vez de máquinas)")
+        print("  Pré-requisito: credencial OAuth do tipo 'TVs e dispositivos de entrada")
+        print("  limitada' no Google Cloud Console (device flow — sem URL de redirect;")
+        print("  funciona com a UI em IP interno/HTTP). Tela de permissão: Interno.")
+        print("  Deixe o domínio em branco para pular (o fluxo legado segue ativo).")
+        domain = input(
+            f"  Domínio Google Workspace (ex.: sysmo.com.br) "
+            f"[{cur['AUTH_ALLOWED_DOMAIN'] or 'pular'}]: "
+        ).strip() or cur["AUTH_ALLOWED_DOMAIN"]
+        if domain:
+            cid = input(
+                f"  GOOGLE_CLIENT_ID [{cur['GOOGLE_CLIENT_ID'] or 'vazio'}]: "
+            ).strip() or cur["GOOGLE_CLIENT_ID"]
+            csec = _ask_hidden(
+                "  GOOGLE_CLIENT_SECRET (não é exibido; Enter mantém): "
+            ) or cur["GOOGLE_CLIENT_SECRET"]
+            default_ui = cur["NEXTAUTH_URL"] or ui_url or "http://localhost:3000"
+            nurl = input(f"  URL da UI na LAN [{default_ui}]: ").strip() or default_ui
+            if cid and csec:
+                cur.update({
+                    "AUTH_ALLOWED_DOMAIN": domain,
+                    "GOOGLE_CLIENT_ID": cid,
+                    "GOOGLE_CLIENT_SECRET": csec,
+                    "NEXTAUTH_URL": nurl,
+                })
+                configured = True
+            else:
+                warn("Client ID/Secret ausentes — login Google NÃO configurado "
+                     "(o fluxo legado por hostname segue ativo).")
+
+    if not configured:
+        warn("Login Google desabilitado (fail-closed). Configure depois com "
+             "'python install.py --update' ou defina AUTH_ALLOWED_DOMAIN, "
+             "GOOGLE_CLIENT_ID/SECRET e NEXTAUTH_URL no openmemory/.env "
+             "(ver api/.env.example).")
+        return False
+
+    if not cur["NEXTAUTH_URL"]:
+        cur["NEXTAUTH_URL"] = ui_url or "http://localhost:3000"
+    for key in (*required, "NEXTAUTH_URL"):
+        set_env(compose_env, key, cur[key])
+    # Segredos de sessão: gerados uma única vez (regravar invalidaria sessões).
+    if not read_env(compose_env, "AUTH_JWT_SECRET"):
+        set_env(compose_env, "AUTH_JWT_SECRET", _gen_secret())
+    if not read_env(compose_env, "NEXTAUTH_SECRET"):
+        set_env(compose_env, "NEXTAUTH_SECRET", _gen_secret())
+
+    ok(f"Login Google configurado (domínio: {cur['AUTH_ALLOWED_DOMAIN']}).")
+    ok("Device flow (ADR-007): sem URL de redirect — a credencial deve ser do tipo "
+       "'TVs e dispositivos de entrada limitada'.")
+    ok("(Opcional, fluxo com redirect futuro: origem "
+       f"{cur['NEXTAUTH_URL']} | redirect {cur['NEXTAUTH_URL']}/api/auth/callback/google)")
+    return True
+
+
 def run_production(args, compose_env, api_env, llm_spec, emb_spec):
     """Sobe o stack de escala completo (PostgreSQL/PgBouncer/Redis/Qdrant/workers/
     proxy/observabilidade/backup), roda migrations e valida /health."""
@@ -979,6 +1090,9 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
     # remotos alcancem a API — o entrypoint da UI aplica esse valor no bundle.
     set_env(compose_env, "NEXT_PUBLIC_API_URL", discovery_url)
     ui_url = discovery_url.replace(f":{args.proxy_port}", ":3000")
+
+    # Login Google na UI (feature auth Google) --------------------------------
+    configure_google_auth(args, compose_env, interactive=not args.yes, ui_url=ui_url)
 
     # Segredos ----------------------------------------------------------------
     secrets = collect_secrets(args, compose_env, interactive=not args.yes)
@@ -1115,7 +1229,9 @@ def parse_args(argv):
     p.add_argument("--update", action="store_true",
                    help="Atualiza a instalação existente para a versão nova "
                         "(git pull + rebuild + migrations) PRESERVANDO as memórias "
-                        "e o .env. Não toca em volumes nem re-pergunta modelos/segredos.")
+                        "e o .env. Não toca em volumes nem re-pergunta modelos/"
+                        "segredos; pergunta apenas configurações NOVAS ausentes "
+                        "(ex.: login Google — pule com Enter ou --skip-google-auth).")
     p.add_argument("--no-pull", action="store_true",
                    help="No --update, não executa 'git pull' (usa o código já presente).")
     p.add_argument("--api-port", default=os.environ.get("API_PORT", "8765"))
@@ -1137,6 +1253,18 @@ def parse_args(argv):
                    help="Auth de equipe na borda (produção). Default: warn.")
     p.add_argument("--auth-tokens", default=None,
                    help="Tokens de equipe 'time:token,...' (ou @arquivo) p/ produção.")
+    # Login Google na UI (feature auth Google): pergunta no interativo; nas
+    # execuções --yes use as flags. Segredos de sessão são gerados sozinhos.
+    p.add_argument("--google-domain", default=os.environ.get("AUTH_ALLOWED_DOMAIN"),
+                   help="Domínio Google Workspace permitido no login (ex.: sysmo.com.br).")
+    p.add_argument("--google-client-id", default=os.environ.get("GOOGLE_CLIENT_ID"),
+                   help="Client ID OAuth (Google Cloud Console, app Web).")
+    p.add_argument("--google-client-secret", default=os.environ.get("GOOGLE_CLIENT_SECRET"),
+                   help="Client Secret OAuth correspondente.")
+    p.add_argument("--ui-url", default=os.environ.get("NEXTAUTH_URL"),
+                   help="URL da UI na LAN p/ o NextAuth (default: IP LAN :3000).")
+    p.add_argument("--skip-google-auth", action="store_true",
+                   help="Não perguntar sobre o login Google (fica desabilitado).")
     return p.parse_args(argv)
 
 

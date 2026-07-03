@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import re
 import uuid
 
 request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
@@ -11,6 +12,24 @@ request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
 )
 job_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("job_id", default="")
 team_var: contextvars.ContextVar[str] = contextvars.ContextVar("team", default="")
+
+# Identidade resolvida pelo AuthMiddleware (feature auth Google, ADR-006).
+# ``auth_method``: session | agent_token | team | legacy; ``auth_user``: UUID da
+# pessoa; ``machine``: hostname da URL MCP validado. Padrão set/reset por token
+# (mesmo contrato de ``team_var``).
+auth_method_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "auth_method", default=""
+)
+auth_user_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "auth_user", default=""
+)
+machine_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "machine", default=""
+)
+
+# Credencial em query string nunca aparece em log (ADR-003): mascara qualquer
+# ``token=<valor>`` na mensagem final do record.
+_TOKEN_MASK_RE = re.compile(r"(token=)[^&\s\"']+", re.IGNORECASE)
 
 
 class StructuredContextFilter(logging.Filter):
@@ -20,6 +39,23 @@ class StructuredContextFilter(logging.Filter):
         record.request_id = request_id_var.get() or "-"
         record.job_id = job_id_var.get() or "-"
         record.trace_id = _safe_trace_id()
+        record.auth_method = auth_method_var.get() or "-"
+        record.auth_user = auth_user_var.get() or "-"
+        return True
+
+
+class TokenMaskingFilter(logging.Filter):
+    """Mascara ``token=...`` em toda mensagem de log (fail-safe, nunca levanta)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:  # noqa: BLE001 — log defeituoso não pode derrubar o fluxo
+            return True
+        masked = _TOKEN_MASK_RE.sub(r"\1***", message)
+        if masked != message:
+            record.msg = masked
+            record.args = ()
         return True
 
 
@@ -34,13 +70,15 @@ def _safe_trace_id() -> str:
 
 
 def install_structured_logging() -> None:
-    """Attach the context filter to the root logger once."""
+    """Attach the context and masking filters to the root logger once."""
     root = logging.getLogger()
     if any(isinstance(f, StructuredContextFilter) for f in root.filters):
         return
     root.addFilter(StructuredContextFilter())
+    root.addFilter(TokenMaskingFilter())
     for handler in root.handlers:
         handler.addFilter(StructuredContextFilter())
+        handler.addFilter(TokenMaskingFilter())
 
 
 def new_request_id() -> str:

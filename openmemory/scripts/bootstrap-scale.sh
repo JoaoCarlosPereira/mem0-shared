@@ -15,6 +15,7 @@
 # Uso:
 #   ./scripts/bootstrap-scale.sh
 #   ./scripts/bootstrap-scale.sh --skip-detect    # produção com URLs explícitas no .env
+#   ./scripts/bootstrap-scale.sh --skip-auth-setup  # não perguntar sobre login Google
 #   ./scripts/bootstrap-scale.sh --migrate-sqlite /path/to/openmemory.db
 #   ./scripts/bootstrap-scale.sh --restore-from /path/to/backup.zip  # DR: restaura de um .zip
 #
@@ -30,18 +31,20 @@ COMPOSE_FILE="docker-compose.scale.yml"
 PROXY_PORT="${PROXY_PORT:-8765}"
 TIMEOUT="${TIMEOUT:-300}"
 SKIP_DETECT=0
+SKIP_AUTH_SETUP=0
 SQLITE_SOURCE=""
 RESTORE_FROM=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --skip-detect) SKIP_DETECT=1; shift ;;
+    --skip-auth-setup) SKIP_AUTH_SETUP=1; shift ;;
     --migrate-sqlite) SQLITE_SOURCE="$2"; shift 2 ;;
     --migrate-sqlite=*) SQLITE_SOURCE="${1#*=}"; shift ;;
     --restore-from) RESTORE_FROM="$2"; shift 2 ;;
     --restore-from=*) RESTORE_FROM="${1#*=}"; shift ;;
     -h|--help)
-      sed -n '2,24p' "$0"
+      sed -n '2,25p' "$0"
       exit 0
       ;;
     *) echo "Argumento desconhecido: $1" >&2; exit 2 ;;
@@ -81,6 +84,80 @@ if [ -z "$LLM_MODEL_VAL" ] || [ -z "$EMB_MODEL_VAL" ]; then
   exit 1
 fi
 echo "==> Modelos configurados: LLM=$LLM_MODEL_VAL | embedder=$EMB_MODEL_VAL"
+
+# --- Login Google (feature auth Google, ADR-002) -----------------------------
+# Pergunta e grava em openmemory/.env tudo que o login precisa; os segredos de
+# sessão (AUTH_JWT_SECRET/NEXTAUTH_SECRET) são gerados automaticamente. Sem a
+# configuração o login fica desabilitado (fail-closed) e o fluxo legado por
+# hostname segue funcionando — o bootstrap NUNCA bloqueia por isso.
+gen_secret() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -base64 48 | tr -d '\n'
+  else
+    head -c 48 /dev/urandom | base64 | tr -d '\n='
+  fi
+}
+
+set_env_if_missing() { # set_env_if_missing CHAVE VALOR
+  if [ -z "$(get_env "$1")" ]; then
+    printf '%s=%s\n' "$1" "$2" >> .env
+  fi
+}
+
+detect_lan_ip() {
+  hostname -I 2>/dev/null | awk '{print $1}' || true
+}
+
+if [ "$SKIP_AUTH_SETUP" -eq 0 ]; then
+  AUTH_DOMAIN_VAL="${AUTH_ALLOWED_DOMAIN:-$(get_env AUTH_ALLOWED_DOMAIN)}"
+  GCID_VAL="${GOOGLE_CLIENT_ID:-$(get_env GOOGLE_CLIENT_ID)}"
+  GCSECRET_VAL="${GOOGLE_CLIENT_SECRET:-$(get_env GOOGLE_CLIENT_SECRET)}"
+  if [ -n "$AUTH_DOMAIN_VAL" ] && [ -n "$GCID_VAL" ] && [ -n "$GCSECRET_VAL" ]; then
+    # Configuração presente: garante apenas os derivados (idempotente).
+    set_env_if_missing AUTH_JWT_SECRET "$(gen_secret)"
+    set_env_if_missing NEXTAUTH_SECRET "$(gen_secret)"
+    LAN_IP="$(detect_lan_ip)"
+    set_env_if_missing NEXTAUTH_URL "http://${LAN_IP:-localhost}:3000"
+    echo "==> Login Google configurado (domínio: ${AUTH_DOMAIN_VAL})."
+  elif [ -t 0 ]; then
+    echo
+    echo "==> Login Google (opcional) — identifica pessoas em vez de máquinas."
+    echo "    Pré-requisito: credencial OAuth do tipo 'TVs e dispositivos de entrada"
+    echo "    limitada' no Google Cloud Console (device flow — sem URL de redirect)."
+    echo "    Deixe o domínio em branco para pular (o fluxo legado segue ativo)."
+    read -r -p "    Domínio Google Workspace (ex.: sysmo.com.br): " AUTH_DOMAIN_IN
+    if [ -n "$AUTH_DOMAIN_IN" ]; then
+      read -r -p "    GOOGLE_CLIENT_ID: " GCID_IN
+      read -r -s -p "    GOOGLE_CLIENT_SECRET (não é exibido): " GCSECRET_IN
+      echo
+      LAN_IP="$(detect_lan_ip)"
+      DEFAULT_UI_URL="http://${LAN_IP:-localhost}:3000"
+      read -r -p "    URL da UI na LAN [${DEFAULT_UI_URL}]: " UI_URL_IN
+      UI_URL_IN="${UI_URL_IN:-$DEFAULT_UI_URL}"
+      if [ -z "$GCID_IN" ] || [ -z "$GCSECRET_IN" ]; then
+        echo "    ! Client ID/Secret ausentes — login Google NÃO configurado."
+      else
+        set_env_if_missing AUTH_ALLOWED_DOMAIN "$AUTH_DOMAIN_IN"
+        set_env_if_missing GOOGLE_CLIENT_ID "$GCID_IN"
+        set_env_if_missing GOOGLE_CLIENT_SECRET "$GCSECRET_IN"
+        set_env_if_missing NEXTAUTH_URL "$UI_URL_IN"
+        set_env_if_missing AUTH_JWT_SECRET "$(gen_secret)"
+        set_env_if_missing NEXTAUTH_SECRET "$(gen_secret)"
+        echo "    Login Google configurado em openmemory/.env."
+        echo "    Device flow: sem URL de redirect (credencial tipo 'TVs e"
+        echo "    dispositivos de entrada limitada')."
+        echo "    (Opcional, fluxo com redirect futuro: origem ${UI_URL_IN} |"
+        echo "     redirect ${UI_URL_IN}/api/auth/callback/google)"
+      fi
+    else
+      echo "    Pulado — configure depois no openmemory/.env (ver api/.env.example)."
+    fi
+  else
+    echo "==> Login Google não configurado (sem TTY) — fluxo legado segue ativo."
+    echo "    Defina AUTH_ALLOWED_DOMAIN, GOOGLE_CLIENT_ID/SECRET e NEXTAUTH_URL"
+    echo "    no openmemory/.env (ver api/.env.example) e re-rode o bootstrap."
+  fi
+fi
 
 echo "==> Subindo infraestrutura base (PostgreSQL, PgBouncer, Redis, Qdrant)..."
 docker compose -f "$COMPOSE_FILE" up -d postgres pgbouncer redis mem0_store

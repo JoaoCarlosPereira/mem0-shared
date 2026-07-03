@@ -45,6 +45,7 @@ from app.utils.db import get_user_and_app
 from app.utils.attribution import author_hostname_from_payload
 from app.utils.groups import ensure_user_group, ensure_user_registered, requester_group_for_mcp
 from app.utils.identity import resolve_hostname
+from app.utils.logging_context import auth_method_var, auth_user_var
 from app.utils.memory import get_memory_client_safe
 from app.utils.partitioning import bind_active_collection
 from app.utils.permissions import check_memory_access_permissions
@@ -133,11 +134,13 @@ async def add_memories(text: str, project: str) -> str:
                          client_name=client_name)
 
     logging.info(
-        "write enqueued job_id=%s project=%s hostname=%s client=%s",
+        "write enqueued job_id=%s project=%s hostname=%s client=%s auth_method=%s auth_user=%s",
         job_id,
         project,
         hostname,
         client_name,
+        auth_method_var.get() or "legacy",
+        auth_user_var.get() or "-",
     )
     return json.dumps({
         "status": "accepted",
@@ -148,6 +151,63 @@ async def add_memories(text: str, project: str) -> str:
         "project": project,
     })
 
+
+
+def _usage_user_id() -> str:
+    """Dimensão ``user`` da atribuição de consumo (feature auth Google).
+
+    Pessoa autenticada por token de agente (``auth_user_var``, ADR-006) quando
+    presente; senão o hostname legado — comportamento byte-idêntico ao anterior
+    para agentes sem token.
+    """
+    person = auth_user_var.get() or ""
+    if auth_method_var.get() == "agent_token" and person:
+        return person
+    return resolve_hostname(user_id_var.get(None))
+
+
+def _log_machine_divergence_if_any(hostname) -> None:
+    """Loga (sem bloquear) token de agente usado em máquina não vinculada.
+
+    Fase 1 não bloqueia divergência máquina-do-token × hostname-da-URL; o log
+    estruturado é o insumo da tela de conflitos (Fase 2). Best-effort: nunca
+    levanta no caminho de conexão MCP.
+    """
+    if auth_method_var.get() != "agent_token":
+        return
+    person = auth_user_var.get() or ""
+    if not person or not hostname:
+        return
+    try:
+        # Import tardio: resolve SessionLocal no momento da chamada (testável
+        # via monkeypatch de app.database, como em resolve_agent_token).
+        from app.database import SessionLocal as _session_factory
+        from app.models import Machine, MachineStatus
+
+        db = _session_factory()
+        try:
+            linked = [
+                m.hostname
+                for m in db.query(Machine)
+                .filter(
+                    Machine.linked_user_id == uuid.UUID(person),
+                    Machine.status == MachineStatus.linked,
+                )
+                .all()
+            ]
+        finally:
+            db.close()
+        key = resolve_hostname(hostname)
+        if linked and key not in linked:
+            logging.warning(
+                "maquina divergente: token do usuario %s usado no hostname %s "
+                "(vinculadas: %s)",
+                person,
+                key,
+                ",".join(sorted(linked)),
+            )
+    except Exception:  # noqa: BLE001 - verificação é best-effort
+        logging.debug("verificação de divergência de máquina falhou", exc_info=True)
 
 
 def _record_write_audit(*, job_id, project, hostname, client_name):
@@ -239,7 +299,9 @@ async def search_memory(query: str, project: str, rerank: bool = False) -> str:
                     with usage_attribution(
                         project=project,
                         agent=client_name_var.get(None) or DEFAULT_CLIENT_NAME,
-                        user_id=resolve_hostname(user_id_var.get(None)),
+                        # Pessoa autenticada quando o agente usa token (ADR-006);
+                        # hostname legado caso contrário.
+                        user_id=_usage_user_id(),
                         operation_type="search",
                     ):
                         embeddings = await anyio.to_thread.run_sync(
@@ -528,6 +590,8 @@ async def handle_sse(request: Request):
     client_token = client_name_var.set(client_name or "")
     # ?group= na URL de instalação: vincula equipe na primeira conexão (ADR-004).
     ensure_user_group(uid, request.query_params.get("group"))
+    # Token de agente em máquina não vinculada: log estruturado (Fase 2 trata).
+    _log_machine_divergence_if_any(uid)
 
     try:
         # NOTE: request._send is the raw ASGI `send` callable. Starlette does not
@@ -599,6 +663,8 @@ async def handle_streamable_http(request: Request):
     client_name = request.path_params.get("client_name")
     client_token = client_name_var.set(client_name or "")
     ensure_user_group(uid, request.query_params.get("group"))
+    # Token de agente em máquina não vinculada: log estruturado (Fase 2 trata).
+    _log_machine_divergence_if_any(uid)
 
     # Intercept the ASGI messages the transport sends so we can return them
     # as a single Response to FastAPI.  Without this, FastAPI would attempt to

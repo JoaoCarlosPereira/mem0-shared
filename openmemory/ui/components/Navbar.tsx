@@ -14,6 +14,7 @@ import { useAppsApi } from "@/hooks/useAppsApi";
 import { Settings, ShieldCheck } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
 import { APP_NAME } from "@/lib/branding";
+import { UserMenu } from "@/components/UserMenu";
 
 export function Navbar() {
   const pathname = usePathname();
@@ -171,6 +172,7 @@ export function Navbar() {
             Atualizar
           </Button>
           <CreateMemoryDialog />
+          <UserMenu />
         </div>
       </div>
     </header>
