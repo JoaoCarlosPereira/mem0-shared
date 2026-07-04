@@ -130,7 +130,10 @@ class TestAgentTokenInRecipe:
 
     @pytest.mark.asyncio
     async def test_codex_toml_com_token_permanece_parseavel(self, client):
-        import tomllib
+        try:
+            import tomllib
+        except ModuleNotFoundError:
+            import tomli as tomllib
 
         cfg = (
             await client.get("/provision?host=codex&token=omtk_abc123")
