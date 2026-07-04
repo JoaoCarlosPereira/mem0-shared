@@ -108,7 +108,7 @@ def test_traefik_monta_config_tls_e_certs(proxy):
 
 
 def test_ui_roteada_por_hostname_no_websecure(compose):
-    labels = [str(l) for l in compose["services"]["openmemory-ui"]["labels"]]
+    labels = [str(label) for label in compose["services"]["openmemory-ui"]["labels"]]
     joined = "\n".join(labels)
     assert "traefik.enable=true" in joined
     assert "UI_HOSTNAME" in joined and "Host(" in joined

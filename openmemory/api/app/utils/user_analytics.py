@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from uuid import UUID
 
-from app.models import Group, User, WriteAuditLog, WriteQueueJob, get_current_utc_time
+from app.models import User, WriteAuditLog, WriteQueueJob, get_current_utc_time
 from app.read_audit_log_model import ReadAuditLog
 from app.utils.read_audit import read_audit_hostname_variants
 from sqlalchemy import case, func

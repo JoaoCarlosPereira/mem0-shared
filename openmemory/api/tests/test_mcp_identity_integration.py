@@ -24,7 +24,6 @@ from app.database import Base, get_db
 from app.mcp_server import (
     _log_machine_divergence_if_any,
     _usage_user_id,
-    client_name_var,
     user_id_var,
 )
 from app.middleware.team_auth import AuthMiddleware

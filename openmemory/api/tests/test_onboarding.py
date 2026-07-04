@@ -20,7 +20,6 @@ from sqlalchemy.pool import StaticPool
 import app.database as database_module
 from app.database import Base, get_db
 from app.models import (
-    USER_TYPE_LEGACY_HOST,
     USER_TYPE_PERSON,
     Group,
     LinkAuditLog,

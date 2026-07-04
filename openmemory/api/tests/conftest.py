@@ -1,6 +1,12 @@
 """Shared pytest hooks for OpenMemory API tests."""
 
+import datetime
+
 import pytest
+
+# ``datetime.UTC`` exists only on Python 3.11+; CI still runs 3.10.
+if not hasattr(datetime, "UTC"):
+    datetime.UTC = datetime.timezone.utc  # type: ignore[attr-defined]
 
 
 @pytest.fixture(autouse=True)
