@@ -147,7 +147,7 @@ class TestEnrichExtractedMemories:
         assert not is_vague_technical_summary(combined)
 
     def test_creates_raw_memory_when_extraction_empty(self):
-        source = f"```json\n{{\"service\": \"openmemory-mcp\", \"port\": 8765}}\n```"
+        source = '```json\n{"service": "openmemory-mcp", "port": 8765}\n```'
         result = enrich_extracted_memories([], source)
         assert len(result) >= 1
         combined = "\n".join(m.get("text", "") + m.get("raw_content", "") for m in result)

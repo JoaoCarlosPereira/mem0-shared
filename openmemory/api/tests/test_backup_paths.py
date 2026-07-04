@@ -1,7 +1,5 @@
 """Tests for host ↔ container backup path mapping."""
 
-import os
-
 import pytest
 
 from app.schemas import BackupPolicySchema
