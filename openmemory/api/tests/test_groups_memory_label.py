@@ -8,9 +8,11 @@ from sqlalchemy.pool import StaticPool
 from app.database import Base
 from app.models import App, Group, Memory, User
 from app.routers.memories import memory_group_name
+from app.utils import groups as groups_mod
+
 
 @pytest.fixture
-def session():
+def session(monkeypatch):
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -18,11 +20,14 @@ def session():
     )
     Base.metadata.create_all(bind=engine)
     Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    monkeypatch.setattr("app.database.SessionLocal", Session)
+    groups_mod.invalidate_group_cache()
     s = Session()
     try:
         yield s
     finally:
         s.close()
+        groups_mod.invalidate_group_cache()
         engine.dispose()
 
 
