@@ -201,6 +201,10 @@ async def list_app_memories(
     project_name = resolve_project_name(db, app_id)
     if project_name:
         data = list_shared_memories(project=project_name, page=page, size=page_size)
+        from app.utils.creator_identity import enrich_memory_items
+
+        raw_items = list(data["items"])
+        enrich_memory_items(raw_items)
         return {
             "total": data["total"],
             "page": data["page"],
@@ -215,10 +219,12 @@ async def list_app_memories(
                     "app_name": item["app_name"],
                     "created_by_hostname": item.get("created_by_hostname"),
                     "created_by_client": item.get("created_by_client"),
+                    "created_by_display_name": item.get("created_by_display_name"),
+                    "created_by_avatar_url": item.get("created_by_avatar_url"),
                     "categories": item["categories"],
                     "metadata_": item.get("metadata_"),
                 }
-                for item in data["items"]
+                for item in raw_items
             ],
         }
 

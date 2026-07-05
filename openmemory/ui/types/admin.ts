@@ -29,6 +29,8 @@ export type WriteQueueJob = {
   project: string;
   hostname: string;
   client_name: string | null;
+  user_display_name: string | null;
+  user_avatar_url: string | null;
   text_preview: string;
   status: WriteQueueStatus;
   error: string | null;
@@ -55,6 +57,8 @@ export type WriteAuditLog = {
   project: string;
   hostname: string;
   client_name: string | null;
+  user_display_name: string | null;
+  user_avatar_url: string | null;
   action: string;
   created_at: string;
 };

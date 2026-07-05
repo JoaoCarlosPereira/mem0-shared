@@ -30,12 +30,15 @@ export interface AttributionDisplay {
   label: string;
   clientKey: keyof typeof constants;
   iconImage?: string;
+  avatarUrl?: string;
 }
 
 export function resolveAttribution(opts: {
   appName?: string | null;
   clientName?: string | null;
   hostname?: string | null;
+  displayName?: string | null;
+  avatarUrl?: string | null;
   metadata?: Record<string, unknown> | null;
 }): AttributionDisplay {
   const meta = opts.metadata ?? {};
@@ -64,12 +67,19 @@ export function resolveAttribution(opts: {
   ) as keyof typeof constants;
   const appConfig = constants[clientKey] ?? constants.default;
 
+  const displayName = opts.displayName?.trim() || undefined;
   const label =
-    hostname || appConfig.name || rawClient || opts.appName || "Desconhecido";
+    displayName ||
+    hostname ||
+    appConfig.name ||
+    rawClient ||
+    opts.appName ||
+    "Desconhecido";
 
   return {
     label,
     clientKey,
     iconImage: appConfig.iconImage,
+    avatarUrl: opts.avatarUrl?.trim() || undefined,
   };
 }

@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/table";
 import { Loader2, ScrollText } from "lucide-react";
 import { PageHeader } from "@/components/shared/PageHeader";
+import { ActorLabel } from "@/components/shared/attribution-badge";
 import {
   ProjectSize,
   WriteAuditFilter,
@@ -198,7 +199,14 @@ export default function AuditPage() {
             ) : (
               items.map((row) => (
                 <TableRow key={row.id}>
-                  <TableCell>{row.client_name ?? row.hostname}</TableCell>
+                  <TableCell>
+                    <ActorLabel
+                      hostname={row.hostname}
+                      clientName={row.client_name}
+                      displayName={row.user_display_name}
+                      avatarUrl={row.user_avatar_url}
+                    />
+                  </TableCell>
                   <TableCell>{row.project}</TableCell>
                   <TableCell>{row.action}</TableCell>
                   <TableCell>{formatDateTimeFull(row.created_at)}</TableCell>

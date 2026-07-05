@@ -11,6 +11,18 @@ describe("normalizeHostname", () => {
 });
 
 describe("resolveAttribution", () => {
+  it("prefers linked user display name over hostname", () => {
+    const result = resolveAttribution({
+      clientName: "cursor",
+      hostname: "S0293",
+      displayName: "João Silva",
+      avatarUrl: "https://example.com/avatar.png",
+    });
+    expect(result.label).toBe("João Silva");
+    expect(result.avatarUrl).toBe("https://example.com/avatar.png");
+    expect(result.clientKey).toBe("cursor");
+  });
+
   it("prefers hostname over client branding", () => {
     const result = resolveAttribution({
       clientName: "cursor",

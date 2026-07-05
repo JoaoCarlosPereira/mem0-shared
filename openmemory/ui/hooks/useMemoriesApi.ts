@@ -23,6 +23,8 @@ export interface SimpleMemory {
   app_name: string;
   created_by_hostname?: string | null;
   created_by_client?: string | null;
+  created_by_display_name?: string | null;
+  created_by_avatar_url?: string | null;
   metadata_?: Record<string, unknown>;
 }
 
@@ -39,6 +41,8 @@ interface ApiMemoryItem {
   group?: string | null;
   created_by_hostname?: string | null;
   created_by_client?: string | null;
+  created_by_display_name?: string | null;
+  created_by_avatar_url?: string | null;
 }
 
 // Define the shape of the API response
@@ -55,6 +59,8 @@ interface AccessLogEntry {
   app_name: string;
   client_name?: string;
   hostname?: string;
+  display_name?: string;
+  avatar_url?: string;
   accessed_at: string;
 }
 
@@ -190,6 +196,8 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
         group: item.group ?? null,
         created_by_hostname: item.created_by_hostname ?? null,
         created_by_client: item.created_by_client ?? null,
+        created_by_display_name: item.created_by_display_name ?? null,
+        created_by_avatar_url: item.created_by_avatar_url ?? null,
       }));
       setIsLoading(false);
       dispatch(setMemoriesSuccess(adaptedMemories));
@@ -272,6 +280,8 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
           ?? (response.data.metadata_ as Record<string, unknown> | undefined)?.user_id as string | undefined,
         created_by_client: response.data.created_by_client
           ?? (response.data.metadata_ as Record<string, unknown> | undefined)?.mcp_client as string | undefined,
+        created_by_display_name: response.data.created_by_display_name ?? null,
+        created_by_avatar_url: response.data.created_by_avatar_url ?? null,
       }));
     } catch (err: any) {
       const errorMessage = err.message || 'Falha ao buscar memória';

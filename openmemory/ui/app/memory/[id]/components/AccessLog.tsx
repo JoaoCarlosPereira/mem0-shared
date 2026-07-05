@@ -1,7 +1,7 @@
-import Image from "next/image";
 import { useEffect, useState } from "react";
 import { useMemoriesApi } from "@/hooks/useMemoriesApi";
 import { resolveAttribution } from "@/lib/attribution";
+import { CreatorAvatar } from "@/components/shared/creator-avatar";
 import { useSelector } from "react-redux";
 import { RootState } from "@/store/store";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -11,6 +11,7 @@ interface AccessLogEntry {
   id: string;
   app_name: string;
   display_name?: string;
+  avatar_url?: string;
   client_name?: string;
   hostname?: string;
   accessed_at: string;
@@ -53,10 +54,6 @@ export function AccessLog({ memoryId }: AccessLogProps) {
     <div className="w-full max-w-md mx-auto rounded-lg overflow-hidden bg-zinc-900 border border-zinc-800 text-white pb-1">
       <div className="px-6 py-4 flex justify-between items-center bg-zinc-800 border-b border-zinc-800">
         <h2 className="font-semibold">Log de Acesso</h2>
-        {/* <button className="px-3 py-1 text-sm rounded-lg border border-[#ff5533] text-[#ff5533] flex items-center gap-2 hover:bg-[#ff5533]/10 transition-colors">
-          <PauseIcon size={18} />
-          <span>Pause Access</span>
-        </button> */}
       </div>
 
       <ScrollArea className="p-6 max-h-[450px]">
@@ -73,21 +70,19 @@ export function AccessLog({ memoryId }: AccessLogProps) {
               appName: entry.app_name,
               clientName: entry.client_name,
               hostname: entry.hostname,
+              displayName: entry.display_name,
+              avatarUrl: entry.avatar_url,
             });
-            const label = entry.display_name || attribution.label;
+            const label = attribution.label;
 
             return (
               <li key={entry.id} className="relative flex items-start gap-4">
                 <div className="relative z-10 rounded-full overflow-hidden bg-[#2a2a2a] w-8 h-8 flex items-center justify-center flex-shrink-0">
-                  {attribution.iconImage ? (
-                    <Image
-                      src={attribution.iconImage}
-                      alt={`${label} — ícone`}
-                      width={30}
-                      height={30}
-                      className="w-8 h-8 object-contain"
-                    />
-                  ) : null}
+                  <CreatorAvatar
+                    attribution={attribution}
+                    size={32}
+                    className="w-8 h-8"
+                  />
                 </div>
 
                 {index < accessEntries.length - 1 && (

@@ -412,20 +412,29 @@ def write_queue(
         .all()
     )
 
-    items = [
-        WriteQueueJobResponse(
-            id=str(row.id),
-            project=row.project,
-            hostname=row.hostname,
-            client_name=row.client_name,
-            text_preview=(row.text or "")[:120],
-            status=row.status.value,
-            error=row.error,
-            attempts=row.attempts,
-            created_at=row.created_at,
-        )
+    raw_items = [
+        {
+            "id": str(row.id),
+            "project": row.project,
+            "hostname": row.hostname,
+            "client_name": row.client_name,
+            "text_preview": (row.text or "")[:120],
+            "status": row.status.value,
+            "error": row.error,
+            "attempts": row.attempts,
+            "created_at": row.created_at,
+        }
         for row in rows
     ]
+
+    from app.utils.creator_identity import enrich_actor_items
+
+    enrich_actor_items(
+        raw_items,
+        display_name_key="user_display_name",
+        avatar_url_key="user_avatar_url",
+    )
+    items = [WriteQueueJobResponse(**item) for item in raw_items]
 
     pages = math.ceil(total / page_size) if total else 0
     return PaginatedWriteQueueResponse(
@@ -499,18 +508,27 @@ def write_audit(
         .limit(page_size)
         .all()
     )
-    items = [
-        WriteAuditLogResponse(
-            id=str(row.id),
-            job_id=str(row.job_id) if row.job_id else None,
-            project=row.project,
-            hostname=row.hostname,
-            client_name=row.client_name,
-            action=row.action,
-            created_at=row.created_at,
-        )
+    raw_items = [
+        {
+            "id": str(row.id),
+            "job_id": str(row.job_id) if row.job_id else None,
+            "project": row.project,
+            "hostname": row.hostname,
+            "client_name": row.client_name,
+            "action": row.action,
+            "created_at": row.created_at,
+        }
         for row in rows
     ]
+
+    from app.utils.creator_identity import enrich_actor_items
+
+    enrich_actor_items(
+        raw_items,
+        display_name_key="user_display_name",
+        avatar_url_key="user_avatar_url",
+    )
+    items = [WriteAuditLogResponse(**item) for item in raw_items]
     pages = math.ceil(total / page_size) if total else 0
     return PaginatedWriteAuditResponse(
         items=items,

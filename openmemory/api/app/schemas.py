@@ -75,6 +75,8 @@ class WriteQueueJobResponse(BaseModel):
     project: str
     hostname: str
     client_name: Optional[str]
+    user_display_name: Optional[str] = None
+    user_avatar_url: Optional[str] = None
     text_preview: str  # primeiros 120 chars do campo text
     status: str  # WriteQueueStatus enum
     error: Optional[str]
@@ -123,6 +125,8 @@ class WriteAuditLogResponse(BaseModel):
     project: str
     hostname: str
     client_name: Optional[str]
+    user_display_name: Optional[str] = None
+    user_avatar_url: Optional[str] = None
     action: str
     created_at: datetime
 

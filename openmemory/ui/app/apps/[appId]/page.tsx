@@ -113,6 +113,8 @@ export default function AppDetailsPage() {
         app_name={memory.app_name}
         created_by_hostname={memory.created_by_hostname}
         created_by_client={memory.created_by_client}
+        created_by_display_name={memory.created_by_display_name}
+        created_by_avatar_url={memory.created_by_avatar_url}
         state={memory.state}
       />
     ));
@@ -162,6 +164,8 @@ export default function AppDetailsPage() {
           app_name={accessedMemory.memory.app_name}
           created_by_hostname={accessedMemory.memory.created_by_hostname}
           created_by_client={accessedMemory.memory.created_by_client}
+          created_by_display_name={accessedMemory.memory.created_by_display_name}
+          created_by_avatar_url={accessedMemory.memory.created_by_avatar_url}
           state={accessedMemory.memory.state}
         />
       </div>
