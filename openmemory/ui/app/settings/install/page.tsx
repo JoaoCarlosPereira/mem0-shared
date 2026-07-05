@@ -7,7 +7,6 @@
  * (dashboard) e nunca muda; esta página é uma visão de consulta/cópia. Em
  * emergência (vazamento), a revogação é administrativa — direto no banco.
  */
-import { useEffect, useState } from "react";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
@@ -19,27 +18,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { useAgentTokenApi, type AgentToken } from "@/hooks/useAgentTokenApi";
+import { useImmutableAgentToken } from "@/hooks/useImmutableAgentToken";
 
 export default function AgentTokenPage() {
-  const { getOrCreateToken } = useAgentTokenApi();
+  const { tokenInfo, error, loading } = useImmutableAgentToken();
   const { toast } = useToast();
-  const [tokenInfo, setTokenInfo] = useState<AgentToken | null>(null);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    getOrCreateToken()
-      .then((data) => {
-        if (!cancelled) setTokenInfo(data);
-      })
-      .catch(() => {
-        if (!cancelled) setError(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [getOrCreateToken]);
 
   return (
     <main className="mx-auto max-w-3xl space-y-6 p-6">
@@ -63,7 +46,7 @@ export default function AgentTokenPage() {
             <p role="alert" className="text-sm text-red-300">
               Não foi possível carregar o token. Recarregue a página.
             </p>
-          ) : !tokenInfo ? (
+          ) : loading ? (
             <p className="text-sm text-zinc-400">Carregando…</p>
           ) : (
             <div className="space-y-3" data-testid="token-block">

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Copy, Check, Plug } from "lucide-react";
@@ -14,7 +14,7 @@ import {
   mcpSseUrl,
 } from "@/lib/mcp-install";
 import { PageHeader } from "@/components/shared/PageHeader";
-import { useAgentTokenApi } from "@/hooks/useAgentTokenApi";
+import { useImmutableAgentToken } from "@/hooks/useImmutableAgentToken";
 
 // Placeholder (fallback raro: sessão indisponível). Sem <> para sobreviver
 // intacto ao encodeURIComponent das URLs.
@@ -114,22 +114,7 @@ export const Install = () => {
   // Token de agente imutável (ADR-008): criado AUTOMATICAMENTE no primeiro
   // acesso (get-or-create idempotente) e exibido permanentemente, embutido nos
   // comandos abaixo.
-  const { getOrCreateToken } = useAgentTokenApi();
-  const [rawToken, setRawToken] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    getOrCreateToken()
-      .then((data) => {
-        if (!cancelled && data.token) setRawToken(data.token);
-      })
-      .catch(() => {
-        // Sem sessão/erro: página segue com placeholder (fluxo legado intacto).
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [getOrCreateToken]);
+  const { rawToken } = useImmutableAgentToken();
 
   const tokenForCommands = rawToken ?? TOKEN_PLACEHOLDER;
 

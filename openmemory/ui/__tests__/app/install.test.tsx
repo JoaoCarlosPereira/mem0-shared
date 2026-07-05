@@ -13,6 +13,12 @@ jest.mock("@/hooks/use-toast", () => ({
   useToast: () => mockToastApi,
 }));
 
+let mockSession: any = null;
+let mockStatus = "loading";
+jest.mock("next-auth/react", () => ({
+  useSession: () => ({ data: mockSession, status: mockStatus }),
+}));
+
 import AgentTokenPage from "@/app/settings/install/page";
 
 const TOKEN = {
@@ -25,18 +31,26 @@ const TOKEN = {
 describe("AgentTokenPage", () => {
   beforeEach(() => {
     mockedAxios.post.mockReset();
+    mockSession = null;
+    mockStatus = "loading";
     Object.assign(navigator, {
       clipboard: { writeText: jest.fn().mockResolvedValue(undefined) },
     });
   });
 
   it("get-or-create exibe o token permanentemente", async () => {
+    mockStatus = "authenticated";
+    mockSession = { apiAccessToken: "jwt-sessao" };
     mockedAxios.post.mockResolvedValue({ data: TOKEN });
     render(<AgentTokenPage />);
 
     await waitFor(() => {
       expect(mockedAxios.post).toHaveBeenCalledWith(
         expect.stringContaining("/api/v1/agent-token"),
+        undefined,
+        expect.objectContaining({
+          headers: { Authorization: "Bearer jwt-sessao" },
+        }),
       );
       expect(screen.getByTestId("raw-token").textContent).toBe(
         "omtk_valorfixo123",
@@ -45,6 +59,8 @@ describe("AgentTokenPage", () => {
   });
 
   it("copiar coloca o token no clipboard", async () => {
+    mockStatus = "authenticated";
+    mockSession = { apiAccessToken: "jwt-sessao" };
     mockedAxios.post.mockResolvedValue({ data: TOKEN });
     render(<AgentTokenPage />);
     await waitFor(() => screen.getByTestId("raw-token"));
@@ -58,6 +74,8 @@ describe("AgentTokenPage", () => {
   });
 
   it("falha de carregamento mostra erro", async () => {
+    mockStatus = "authenticated";
+    mockSession = { apiAccessToken: "jwt-sessao" };
     mockedAxios.post.mockRejectedValue({ response: { status: 500 } });
     render(<AgentTokenPage />);
     await waitFor(() => {
