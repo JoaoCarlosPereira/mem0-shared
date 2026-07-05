@@ -18,11 +18,11 @@ describe("decideAuthRedirect", () => {
     expect(decideAuthRedirect("/login", true, false)).toBe("/");
   });
 
-  it("primeiro login em /login vai para /onboarding", () => {
+  it("sem máquina vinculada em /login vai para /onboarding", () => {
     expect(decideAuthRedirect("/login", true, true)).toBe("/onboarding");
   });
 
-  it("primeiro login força /onboarding em qualquer rota", () => {
+  it("sem máquina vinculada força /onboarding em qualquer rota", () => {
     expect(decideAuthRedirect("/", true, true)).toBe("/onboarding");
     expect(decideAuthRedirect("/memories", true, true)).toBe("/onboarding");
     expect(decideAuthRedirect("/onboarding", true, true)).toBeNull();
