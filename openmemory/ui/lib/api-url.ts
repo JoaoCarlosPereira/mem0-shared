@@ -43,3 +43,30 @@ export function getMcpBaseUrl(): string {
   }
   return "http://localhost:8765";
 }
+
+type DiscoveryResponse = {
+  base_url?: string;
+};
+
+/**
+ * Resolve the MCP base URL from the server's /discovery endpoint so install
+ * commands always show the memory host's LAN IP, not the UI DNS hostname.
+ */
+export async function fetchMcpBaseUrl(): Promise<string> {
+  const fallback = getMcpBaseUrl();
+  try {
+    const apiBase = getApiUrl().replace(/\/$/, "");
+    const res = await fetch(`${apiBase}/discovery`);
+    if (!res.ok) {
+      return fallback;
+    }
+    const data = (await res.json()) as DiscoveryResponse;
+    const base = data.base_url?.trim();
+    if (base) {
+      return base.replace(/\/$/, "");
+    }
+  } catch {
+    // Discovery unavailable — keep synchronous fallback.
+  }
+  return fallback;
+}
