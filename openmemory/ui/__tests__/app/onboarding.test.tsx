@@ -79,7 +79,7 @@ describe("OnboardingPage", () => {
     });
   });
 
-  it("submissão com legado exibe o resumo com memories_count", async () => {
+  it("submissão com legado redireciona ao painel de instalação", async () => {
     mockedAxios.post.mockResolvedValue({
       data: {
         linked: true,
@@ -89,6 +89,13 @@ describe("OnboardingPage", () => {
         legacy_user_linked: true,
       },
     });
+    const assignSpy = jest.fn();
+    const originalLocation = window.location;
+    // jsdom: location.assign é read-only — substituímos o objeto inteiro.
+    // @ts-expect-error test shim
+    delete window.location;
+    // @ts-expect-error test shim
+    window.location = { ...originalLocation, assign: assignSpy };
     renderPage();
     await fillAndSubmit();
 
@@ -97,19 +104,11 @@ describe("OnboardingPage", () => {
         expect.stringContaining("/api/v1/auth/onboarding"),
         { hostname: "DESKTOP-01", group_name: null },
       );
-      expect(screen.getByTestId("memories-summary").textContent).toMatch(/42/);
-      expect(mockUpdate).toHaveBeenCalledWith({ firstLogin: false });
-    });
-
-    const assignSpy = jest
-      .spyOn(window.location, "assign")
-      .mockImplementation(() => undefined);
-    fireEvent.click(screen.getByRole("button", { name: /configurar meus agentes/i }));
-    await waitFor(() => {
       expect(mockUpdate).toHaveBeenCalledWith({ firstLogin: false });
       expect(assignSpy).toHaveBeenCalledWith("/");
     });
-    assignSpy.mockRestore();
+    // @ts-expect-error test shim
+    window.location = originalLocation;
   });
 
   it("grupo novo dispara o POST com o nome digitado", async () => {

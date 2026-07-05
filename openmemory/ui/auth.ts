@@ -68,7 +68,21 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (!resp.ok) return false;
         const data = await resp.json();
         (account as any).apiAccessToken = data.access_token;
-        (account as any).firstLogin = data.first_login === true;
+        // Onboarding depende de máquina vinculada, não de ``first_login`` (criação
+        // da pessoa). Usuário já vinculado no segundo login vai direto ao painel.
+        let needsOnboarding = true;
+        try {
+          const meResp = await fetch(`${API_BASE}/api/v1/auth/me`, {
+            headers: { Authorization: `Bearer ${data.access_token}` },
+          });
+          if (meResp.ok) {
+            const me = await meResp.json();
+            needsOnboarding = !me.machine;
+          }
+        } catch {
+          /* mantém needsOnboarding=true (fail-safe para o wizard) */
+        }
+        (account as any).firstLogin = needsOnboarding;
         return true;
       } catch {
         return false;

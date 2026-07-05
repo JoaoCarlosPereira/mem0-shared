@@ -41,7 +41,25 @@ class TestDiscoveryUrlResolution:
         req = _request("memhost")
         with patch.dict(os.environ, {}, clear=True):
             os.environ.pop("OPENMEMORY_DISCOVERY_BASE_URL", None)
-            assert _mod.resolve_discovery_base_url(req) == "http://memhost:8765"
+            with patch.object(_mod, "detect_lan_ip", return_value="192.168.3.213"):
+                assert _mod.resolve_discovery_base_url(req) == "http://192.168.3.213:8765"
+
+    def test_dns_override_replaced_with_lan_ip(self):
+        req = _request("127.0.0.1")
+        with patch.dict(
+            os.environ,
+            {"OPENMEMORY_DISCOVERY_BASE_URL": "http://memorias.sysmo.com.br:8765"},
+        ):
+            with patch.object(_mod, "detect_lan_ip", return_value="192.168.3.213"):
+                assert _mod.resolve_discovery_base_url(req) == "http://192.168.3.213:8765"
+
+    def test_ip_override_is_kept(self):
+        req = _request("127.0.0.1")
+        with patch.dict(
+            os.environ,
+            {"OPENMEMORY_DISCOVERY_BASE_URL": "http://192.168.3.213:8765"},
+        ):
+            assert _mod.resolve_discovery_base_url(req) == "http://192.168.3.213:8765"
 
     def test_prefers_host_header_over_resolved_ip(self):
         scope = {
@@ -56,7 +74,8 @@ class TestDiscoveryUrlResolution:
         req = Request(scope)
         with patch.dict(os.environ, {}, clear=True):
             os.environ.pop("OPENMEMORY_DISCOVERY_BASE_URL", None)
-            assert _mod.resolve_discovery_base_url(req) == "http://memhost:8765"
+            with patch.object(_mod, "detect_lan_ip", return_value="192.168.3.213"):
+                assert _mod.resolve_discovery_base_url(req) == "http://192.168.3.213:8765"
 
     def test_loopback_env_and_request_stays_localhost(self):
         req = _request("127.0.0.1")

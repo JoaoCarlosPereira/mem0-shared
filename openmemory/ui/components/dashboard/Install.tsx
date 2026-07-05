@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { useSelector } from "react-redux";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Copy, Check, Plug } from "lucide-react";
 import Image from "next/image";
-import { getMcpBaseUrl } from "@/lib/api-url";
+import { fetchMcpBaseUrl, getMcpBaseUrl } from "@/lib/api-url";
 import { APP_NAME, APP_TAGLINE } from "@/lib/branding";
 import {
   claudeInstallSteps,
@@ -14,7 +15,8 @@ import {
   mcpSseUrl,
 } from "@/lib/mcp-install";
 import { PageHeader } from "@/components/shared/PageHeader";
-import { useAgentTokenApi } from "@/hooks/useAgentTokenApi";
+import { useImmutableAgentToken } from "@/hooks/useImmutableAgentToken";
+import type { RootState } from "@/store/store";
 
 // Placeholder (fallback raro: sessão indisponível). Sem <> para sobreviver
 // intacto ao encodeURIComponent das URLs.
@@ -107,29 +109,39 @@ function CommandBlock({
 
 export const Install = () => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const linkedGroup = useSelector(
+    (state: RootState) => state.profile.person?.group ?? null,
+  );
   const [group, setGroup] = useState("");
-  const mcpBase = getMcpBaseUrl();
+  const groupLocked = Boolean(linkedGroup);
+  const effectiveGroup = groupLocked ? linkedGroup! : group;
+  const [mcpBase, setMcpBase] = useState(() => getMcpBaseUrl());
   const defaultShell = installShellVariants[0];
+
+  useEffect(() => {
+    if (linkedGroup) {
+      setGroup(linkedGroup);
+    }
+  }, [linkedGroup]);
 
   // Token de agente imutável (ADR-008): criado AUTOMATICAMENTE no primeiro
   // acesso (get-or-create idempotente) e exibido permanentemente, embutido nos
   // comandos abaixo.
-  const { getOrCreateToken } = useAgentTokenApi();
-  const [rawToken, setRawToken] = useState<string | null>(null);
+  const { rawToken } = useImmutableAgentToken();
 
   useEffect(() => {
     let cancelled = false;
-    getOrCreateToken()
-      .then((data) => {
-        if (!cancelled && data.token) setRawToken(data.token);
+    fetchMcpBaseUrl()
+      .then((base) => {
+        if (!cancelled) setMcpBase(base);
       })
       .catch(() => {
-        // Sem sessão/erro: página segue com placeholder (fluxo legado intacto).
+        // Mantém fallback síncrono (getMcpBaseUrl).
       });
     return () => {
       cancelled = true;
     };
-  }, [getOrCreateToken]);
+  }, []);
 
   const tokenForCommands = rawToken ?? TOKEN_PLACEHOLDER;
 
@@ -152,24 +164,39 @@ export const Install = () => {
         <code className="text-zinc-400">%COMPUTERNAME%</code> /{" "}
         <code className="text-zinc-400">$env:COMPUTERNAME</code> /{" "}
         <code className="text-zinc-400">$(hostname)</code>) — não use o usuário
-        Linux do servidor. Informe o <strong className="text-zinc-400 font-medium">grupo
-        (equipe)</strong> abaixo — ele é vinculado ao hostname na{" "}
-        <strong className="text-zinc-400 font-medium">primeira conexão MCP</strong>{" "}
-        durante a instalação (parâmetro <code className="text-zinc-400">?group=</code>
-        na URL). Depois disso, leituras e escritas usam o cadastro do usuário.
+        Linux do servidor.{" "}
+        {groupLocked ? (
+          <>
+            Sua conta já está no grupo abaixo — os comandos já incluem{" "}
+            <code className="text-zinc-400">?group=</code> para vincular novas
+            máquinas na primeira conexão MCP.
+          </>
+        ) : (
+          <>
+            Informe o <strong className="text-zinc-400 font-medium">grupo
+            (equipe)</strong> abaixo — ele é vinculado ao hostname na{" "}
+            <strong className="text-zinc-400 font-medium">primeira conexão MCP</strong>{" "}
+            durante a instalação (parâmetro <code className="text-zinc-400">?group=</code>
+            na URL). Depois disso, leituras e escritas usam o cadastro do usuário.
+          </>
+        )}
       </p>
 
       <div className="mb-6 max-w-md space-y-2">
         <label htmlFor="install-group" className="text-xs text-zinc-500">
-          Grupo (equipe) — vinculado na instalação. Vazio usa Default.
+          {groupLocked
+            ? "Grupo (equipe) — já vinculado à sua conta"
+            : "Grupo (equipe) — vinculado na instalação. Vazio usa Default."}
         </label>
         <input
           id="install-group"
           type="text"
-          value={group}
+          value={effectiveGroup}
           onChange={(e) => setGroup(e.target.value)}
+          readOnly={groupLocked}
+          aria-readonly={groupLocked}
           placeholder="ex.: Fiscal"
-          className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 text-sm text-gray-300 placeholder:text-zinc-600 focus:outline-none focus:border-primary"
+          className={`w-full bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 text-sm text-gray-300 placeholder:text-zinc-600 focus:outline-none focus:border-primary${groupLocked ? " cursor-default opacity-90" : ""}`}
         />
       </div>
 
@@ -257,7 +284,7 @@ export const Install = () => {
                   mcpBase,
                   "openmemory",
                   defaultShell.hostnameExpr,
-                  group,
+                  effectiveGroup,
                   tokenForCommands,
                 )}
                 copyKey="mcp-ps"
@@ -270,7 +297,7 @@ export const Install = () => {
                   mcpBase,
                   "openmemory",
                   installShellVariants[1].hostnameExpr,
-                  group,
+                  effectiveGroup,
                   tokenForCommands,
                 )}
                 copyKey="mcp-bash"
@@ -305,7 +332,7 @@ export const Install = () => {
                         {claudeInstallSteps(
                           mcpBase,
                           variant.hostnameExpr,
-                          group,
+                          effectiveGroup,
                           tokenForCommands,
                         ).map(({ step, title, command }) => (
                           <CommandBlock
@@ -327,7 +354,7 @@ export const Install = () => {
                           mcpBase,
                           key,
                           variant.hostnameExpr,
-                          group,
+                          effectiveGroup,
                           tokenForCommands,
                         )}
                         copyKey={`${key}-${variant.id}`}
