@@ -299,4 +299,4 @@ def test_export_period_filter_excludes_out_of_range(seeded):
         params={"start": "2026-06-02T00:00:00", "end": "2026-06-30T00:00:00"},
     )
     lines = [line for line in r.text.strip().splitlines() if line]
-    assert len(lines) == 1 + 1  # único LLM em 2026-06-02 seria embed — nenhum
+    assert len(lines) == 1  # só header — único registro em 2026-06-02 é embed (excluído)
