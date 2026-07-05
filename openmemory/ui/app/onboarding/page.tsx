@@ -26,7 +26,6 @@ import { useGroupsApi, type Group } from "@/hooks/useGroupsApi";
 import {
   useOnboardingApi,
   type MachineSuggestions,
-  type OnboardingResult,
 } from "@/hooks/useOnboardingApi";
 import type { RootState } from "@/store/store";
 
@@ -47,7 +46,6 @@ export default function OnboardingPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
-  const [result, setResult] = useState<OnboardingResult | null>(null);
 
   // Usuário já vinculado que acessa diretamente volta ao painel.
   useEffect(() => {
@@ -91,13 +89,10 @@ export default function OnboardingPage() {
     setSubmitting(true);
     setError(null);
     try {
-      const data = await submitOnboarding(
-        hostname.trim(),
-        groupNameToSend || null,
-      );
-      setResult(data);
-      // Limpa o flag de primeiro login na sessão (middleware libera as rotas).
+      await submitOnboarding(hostname.trim(), groupNameToSend || null);
+      // Limpa o flag de onboarding na sessão e vai direto ao painel de instalação.
       await update({ firstLogin: false });
+      window.location.assign("/");
     } catch (err: any) {
       if (err?.response?.status === 409) {
         setConflict(true);
@@ -127,44 +122,6 @@ export default function OnboardingPage() {
             </p>
             <Button variant="outline" onClick={() => router.push("/")}>
               Ir para o painel
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  if (result) {
-    return (
-      <div className="flex min-h-[calc(100vh-64px)] items-center justify-center px-4">
-        <Card className="w-full max-w-lg border-zinc-800 bg-zinc-900">
-          <CardHeader>
-            <CardTitle>Tudo pronto!</CardTitle>
-            <CardDescription>
-              Máquina <strong>{result.hostname}</strong> vinculada à sua conta
-              no grupo <strong>{result.group}</strong>.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4 text-sm text-zinc-300">
-            {result.legacy_user_linked ? (
-              <p data-testid="memories-summary">
-                Encontramos <strong>{result.memories_count}</strong> memórias
-                associadas a esta máquina — elas agora pertencem à sua conta.
-              </p>
-            ) : (
-              <p data-testid="memories-summary">
-                Máquina nova: nenhuma memória anterior para herdar.
-              </p>
-            )}
-            <Button
-              onClick={async () => {
-                await update({ firstLogin: false });
-                router.refresh();
-                // Navegação completa garante que o middleware leia o JWT atualizado.
-                window.location.assign("/");
-              }}
-            >
-              Configurar meus agentes
             </Button>
           </CardContent>
         </Card>

@@ -4,7 +4,7 @@
  * Regras (feature auth Google):
  * - sem sessão, qualquer rota protegida redireciona para /login;
  * - com sessão, /login volta para o destino natural (onboarding ou painel);
- * - primeiro login força o wizard /onboarding até ser concluído.
+ * - sem máquina vinculada força o wizard /onboarding até ser concluído.
  */
 export function decideAuthRedirect(
   pathname: string,
