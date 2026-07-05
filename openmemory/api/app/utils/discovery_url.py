@@ -41,6 +41,15 @@ def resolve_discovery_base_url(request: Request) -> str:
     if override and not is_loopback_url(override):
         return override
 
+    # Prefer the HTTP Host header: clients (and httpx in CI) may resolve a
+    # hostname to an IP in the request URL while still sending the logical name
+    # in Host — advertising the header keeps discovery stable across DNS setups.
+    host_header = (request.headers.get("host") or "").strip()
+    if host_header:
+        host_only = host_header.split(":")[0]
+        if not is_loopback_host(host_only):
+            return f"{request.url.scheme}://{host_header}".rstrip("/")
+
     req_url = str(request.base_url).rstrip("/")
     if not is_loopback_host(request.url.hostname):
         return req_url

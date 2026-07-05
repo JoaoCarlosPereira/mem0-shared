@@ -44,7 +44,12 @@ def test_app():
 @pytest_asyncio.fixture
 async def client(test_app):
     transport = ASGITransport(app=test_app)
-    async with AsyncClient(transport=transport, base_url="http://memhost:8765") as ac:
+    # Pin Host so CI runners that map memhost → LAN IP still advertise memhost.
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://memhost:8765",
+        headers={"Host": "memhost:8765"},
+    ) as ac:
         yield ac
 
 
