@@ -1,4 +1,4 @@
-"""Instrumentação de consumo de tokens na camada LLM/embedding (task_02).
+"""Instrumentação de consumo de tokens na camada LLM (task_02).
 
 Por que aqui e não em ``generate_response``: os providers do mem0 retornam
 apenas o conteúdo parseado (str/dict), sem o bloco ``usage`` — os contadores de
@@ -7,12 +7,11 @@ SDK subjacente do client mem0 já construído:
 
 - LLM OpenAI-compatível: ``llm.client.chat.completions.create``
 - LLM Ollama:           ``llm.client.chat``
-- Embedder OpenAI:      ``embedding_model.client.embeddings.create``
-- Embedder Ollama:      ``embedding_model.client.embed``
 
 ``instrument_memory_client`` é aplicado uma única vez na construção do client
 (``app.utils.memory.get_memory_client``), garantindo cobertura de qualquer
-caminho (write worker, MCP server, routers) sem duplicação.
+caminho (write worker, MCP server, routers) sem duplicação. Embeddings locais
+não são instrumentados — só LLM entra nas métricas de consumo.
 
 A atribuição (project/agent/user/operation) não trafega pelos kwargs do mem0;
 os pontos de entrada declaram o contexto com ``usage_attribution(...)``
@@ -314,7 +313,10 @@ def _instrument_embedder(embedder, service: TokenUsageService) -> bool:
 
 
 def instrument_memory_client(client, service: Optional[TokenUsageService] = None):
-    """Instrumenta LLM + embedder de um client mem0 construído. Idempotente.
+    """Instrumenta apenas o LLM de um client mem0 construído. Idempotente.
+
+    O embedder fica de fora de propósito: embeddings permanecem locais e não
+  entram nas métricas de tokens (projeção de custo de API paga).
 
     Retorna o próprio ``client``. Nunca levanta: instrumentação é best-effort
     (providers não suportados ficam sem métricas, com log informativo).
@@ -324,13 +326,8 @@ def instrument_memory_client(client, service: Optional[TokenUsageService] = None
     service = service or token_usage_service
     try:
         llm_ok = _instrument_llm(getattr(client, "llm", None), service)
-        emb_ok = _instrument_embedder(getattr(client, "embedding_model", None), service)
-        if llm_ok or emb_ok:
-            logger.info(
-                "token usage instrumentation ativa (llm=%s, embedder=%s)",
-                llm_ok,
-                emb_ok,
-            )
+        if llm_ok:
+            logger.info("token usage instrumentation ativa (llm=%s)", llm_ok)
     except Exception:  # noqa: BLE001
         logger.exception("token usage instrumentation failed; seguindo sem métricas")
     return client

@@ -128,15 +128,15 @@ def test_summary_by_project(seeded):
     assert rows[("2026-06-01", "proj-a")]["total_tokens"] == 400
     assert rows[("2026-06-01", "proj-a")]["operation_count"] == 2
     assert rows[("2026-06-01", "proj-a")]["avg_tokens_per_op"] == 200
-    assert rows[("2026-06-02", "proj-b")]["total_tokens"] == 30
+    assert ("2026-06-02", "proj-b") not in rows
 
 
 @pytest.mark.parametrize(
     "granularity,expected_groups",
     [
-        ("agent", {"claude", "cursor"}),
-        ("user", {"host-1", "host-2"}),
-        ("model", {"qwen3", "nomic"}),
+        ("agent", {"claude"}),
+        ("user", {"host-1"}),
+        ("model", {"qwen3"}),
     ],
 )
 def test_summary_granularities(seeded, granularity, expected_groups):
@@ -155,9 +155,14 @@ def test_summary_filter_by_project(seeded):
         "/api/v1/metrics/tokens/summary", params={**PARAMS, "project": "proj-b"}
     )
     assert r.status_code == 200
-    data = r.json()["data"]
-    assert len(data) == 1
-    assert data[0]["group"] == "proj-b"
+    assert r.json()["data"] == []
+
+
+def test_summary_excludes_embedding_rows(seeded):
+    client = make_client(seeded)
+    r = client.get("/api/v1/metrics/tokens/summary", params=PARAMS)
+    groups = {row["group"] for row in r.json()["data"]}
+    assert "proj-b" not in groups
 
 
 def test_summary_filter_by_operation_type(seeded):
@@ -167,9 +172,7 @@ def test_summary_filter_by_operation_type(seeded):
         params={**PARAMS, "operation_type": ["search"]},
     )
     assert r.status_code == 200
-    data = r.json()["data"]
-    assert len(data) == 1
-    assert data[0]["total_tokens"] == 30
+    assert r.json()["data"] == []
 
 
 def test_summary_invalid_start_returns_422(seeded):
@@ -206,7 +209,7 @@ def test_details_pagination(seeded):
     )
     assert r.status_code == 200
     body = r.json()
-    assert body["total"] == 3
+    assert body["total"] == 2
     assert body["page"] == 1
     assert body["page_size"] == 2
     assert len(body["data"]) == 2
@@ -215,7 +218,7 @@ def test_details_pagination(seeded):
         "/api/v1/metrics/tokens/details",
         params={**PARAMS, "page": 2, "page_size": 2},
     )
-    assert len(r2.json()["data"]) == 1
+    assert len(r2.json()["data"]) == 0
 
 
 def test_details_sorting_by_total_tokens_desc(seeded):
@@ -277,7 +280,7 @@ def test_export_returns_csv_with_all_rows(seeded):
 
     lines = [line for line in r.text.strip().splitlines() if line]
     assert lines[0].split(",") == _metrics.EXPORT_COLUMNS
-    assert len(lines) == 1 + 3  # header + 3 registros
+    assert len(lines) == 1 + 2  # header + 2 registros LLM
 
 
 def test_export_respects_filters(seeded):
@@ -286,8 +289,7 @@ def test_export_respects_filters(seeded):
         "/api/v1/metrics/tokens/export", params={**PARAMS, "project": "proj-b"}
     )
     lines = [line for line in r.text.strip().splitlines() if line]
-    assert len(lines) == 1 + 1
-    assert "proj-b" in lines[1]
+    assert len(lines) == 1  # só header — embed de proj-b excluído
 
 
 def test_export_period_filter_excludes_out_of_range(seeded):
@@ -297,4 +299,4 @@ def test_export_period_filter_excludes_out_of_range(seeded):
         params={"start": "2026-06-02T00:00:00", "end": "2026-06-30T00:00:00"},
     )
     lines = [line for line in r.text.strip().splitlines() if line]
-    assert len(lines) == 1 + 1
+    assert len(lines) == 1 + 1  # único LLM em 2026-06-02 seria embed — nenhum

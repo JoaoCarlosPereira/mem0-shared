@@ -142,7 +142,7 @@ def test_ollama_chat_usage_captured(service, factory):
     assert row.model == "qwen3-test"
 
 
-def test_openai_embeddings_usage_captured(service, factory):
+def test_openai_embeddings_not_instrumented(service, factory):
     usage = SimpleNamespace(prompt_tokens=42, total_tokens=42)
     client = make_client(embedder=make_openai_embedder(usage=usage))
     instrument_memory_client(client, service)
@@ -150,24 +150,17 @@ def test_openai_embeddings_usage_captured(service, factory):
     client.embedding_model.client.embeddings.create(model="embed-test", input=["x"])
     assert service.flush(timeout=5)
 
-    (row,) = _rows(factory)
-    assert row.input_tokens == 42
-    assert row.output_tokens == 0
-    assert row.total_tokens == 42
-    # Sem contexto, embeddings caem no operation_type padrão "embed".
-    assert row.operation_type == "embed"
+    assert len(_rows(factory)) == 0
 
 
-def test_ollama_embed_usage_captured(service, factory):
+def test_ollama_embed_not_instrumented(service, factory):
     client = make_client(embedder=make_ollama_embedder({"prompt_eval_count": 33}))
     instrument_memory_client(client, service)
 
     client.embedding_model.client.embed(model="nomic-test", input="query")
     assert service.flush(timeout=5)
 
-    (row,) = _rows(factory)
-    assert row.input_tokens == 33
-    assert row.total_tokens == 33
+    assert len(_rows(factory)) == 0
 
 
 # --------------------------------------------------------------------------- #

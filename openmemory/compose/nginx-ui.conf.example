@@ -1,0 +1,51 @@
+# Exemplo: nginx da empresa terminando TLS e encaminhando para a UI (topologia A,
+# ADR-009). Copie/adapte para /etc/nginx/sites-available/memorias.sysmo.com.br.conf
+#
+# O callback OAuth do Google (/api/auth/callback/google) envia code+state na query
+# string. Com o default global deste servidor (large_client_header_buffers 2 1k)
+# URLs > ~1,4 KB fecham a conexão → ERR_CONNECTION_CLOSED no Chrome.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name memorias.sysmo.com.br;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name memorias.sysmo.com.br;
+
+    include /etc/nginx/default.d/include_ssl.conf;
+
+    # OAuth Google (NextAuth): evita ERR_CONNECTION_CLOSED no callback.
+    client_header_buffer_size 8k;
+    large_client_header_buffers 8 16k;
+
+    # Headers de segurança (replicados do http{} — add_header no server{} substitui os herdados).
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://lh3.googleusercontent.com; frame-ancestors 'self'; form-action 'self';" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    access_log /var/log/nginx/mem0_access.log;
+    error_log /var/log/nginx/mem0_error.log;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_read_timeout 300s;
+    }
+}

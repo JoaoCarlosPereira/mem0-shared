@@ -156,7 +156,14 @@ export default function OnboardingPage() {
                 Máquina nova: nenhuma memória anterior para herdar.
               </p>
             )}
-            <Button onClick={() => router.push("/")}>
+            <Button
+              onClick={async () => {
+                await update({ firstLogin: false });
+                router.refresh();
+                // Navegação completa garante que o middleware leia o JWT atualizado.
+                window.location.assign("/");
+              }}
+            >
               Configurar meus agentes
             </Button>
           </CardContent>

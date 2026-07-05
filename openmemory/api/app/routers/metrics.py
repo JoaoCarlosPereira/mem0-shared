@@ -1,4 +1,4 @@
-"""Endpoints REST de métricas de consumo de tokens (task_03).
+"""Endpoints REST de métricas de consumo de tokens LLM (task_03).
 
 Três endpoints sob ``/api/v1/metrics/tokens``:
 
@@ -6,6 +6,10 @@ Três endpoints sob ``/api/v1/metrics/tokens``:
   user/model) para gráficos de tendência.
 - ``GET /details``: linhas individuais com paginação e ordenação dinâmica.
 - ``GET /export``: CSV com todas as colunas, mesmos filtros (sem paginação).
+
+Somente chamadas de **chat LLM** entram nos totais (``output_tokens > 0``).
+Embeddings locais são excluídos — histórico antigo de embed também some dos
+agregados.
 
 O bucket de período usa expressão por dialeto (``to_char`` no PostgreSQL,
 ``strftime`` no SQLite) porque ``date_trunc`` não existe no SQLite usado em
@@ -125,6 +129,11 @@ def _naive_utc(value: Optional[datetime]) -> Optional[datetime]:
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _llm_only_filter(query):
+    """Exclui embeddings (sem completion tokens) dos agregados de consumo."""
+    return query.filter(TokenUsageLog.output_tokens > 0)
+
+
 def _apply_filters(
     query,
     *,
@@ -136,6 +145,7 @@ def _apply_filters(
     user_id: Optional[str],
     model: Optional[str],
 ):
+    query = _llm_only_filter(query)
     start = _naive_utc(start)
     end = _naive_utc(end)
     if start is not None:

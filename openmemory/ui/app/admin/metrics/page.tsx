@@ -70,7 +70,7 @@ export default function MetricsPage() {
         className="mb-4"
         icon={BarChart3}
         title="Métricas de Tokens"
-        description="Consumo de tokens por projeto, agente, usuário e modelo — valores em tokens, não em custo monetário."
+        description="Consumo de tokens LLM por projeto, agente, usuário e modelo — embeddings locais não entram na contagem."
       />
       <div className="space-y-4">
         <TokenFilters filters={filters} onChange={setFilters} />

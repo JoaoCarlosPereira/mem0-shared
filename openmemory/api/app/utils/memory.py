@@ -240,16 +240,24 @@ def get_configured_llm_model() -> str | None:
 def probe_llm_model() -> tuple[bool, str]:
     """Ping the configured LLM with a minimal completion (startup health)."""
     try:
+        from app.utils.token_usage_wrapper import usage_attribution
+
         client = get_memory_client_safe()
         if client is None:
             return False, get_memory_client_last_error() or "memory client unavailable"
         llm = client.llm
         model = getattr(getattr(llm, "config", None), "model", None) or get_configured_llm_model() or "unknown"
         generate = llm.generate_response
-        generate(
-            messages=[{"role": "user", "content": "ok"}],
-            max_tokens=1,
-        )
+        with usage_attribution(
+            project="_system",
+            agent="write-worker",
+            user_id="system",
+            operation_type="health_probe",
+        ):
+            generate(
+                messages=[{"role": "user", "content": "ok"}],
+                max_tokens=1,
+            )
         return True, str(model)
     except Exception as exc:
         return False, str(exc)
@@ -856,9 +864,9 @@ def get_memory_client(custom_instructions: str = None):
             print(f"Initializing memory client with config hash: {current_config_hash}")
             try:
                 _memory_client = Memory.from_config(config_dict=config)
-                # Métricas de consumo de tokens (task_06): instrumenta o SDK
-                # LLM/embedder uma única vez no build — cobre worker, MCP e
-                # routers sem duplicação. Best-effort: nunca levanta.
+                # Métricas de consumo de tokens LLM (task_06): instrumenta o SDK
+                # de chat uma única vez no build — cobre worker, MCP e routers.
+                # Embeddings locais ficam de fora. Best-effort: nunca levanta.
                 from app.utils.token_usage_wrapper import instrument_memory_client
 
                 instrument_memory_client(_memory_client)

@@ -33,6 +33,13 @@ services:
     #   (A) Proxy da empresa na 443 termina o TLS e encaminha
     #       https://memorias.sysmo.com.br -> http://IP_DA_LAN:3000 (a UI). Neste
     #       caso o TLS deste Traefik nem é usado; mantenha PROXY_TLS_PORT=8443.
+    #       OBRIGATÓRIO no nginx da empresa (OAuth Google): o callback
+    #       /api/auth/callback/google traz code+state na query (~1–3 KB). O
+    #       default global deste host (`large_client_header_buffers 2 1k`) fecha
+    #       a conexão → ERR_CONNECTION_CLOSED no browser. No server {} da UI:
+    #         client_header_buffer_size 8k;
+    #         large_client_header_buffers 8 16k;
+    #       Ver compose/nginx-ui.conf.example.
     #   (B) Este Traefik é o edge TLS: set PROXY_TLS_PORT=443 (com a 443 livre)
     #       e coloque o certificado em ${TLS_CERT_DIR} (ui.crt/ui.key).
     ports:

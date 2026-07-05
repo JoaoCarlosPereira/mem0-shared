@@ -101,8 +101,15 @@ describe("OnboardingPage", () => {
       expect(mockUpdate).toHaveBeenCalledWith({ firstLogin: false });
     });
 
+    const assignSpy = jest
+      .spyOn(window.location, "assign")
+      .mockImplementation(() => undefined);
     fireEvent.click(screen.getByRole("button", { name: /configurar meus agentes/i }));
-    expect(mockPush).toHaveBeenCalledWith("/");
+    await waitFor(() => {
+      expect(mockUpdate).toHaveBeenCalledWith({ firstLogin: false });
+      expect(assignSpy).toHaveBeenCalledWith("/");
+    });
+    assignSpy.mockRestore();
   });
 
   it("grupo novo dispara o POST com o nome digitado", async () => {

@@ -54,12 +54,12 @@ describe("TokenFilters", () => {
     render(<TokenFilters filters={baseFilters} onChange={onChange} />);
 
     fireEvent.change(screen.getByLabelText("Operação"), {
-      target: { value: "search" },
+      target: { value: "add" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Aplicar" }));
 
     expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({ operation_type: ["search"] }),
+      expect.objectContaining({ operation_type: ["add"] }),
     );
   });
 

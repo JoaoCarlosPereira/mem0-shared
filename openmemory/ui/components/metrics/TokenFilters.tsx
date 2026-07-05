@@ -18,9 +18,8 @@ const GRANULARITIES: { value: Granularity; label: string }[] = [
 const OPERATION_TYPES = [
   { value: "", label: "Todas as operações" },
   { value: "add", label: "Extração (add)" },
-  { value: "search", label: "Busca (search)" },
   { value: "update", label: "Atualização (update)" },
-  { value: "embed", label: "Embedding" },
+  { value: "health_probe", label: "Health probe" },
 ];
 
 const inputCls =

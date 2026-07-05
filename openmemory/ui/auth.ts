@@ -85,8 +85,22 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.firstLogin = (user as any).firstLogin === true;
       }
       // O wizard de onboarding limpa firstLogin via useSession().update(...).
-      if (trigger === "update" && session?.firstLogin === false) {
-        token.firstLogin = false;
+      if (trigger === "update" && session && "firstLogin" in session) {
+        token.firstLogin = (session as { firstLogin?: boolean }).firstLogin === true;
+      }
+      // Após vínculo da máquina, /auth/me deixa de expor machine — alinha o JWT.
+      if (trigger === "update" && token.apiAccessToken) {
+        try {
+          const resp = await fetch(`${API_BASE}/api/v1/auth/me`, {
+            headers: { Authorization: `Bearer ${token.apiAccessToken}` },
+          });
+          if (resp.ok) {
+            const me = await resp.json();
+            if (me.machine) token.firstLogin = false;
+          }
+        } catch {
+          /* mantém o flag atual */
+        }
       }
       return token;
     },
