@@ -233,6 +233,9 @@ def list_memory_read_audit(
         }
         for row in rows
     ]
+    from app.utils.creator_identity import enrich_actor_items
+
+    enrich_actor_items(logs)
     return total, logs
 
 

@@ -33,6 +33,17 @@ _discovery = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_discovery)
 discovery_router = _discovery.router
 
+_LAN_IP = "192.168.3.213"
+_LAN_BASE = f"http://{_LAN_IP}:8765"
+
+
+@pytest.fixture(autouse=True)
+def _stable_lan_ip(monkeypatch):
+    """Align integration expectations with ensure_ip_host (main)."""
+    import app.utils.discovery_url as discovery_url_mod
+
+    monkeypatch.setattr(discovery_url_mod, "detect_lan_ip", lambda: _LAN_IP)
+
 
 @pytest.fixture
 def test_app():
@@ -44,7 +55,12 @@ def test_app():
 @pytest_asyncio.fixture
 async def client(test_app):
     transport = ASGITransport(app=test_app)
-    async with AsyncClient(transport=transport, base_url="http://memhost:8765") as ac:
+    # Pin Host so CI runners that map memhost → LAN IP still advertise memhost.
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://memhost:8765",
+        headers={"Host": "memhost:8765"},
+    ) as ac:
         yield ac
 
 
@@ -80,7 +96,7 @@ class TestBaseUrlReflectsRuntime:
     async def test_base_url_from_request(self, client):
         data = (await client.get("/discovery")).json()
         # Derived from the request host:port used to reach the server.
-        assert data["base_url"] == "http://memhost:8765"
+        assert data["base_url"] == _LAN_BASE
 
     @pytest.mark.asyncio
     async def test_base_url_env_override(self, client):
@@ -105,4 +121,4 @@ class TestWellKnownAlias:
         url = data["base_url"] + data["route_template"].format(
             client_name="cursor", user_id="maqA"
         )
-        assert url == "http://memhost:8765/mcp/cursor/sse/maqA"
+        assert url == f"{_LAN_BASE}/mcp/cursor/sse/maqA"

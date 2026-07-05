@@ -1,11 +1,20 @@
-import Image from "next/image";
 import { resolveAttribution } from "@/lib/attribution";
+import { CreatorAvatar } from "@/components/shared/creator-avatar";
 
-interface AttributionBadgeProps {
+export interface CreatorAttributionInput {
   appName?: string | null;
   clientName?: string | null;
   hostname?: string | null;
+  displayName?: string | null;
+  avatarUrl?: string | null;
   metadata?: Record<string, unknown> | null;
+}
+
+export function resolveCreatorAttribution(opts: CreatorAttributionInput) {
+  return resolveAttribution(opts);
+}
+
+interface AttributionBadgeProps extends CreatorAttributionInput {
   prefix?: string;
   iconSize?: number;
   className?: string;
@@ -15,15 +24,19 @@ export function AttributionBadge({
   appName,
   clientName,
   hostname,
+  displayName,
+  avatarUrl,
   metadata,
   prefix = "Criada por:",
   iconSize = 24,
   className = "",
 }: AttributionBadgeProps) {
-  const attribution = resolveAttribution({
+  const attribution = resolveCreatorAttribution({
     appName,
     clientName,
     hostname,
+    displayName,
+    avatarUrl,
     metadata,
   });
 
@@ -34,57 +47,82 @@ export function AttributionBadge({
       {prefix ? (
         <span className="text-sm text-zinc-400">{prefix}</span>
       ) : null}
-      {attribution.iconImage ? (
-        <div className="rounded-full bg-zinc-700 flex items-center justify-center overflow-hidden">
-          <Image
-            src={attribution.iconImage}
-            alt=""
-            width={iconSize}
-            height={iconSize}
-            className={
-              iconSize <= 20 ? "w-4 h-4" : iconSize <= 24 ? "w-5 h-5" : "w-7 h-7"
-            }
-          />
-        </div>
-      ) : null}
+      <div className="rounded-full bg-zinc-700 flex items-center justify-center overflow-hidden">
+        <CreatorAvatar
+          attribution={attribution}
+          size={iconSize}
+          className={
+            iconSize <= 20 ? "w-4 h-4" : iconSize <= 24 ? "w-5 h-5" : "w-7 h-7"
+          }
+        />
+      </div>
       <p className="text-sm text-zinc-100 font-semibold">{attribution.label}</p>
     </div>
   );
 }
 
-interface AttributionLabelProps {
-  appName?: string | null;
-  clientName?: string | null;
-  hostname?: string | null;
-  metadata?: Record<string, unknown> | null;
-}
+interface AttributionLabelProps extends CreatorAttributionInput {}
 
 /** Compact inline label (tables, lists). */
 export function AttributionLabel({
   appName,
   clientName,
   hostname,
+  displayName,
+  avatarUrl,
   metadata,
 }: AttributionLabelProps) {
-  const attribution = resolveAttribution({
+  const attribution = resolveCreatorAttribution({
     appName,
     clientName,
     hostname,
+    displayName,
+    avatarUrl,
     metadata,
   });
 
   return (
     <div className="flex items-center justify-center gap-1.5">
-      {attribution.iconImage ? (
-        <Image
-          src={attribution.iconImage}
-          alt=""
-          width={18}
-          height={18}
-          className="w-[18px] h-[18px] rounded-full"
-        />
-      ) : null}
+      <CreatorAvatar
+        attribution={attribution}
+        size={18}
+        className="w-[18px] h-[18px]"
+      />
       <span className="text-sm font-semibold">{attribution.label}</span>
+    </div>
+  );
+}
+
+/** Queue/audit rows keyed by ``user_display_name`` / ``user_avatar_url``. */
+export function ActorLabel({
+  hostname,
+  clientName,
+  displayName,
+  avatarUrl,
+}: {
+  hostname?: string | null;
+  clientName?: string | null;
+  displayName?: string | null;
+  avatarUrl?: string | null;
+}) {
+  const attribution = resolveCreatorAttribution({
+    clientName,
+    hostname,
+    displayName,
+    avatarUrl,
+  });
+
+  return (
+    <div
+      className="flex items-center gap-1.5"
+      title={hostname && displayName ? hostname : clientName ?? undefined}
+    >
+      <CreatorAvatar
+        attribution={attribution}
+        size={18}
+        className="w-[18px] h-[18px]"
+      />
+      <span className="font-medium text-zinc-200">{attribution.label}</span>
     </div>
   );
 }

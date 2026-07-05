@@ -412,19 +412,25 @@ async def get_memory(
         .first()
     )
     if memory:
-        return {
+        from app.utils.creator_identity import enrich_memory_attribution, resolve_creator_identities
+
+        hostname = memory.user.user_id if memory.user else None
+        identities = resolve_creator_identities([hostname])
+        payload = {
             "id": memory.id,
             "text": memory.content,
             "created_at": int(memory.created_at.timestamp()),
             "state": memory.state.value,
             "app_id": memory.app_id,
             "app_name": memory.app.name if memory.app else None,
-            "created_by_hostname": memory.user.user_id if memory.user else None,
+            "created_by_hostname": hostname,
             "created_by_client": memory.app.name if memory.app else None,
             "categories": [category.name for category in memory.categories],
             "metadata_": memory.metadata_,
             "group": memory_group_name(memory),
         }
+        enrich_memory_attribution(payload, identities)
+        return payload
 
     from app.utils.vector_stats import get_shared_memory_by_id
 
@@ -442,6 +448,10 @@ async def get_memory(
             client_name="openmemory",
             items=[{"id": str(memory_id), "project": proj, "metadata_": shared.get("metadata_")}],
         )
+        from app.utils.creator_identity import enrich_memory_attribution, resolve_creator_identities
+
+        identities = resolve_creator_identities([shared.get("created_by_hostname")])
+        enrich_memory_attribution(shared, identities)
         shared["group"] = group_name_for_hostname(shared.get("created_by_hostname"))
         return shared
 
@@ -711,6 +721,8 @@ class SharedMemoryResponse(BaseModel):
     app_name: str
     created_by_hostname: Optional[str] = None
     created_by_client: Optional[str] = None
+    created_by_display_name: Optional[str] = None
+    created_by_avatar_url: Optional[str] = None
     categories: List[str] = Field(default_factory=list)
     metadata_: Optional[dict] = None
     group: Optional[str] = None
@@ -740,6 +752,11 @@ async def filter_shared_memories(request: FilterMemoriesRequest):
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    from app.utils.creator_identity import enrich_memory_items
+
+    raw_items = list(data["items"])
+    enrich_memory_items(raw_items)
+
     items = [
         SharedMemoryResponse(
             id=str(item["id"]),
@@ -750,11 +767,13 @@ async def filter_shared_memories(request: FilterMemoriesRequest):
             app_name=item["app_name"],
             created_by_hostname=item.get("created_by_hostname"),
             created_by_client=item.get("created_by_client"),
+            created_by_display_name=item.get("created_by_display_name"),
+            created_by_avatar_url=item.get("created_by_avatar_url"),
             categories=item["categories"],
             metadata_=item.get("metadata_"),
             group=group_name_for_hostname(item.get("created_by_hostname")),
         )
-        for item in data["items"]
+        for item in raw_items
     ]
 
     from app.utils.read_audit import record_memory_reads

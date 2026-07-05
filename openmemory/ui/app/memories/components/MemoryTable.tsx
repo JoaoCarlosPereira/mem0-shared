@@ -252,6 +252,8 @@ export function MemoryTable() {
                   appName={memory.app_name}
                   clientName={memory.created_by_client}
                   hostname={memory.created_by_hostname}
+                  displayName={memory.created_by_display_name}
+                  avatarUrl={memory.created_by_avatar_url}
                   metadata={memory.metadata}
                 />
               </TableCell>

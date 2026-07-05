@@ -61,6 +61,22 @@ class TestDiscoveryUrlResolution:
         ):
             assert _mod.resolve_discovery_base_url(req) == "http://192.168.3.213:8765"
 
+    def test_prefers_host_header_over_resolved_ip(self):
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/discovery",
+            "headers": [(b"host", b"memhost:8765")],
+            "query_string": b"",
+            "server": ("10.1.0.39", 8765),
+            "scheme": "http",
+        }
+        req = Request(scope)
+        with patch.dict(os.environ, {}, clear=True):
+            os.environ.pop("OPENMEMORY_DISCOVERY_BASE_URL", None)
+            with patch.object(_mod, "detect_lan_ip", return_value="192.168.3.213"):
+                assert _mod.resolve_discovery_base_url(req) == "http://192.168.3.213:8765"
+
     def test_loopback_env_and_request_stays_localhost(self):
         req = _request("127.0.0.1")
         with patch.dict(os.environ, {"OPENMEMORY_DISCOVERY_BASE_URL": "http://localhost:8765"}):

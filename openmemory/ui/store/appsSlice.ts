@@ -15,6 +15,8 @@ export interface AppMemory {
   categories: string[];
   created_by_hostname?: string | null;
   created_by_client?: string | null;
+  created_by_display_name?: string | null;
+  created_by_avatar_url?: string | null;
   app_name: string;
 }
 

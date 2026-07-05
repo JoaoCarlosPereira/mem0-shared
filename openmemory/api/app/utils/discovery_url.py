@@ -95,10 +95,21 @@ def resolve_discovery_base_url(request: Request) -> str:
     if override and not is_loopback_url(override):
         base = override
     else:
-        req_url = str(request.base_url).rstrip("/")
-        if not is_loopback_host(request.url.hostname):
-            base = req_url
+        # Prefer Host header when the ASGI scope carries a resolved IP but the
+        # client sent a logical hostname (common in CI and behind proxies).
+        host_header = (request.headers.get("host") or "").strip()
+        if host_header:
+            host_only = host_header.split(":")[0]
+            if not is_loopback_host(host_only):
+                base = f"{request.url.scheme}://{host_header}".rstrip("/")
+            else:
+                req_url = str(request.base_url).rstrip("/")
+                base = override or req_url
         else:
-            base = override or req_url
+            req_url = str(request.base_url).rstrip("/")
+            if not is_loopback_host(request.url.hostname):
+                base = req_url
+            else:
+                base = override or req_url
 
     return ensure_ip_host(base)

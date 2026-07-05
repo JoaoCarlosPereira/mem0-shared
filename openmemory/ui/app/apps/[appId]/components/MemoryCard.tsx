@@ -14,6 +14,8 @@ interface MemoryCardProps {
   app_name: string;
   created_by_hostname?: string | null;
   created_by_client?: string | null;
+  created_by_display_name?: string | null;
+  created_by_avatar_url?: string | null;
   state: string;
 }
 
@@ -27,6 +29,8 @@ export function MemoryCard({
   app_name,
   created_by_hostname,
   created_by_client,
+  created_by_display_name,
+  created_by_avatar_url,
   state,
 }: MemoryCardProps) {
   return (
@@ -89,6 +93,8 @@ export function MemoryCard({
               appName={app_name}
               clientName={created_by_client}
               hostname={created_by_hostname}
+              displayName={created_by_display_name}
+              avatarUrl={created_by_avatar_url}
               metadata={metadata}
             />
           </div>

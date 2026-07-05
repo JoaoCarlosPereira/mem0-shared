@@ -27,6 +27,16 @@ _provision = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_provision)
 provision_router = _provision.router
 
+_LAN_IP = "192.168.3.213"
+_LAN_BASE = f"http://{_LAN_IP}:8765"
+
+
+@pytest.fixture(autouse=True)
+def _stable_lan_ip(monkeypatch):
+    import app.utils.discovery_url as discovery_url_mod
+
+    monkeypatch.setattr(discovery_url_mod, "detect_lan_ip", lambda: _LAN_IP)
+
 
 @pytest.fixture
 def test_app():
@@ -38,7 +48,11 @@ def test_app():
 @pytest_asyncio.fixture
 async def client(test_app):
     transport = ASGITransport(app=test_app)
-    async with AsyncClient(transport=transport, base_url="http://memhost:8765") as ac:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://memhost:8765",
+        headers={"Host": "memhost:8765"},
+    ) as ac:
         yield ac
 
 
@@ -56,7 +70,7 @@ class TestProvisionContract:
         env = (await client.get("/provision")).json()["env"]
         assert env["MEM0_LOCAL_ONLY"] == "1"
         assert env["MEM0_TELEMETRY"] == "false"
-        assert env["OPENMEMORY_API_BASE"] == "http://memhost:8765"
+        assert env["OPENMEMORY_API_BASE"] == _LAN_BASE
 
     @pytest.mark.asyncio
     async def test_three_modes_with_single_default(self, client):
@@ -80,7 +94,7 @@ class TestPerHostMcpConfig:
         cfg = (await client.get("/provision?host=claude-code")).json()["mcp_config"]
         assert cfg["target_file"] == ".mcp.json"
         url = cfg["content"]["mcpServers"]["mem0"]["url"]
-        assert url.startswith("http://memhost:8765/mcp/claude-code/http/")
+        assert url.startswith(f"{_LAN_BASE}/mcp/claude-code/http/")
 
     @pytest.mark.asyncio
     async def test_codex_writes_toml(self, client):

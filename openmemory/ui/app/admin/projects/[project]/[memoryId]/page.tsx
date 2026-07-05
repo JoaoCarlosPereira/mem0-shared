@@ -68,6 +68,8 @@ export default function AdminMemoryDetailPage() {
                   appName: memory.app_name,
                   clientName: memory.created_by_client,
                   hostname: memory.created_by_hostname,
+                  displayName: memory.created_by_display_name,
+                  avatarUrl: memory.created_by_avatar_url,
                   metadata: memory.metadata_,
                 }).label}
               </div>
@@ -92,6 +94,8 @@ export default function AdminMemoryDetailPage() {
                           appName: log.app_name,
                           clientName: log.client_name,
                           hostname: log.hostname,
+                          displayName: log.display_name,
+                          avatarUrl: log.avatar_url,
                         }).label}{" "}
                       — {log.accessed_at}
                     </li>

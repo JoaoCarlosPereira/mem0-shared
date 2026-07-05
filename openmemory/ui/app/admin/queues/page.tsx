@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/select";
 import { QueueTable, QueueColumn } from "@/components/admin/QueueTable";
 import { JobStatusBadge } from "@/components/admin/JobStatusBadge";
+import { ActorLabel } from "@/components/shared/attribution-badge";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { ListOrdered } from "lucide-react";
 import {
@@ -169,9 +170,12 @@ export default function QueuesPage() {
       key: "hostname",
       header: "Usuário",
       render: (r) => (
-        <span className="font-medium text-zinc-200" title={r.client_name ?? undefined}>
-          {r.hostname}
-        </span>
+        <ActorLabel
+          hostname={r.hostname}
+          clientName={r.client_name}
+          displayName={r.user_display_name}
+          avatarUrl={r.user_avatar_url}
+        />
       ),
     },
     {

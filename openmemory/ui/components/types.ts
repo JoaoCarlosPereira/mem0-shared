@@ -14,4 +14,6 @@ export interface Memory {
   group?: string | null
   created_by_hostname?: string | null
   created_by_client?: string | null
+  created_by_display_name?: string | null
+  created_by_avatar_url?: string | null
 }
