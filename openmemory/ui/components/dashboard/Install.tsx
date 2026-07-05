@@ -6,7 +6,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Copy, Check, Plug } from "lucide-react";
 import Image from "next/image";
-import { getMcpBaseUrl } from "@/lib/api-url";
+import { fetchMcpBaseUrl, getMcpBaseUrl } from "@/lib/api-url";
 import { APP_NAME, APP_TAGLINE } from "@/lib/branding";
 import {
   claudeInstallSteps,
@@ -115,7 +115,7 @@ export const Install = () => {
   const [group, setGroup] = useState("");
   const groupLocked = Boolean(linkedGroup);
   const effectiveGroup = groupLocked ? linkedGroup! : group;
-  const mcpBase = getMcpBaseUrl();
+  const [mcpBase, setMcpBase] = useState(() => getMcpBaseUrl());
   const defaultShell = installShellVariants[0];
 
   useEffect(() => {
@@ -143,6 +143,20 @@ export const Install = () => {
       cancelled = true;
     };
   }, [getOrCreateToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchMcpBaseUrl()
+      .then((base) => {
+        if (!cancelled) setMcpBase(base);
+      })
+      .catch(() => {
+        // Mantém fallback síncrono (getMcpBaseUrl).
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const tokenForCommands = rawToken ?? TOKEN_PLACEHOLDER;
 

@@ -12,6 +12,14 @@ jest.mock("axios");
 import axios from "axios";
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
+jest.mock("@/lib/api-url", () => {
+  const actual = jest.requireActual<typeof import("@/lib/api-url")>("@/lib/api-url");
+  return {
+    ...actual,
+    fetchMcpBaseUrl: jest.fn().mockResolvedValue("http://192.168.3.213:8765"),
+  };
+});
+
 import profileReducer from "@/store/profileSlice";
 import { Install } from "@/components/dashboard/Install";
 
@@ -77,11 +85,12 @@ describe("Install (dashboard)", () => {
     const { container } = renderInstall();
     await waitFor(() => screen.getByTestId("token-banner"));
 
-    // Comandos da aba padrão (Claude) carregam o token real na URL MCP.
+    // Comandos da aba padrão (Claude) carregam o token real e o IP da LAN.
     const commands = Array.from(container.querySelectorAll("pre code"))
       .map((el) => el.textContent ?? "")
       .join("\n");
     expect(commands).toContain("token=omtk_valorfixo123");
+    expect(commands).toContain("http://192.168.3.213:8765");
     expect(commands).not.toContain("SEU_TOKEN");
   });
 
