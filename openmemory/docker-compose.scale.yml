@@ -224,9 +224,8 @@ services:
     command: python -m app.workers.migration_worker
 
   # UI (painel + /admin) — parte padrão do stack de produção (modo único).
-  # NEXT_PUBLIC_API_URL é aplicado em runtime pelo entrypoint (sed no bundle):
-  # aponte-o para o proxy acessível na LAN (ex.: http://IP_DA_LAN:8765) para que
-  # navegadores remotos alcancem a API. O installer grava esse valor no .env.
+  # NEXT_PUBLIC_API_URL deve ser /api-proxy (same-origin no navegador). A API
+  # interna é alcançada pelo route handler api-proxy via API_INTERNAL_URL.
   openmemory-ui:
     container_name: openmemory_ui
     build:

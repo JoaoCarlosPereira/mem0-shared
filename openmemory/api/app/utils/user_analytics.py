@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from uuid import UUID
 
-from app.models import User, WriteAuditLog, WriteQueueJob, get_current_utc_time
+from app.models import User, WriteAuditLog, WriteQueueJob, USER_TYPE_LEGACY_HOST, get_current_utc_time
 from app.read_audit_log_model import ReadAuditLog
 from app.utils.read_audit import read_audit_hostname_variants
 from sqlalchemy import case, func
@@ -185,7 +185,11 @@ def user_activity_stats(db: Session, hostname: str) -> dict:
 
 def group_activity_stats(db: Session, group_id: UUID) -> dict:
     """Roll up write/read stats across all members of a group."""
-    members = db.query(User.user_id).filter(User.group_id == group_id).all()
+    members = (
+        db.query(User.user_id)
+        .filter(User.group_id == group_id, User.user_type == USER_TYPE_LEGACY_HOST)
+        .all()
+    )
     hostnames = [m.user_id for m in members]
     if not hostnames:
         return {

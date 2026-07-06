@@ -210,7 +210,7 @@ class TestEndToEndBackend:
         # 2) Onboarding vincula a máquina.
         onboarding = http.post(
             "/api/v1/auth/onboarding",
-            json={"hostname": "DESKTOP-E2E", "group_name": "Equipe X"},
+            json={"hostname": "S0100", "group_name": "Equipe X"},
             headers=headers,
         )
         assert onboarding.status_code == 200
@@ -225,7 +225,7 @@ class TestEndToEndBackend:
         mcp_url_template = recipe["mcp_config"]["content"]["mcpServers"]["mem0"]["url"]
         assert f"token={raw_token}" in mcp_url_template
         mcp_path = mcp_url_template.split("http://testserver")[-1].replace(
-            "{hostname}", "DESKTOP-E2E"
+            "{hostname}", "S0100"
         )
 
         # 5) Chamada MCP com a URL gerada: identidade completa resolvida.
@@ -234,12 +234,12 @@ class TestEndToEndBackend:
         assert body == {
             "method": "agent_token",
             "user": person_id,
-            "machine": "DESKTOP-E2E",
-            "path_host": "DESKTOP-E2E",
+            "machine": "S0100",
+            "path_host": "S0100",
         }
 
         # Resolução dinâmica: memórias legadas da máquina pertencem à pessoa.
-        assert identity_links.resolve_person_for_hostname("DESKTOP-E2E") == person_id
+        assert identity_links.resolve_person_for_hostname("S0100") == person_id
 
     def test_sem_token_comportamento_legado_intacto(self, client):
         http, _ = client

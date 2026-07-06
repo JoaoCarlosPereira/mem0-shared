@@ -4,6 +4,7 @@
  */
 import {
   HOP_BY_HOP_HEADERS,
+  rewriteUpstreamRedirectLocation,
   sanitizeUpstreamHeaders,
 } from "@/lib/proxy-headers";
 
@@ -43,5 +44,29 @@ describe("sanitizeUpstreamHeaders", () => {
     const input = new Headers({ connection: "close", authorization: "Bearer x" });
     sanitizeUpstreamHeaders(input);
     expect(input.get("connection")).toBe("close");
+  });
+});
+
+describe("rewriteUpstreamRedirectLocation", () => {
+  const internal = "http://openmemory-mcp:8765";
+
+  it("reescreve Location absoluta da API interna para /api-proxy", () => {
+    expect(
+      rewriteUpstreamRedirectLocation(
+        "http://openmemory-mcp:8765/api/v1/apps/?page=1",
+        internal,
+      ),
+    ).toBe("/api-proxy/api/v1/apps/?page=1");
+  });
+
+  it("reescreve path relativo do upstream", () => {
+    expect(rewriteUpstreamRedirectLocation("/api/v1/apps/", internal)).toBe(
+      "/api-proxy/api/v1/apps/",
+    );
+  });
+
+  it("mantém Location externa inalterada", () => {
+    const external = "https://accounts.google.com/o/oauth2/v2/auth";
+    expect(rewriteUpstreamRedirectLocation(external, internal)).toBe(external);
   });
 });

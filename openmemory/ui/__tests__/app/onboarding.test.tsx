@@ -48,10 +48,17 @@ function renderPage() {
   );
 }
 
-async function fillAndSubmit(hostname = "DESKTOP-01") {
+async function selectGroup(name = "Equipe Fiscal") {
+  fireEvent.change(screen.getByLabelText(/grupo \/ equipe/i), {
+    target: { value: name },
+  });
+}
+
+async function fillAndSubmit(hostname = "S0281") {
   fireEvent.change(screen.getByLabelText(/nome da máquina/i), {
     target: { value: hostname },
   });
+  await selectGroup();
   fireEvent.click(
     screen.getByRole("button", { name: /vincular máquina e continuar/i }),
   );
@@ -83,7 +90,7 @@ describe("OnboardingPage", () => {
     mockedAxios.post.mockResolvedValue({
       data: {
         linked: true,
-        hostname: "DESKTOP-01",
+        hostname: "S0281",
         group: "Equipe Fiscal",
         memories_count: 42,
         legacy_user_linked: true,
@@ -102,7 +109,7 @@ describe("OnboardingPage", () => {
     await waitFor(() => {
       expect(mockedAxios.post).toHaveBeenCalledWith(
         expect.stringContaining("/api/v1/auth/onboarding"),
-        { hostname: "DESKTOP-01", group_name: null },
+        { hostname: "S0281", group_name: "Equipe Fiscal" },
       );
       expect(mockUpdate).toHaveBeenCalledWith({ firstLogin: false });
       expect(assignSpy).toHaveBeenCalledWith("/");
@@ -115,7 +122,7 @@ describe("OnboardingPage", () => {
     mockedAxios.post.mockResolvedValue({
       data: {
         linked: true,
-        hostname: "DESKTOP-01",
+        hostname: "S0281",
         group: "Time Novo",
         memories_count: 0,
         legacy_user_linked: false,
@@ -133,7 +140,7 @@ describe("OnboardingPage", () => {
     await waitFor(() => {
       expect(mockedAxios.post).toHaveBeenCalledWith(
         expect.stringContaining("/api/v1/auth/onboarding"),
-        { hostname: "DESKTOP-01", group_name: "Time Novo" },
+        { hostname: "S0281", group_name: "Time Novo" },
       );
     });
   });
@@ -150,6 +157,46 @@ describe("OnboardingPage", () => {
       screen.queryByRole("button", { name: /vincular máquina/i }),
     ).toBeNull();
     expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("sem grupo selecionado o botão de envio fica desabilitado", async () => {
+    renderPage();
+    fireEvent.change(screen.getByLabelText(/nome da máquina/i), {
+      target: { value: "S0281" },
+    });
+    expect(
+      screen.getByRole("button", { name: /vincular máquina e continuar/i }),
+    ).toBeDisabled();
+  });
+
+  it("grupo sugerido pelo legado é pré-selecionado", async () => {
+    mockGets({
+      data: {
+        detected_hostname: "S0293",
+        unlinked_hostnames: [],
+        suggested_group: "Equipe Fiscal",
+      },
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByLabelText(/grupo \/ equipe/i)).toHaveValue("Equipe Fiscal");
+    });
+  });
+
+  it("hostname inválido bloqueia envio e exibe erro", async () => {
+    renderPage();
+    fireEvent.change(screen.getByLabelText(/nome da máquina/i), {
+      target: { value: "S0281 - Ana Paula" },
+    });
+    fireEvent.blur(screen.getByLabelText(/nome da máquina/i));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toMatch(/S \+ 4 dígitos/i);
+    });
+    expect(
+      screen.getByRole("button", { name: /vincular máquina e continuar/i }),
+    ).toBeDisabled();
+    expect(mockedAxios.post).not.toHaveBeenCalled();
   });
 
   it("máquina detectada pela rede pré-preenche o campo com aviso", async () => {
@@ -184,7 +231,7 @@ describe("OnboardingPage", () => {
         email: "a@b.c",
         displayName: "A",
         avatarUrl: null,
-        machineHostname: "DESKTOP-01",
+        machineHostname: "S0281",
         group: "Default",
       }),
     );

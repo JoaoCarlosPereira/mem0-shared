@@ -25,3 +25,35 @@ export function sanitizeUpstreamHeaders(input: Headers): Headers {
   for (const name of HOP_BY_HOP_HEADERS) out.delete(name);
   return out;
 }
+
+/**
+ * Rewrite upstream redirect targets (Docker-internal API URL) to same-origin
+ * ``/api-proxy`` so the browser never follows ``openmemory-mcp:8765``.
+ */
+export function rewriteUpstreamRedirectLocation(
+  location: string,
+  internalBase: string,
+): string {
+  const base = internalBase.replace(/\/$/, "");
+  if (!location) {
+    return location;
+  }
+
+  if (location.startsWith(base)) {
+    return `/api-proxy${location.slice(base.length)}`;
+  }
+
+  try {
+    const parsed = new URL(location);
+    const internal = new URL(base.includes("://") ? base : `http://${base}`);
+    if (parsed.host === internal.host) {
+      return `/api-proxy${parsed.pathname}${parsed.search}${parsed.hash}`;
+    }
+  } catch {
+    if (location.startsWith("/")) {
+      return `/api-proxy${location}`;
+    }
+  }
+
+  return location;
+}

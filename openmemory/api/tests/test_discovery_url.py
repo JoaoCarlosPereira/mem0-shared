@@ -81,3 +81,27 @@ class TestDiscoveryUrlResolution:
         req = _request("127.0.0.1")
         with patch.dict(os.environ, {"OPENMEMORY_DISCOVERY_BASE_URL": "http://localhost:8765"}):
             assert _mod.resolve_discovery_base_url(req) == "http://localhost:8765"
+
+    def test_docker_bridge_request_uses_env_override(self):
+        req = _request("172.18.0.6")
+        with patch.dict(
+            os.environ,
+            {"OPENMEMORY_DISCOVERY_BASE_URL": "http://192.168.3.213:8765"},
+        ):
+            assert _mod.resolve_discovery_base_url(req) == "http://192.168.3.213:8765"
+
+    def test_openmemory_mcp_host_not_advertised(self):
+        req = _request("openmemory-mcp")
+        with patch.dict(os.environ, {}, clear=True):
+            os.environ.pop("OPENMEMORY_DISCOVERY_BASE_URL", None)
+            with patch.object(_mod, "detect_lan_ip", return_value="192.168.3.213"):
+                assert _mod.resolve_discovery_base_url(req) == "http://192.168.3.213:8765"
+
+    def test_pick_best_lan_ipv4_prefers_192_168_over_docker_bridge(self):
+        assert (
+            _mod._pick_best_lan_ipv4(["172.18.0.6", "192.168.3.213"])
+            == "192.168.3.213"
+        )
+
+    def test_pick_best_lan_ipv4_skips_docker_only(self):
+        assert _mod._pick_best_lan_ipv4(["172.18.0.6", "172.17.0.2"]) is None

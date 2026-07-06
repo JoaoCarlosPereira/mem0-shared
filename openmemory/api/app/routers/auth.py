@@ -22,7 +22,8 @@ from app.models import (
     User,
     get_current_utc_time,
 )
-from app.utils.groups import get_or_create_group
+from app.utils.groups import get_or_create_group, group_of_hostname, normalize_group_name
+from app.utils.hostname_validation import require_sysmo_hostname
 from app.utils.identity import resolve_hostname
 from app.utils.identity_links import invalidate_identity_link_cache
 from app.utils.logging_context import auth_method_var
@@ -121,6 +122,23 @@ def _linked_machine(db: Session, user: User) -> Optional[Machine]:
         .order_by(Machine.linked_at.desc())
         .first()
     )
+
+
+def _effective_group_name(
+    db: Session, user: User, machine: Optional[Machine]
+) -> Optional[str]:
+    """Grupo efetivo da conta — alinhado ao que o MCP usa (hostname legado).
+
+    A pessoa (Google) e o usuário legado (hostname) podem divergir quando o MCP
+    já vinculou o grupo na instalação e o onboarding gravou Default por engano.
+    """
+    if machine is not None:
+        legacy_group = group_of_hostname(machine.hostname)
+        if legacy_group:
+            return legacy_group
+    if user.group is not None:
+        return user.group.name
+    return None
 
 
 def get_current_person(
@@ -233,6 +251,7 @@ def login_with_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)
 class MachineSuggestionsResponse(BaseModel):
     detected_hostname: Optional[str] = None
     unlinked_hostnames: list = []
+    suggested_group: Optional[str] = None
 
 
 def _client_ip(request) -> Optional[str]:
@@ -292,8 +311,23 @@ def machine_suggestions(
         }
         detected = known.get(detected.casefold(), detected)
 
+    suggested_group: Optional[str] = None
+    if detected:
+        legacy = (
+            db.query(User)
+            .filter(
+                User.user_id == detected,
+                User.user_type == USER_TYPE_LEGACY_HOST,
+            )
+            .first()
+        )
+        if legacy is not None and legacy.group is not None:
+            suggested_group = legacy.group.name
+
     return MachineSuggestionsResponse(
-        detected_hostname=detected, unlinked_hostnames=unlinked
+        detected_hostname=detected,
+        unlinked_hostnames=unlinked,
+        suggested_group=suggested_group,
     )
 
 
@@ -303,7 +337,7 @@ def me(
     db: Session = Depends(get_db),
 ):
     machine = _linked_machine(db, user)
-    group_name = user.group.name if user.group is not None else None
+    group_name = _effective_group_name(db, user, machine)
     return MeResponse(
         user=UserOut.model_validate(user),
         machine=MachineOut.model_validate(machine) if machine is not None else None,
@@ -525,7 +559,10 @@ def onboarding(
     """
     if not (payload.hostname or "").strip():
         raise HTTPException(status_code=422, detail="hostname obrigatório")
-    hostname = resolve_hostname(payload.hostname)
+    try:
+        hostname = require_sysmo_hostname(payload.hostname)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     machine = db.query(Machine).filter(Machine.hostname == hostname).first()
     legacy_user = (
@@ -570,8 +607,15 @@ def onboarding(
         machine.linked_user_id == user.id and machine.status == MachineStatus.linked
     )
 
-    group = get_or_create_group(db, payload.group_name)
+    explicit_group = normalize_group_name(payload.group_name)
+    if explicit_group is None and legacy_user is not None and legacy_user.group_id is not None:
+        group = legacy_user.group
+    else:
+        group = get_or_create_group(db, payload.group_name)
+
     user.group_id = group.id
+    if legacy_user is not None:
+        legacy_user.group_id = group.id
 
     if not already_linked:
         machine.linked_user_id = user.id

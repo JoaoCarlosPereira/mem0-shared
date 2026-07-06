@@ -31,6 +31,16 @@ class TestResolveHostname:
     def test_whitespace_falls_back_to_default(self):
         assert resolve_hostname("   ") == DEFAULT_HOSTNAME
 
+    def test_query_string_fragment_falls_back_to_default(self):
+        assert (
+            resolve_hostname("=omtk_abc123&group=Fiscal")
+            == DEFAULT_HOSTNAME
+        )
+
+    def test_unreplaced_placeholder_falls_back_to_default(self):
+        assert resolve_hostname("{hostname}") == DEFAULT_HOSTNAME
+        assert resolve_hostname("$env:COMPUTERNAME") == DEFAULT_HOSTNAME
+
     def test_default_is_a_stable_sentinel(self):
         # Audit/catalog rely on a single well-known value.
         assert DEFAULT_HOSTNAME == "unknown-host"

@@ -7,7 +7,11 @@ from typing import Optional
 from uuid import UUID
 
 from app.database import get_db
-from app.models import Group, User
+from app.models import Group, User, USER_TYPE_LEGACY_HOST
+from app.utils.creator_identity import (
+    identity_for_hostname,
+    resolve_creator_identities_with_db,
+)
 from app.utils.user_analytics import (
     group_activity_stats,
     recent_user_reads,
@@ -43,6 +47,8 @@ class UserAnalyticsSummary(BaseModel):
     id: Optional[UUID] = None
     user_id: str
     name: Optional[str] = None
+    display_name: Optional[str] = None
+    avatar_url: Optional[str] = None
     group_id: Optional[UUID] = None
     group_name: Optional[str] = None
     created_at: Optional[datetime] = None
@@ -74,13 +80,21 @@ def _get_group_or_404(db: Session, group_id: UUID) -> Group:
     return group
 
 
-def _user_summary(db: Session, user: User) -> UserAnalyticsSummary:
+def _user_summary(
+    db: Session,
+    user: User,
+    *,
+    identity_display_name: Optional[str] = None,
+    identity_avatar_url: Optional[str] = None,
+) -> UserAnalyticsSummary:
     stats = user_activity_stats(db, user.user_id)
     group_name = user.group.name if user.group else None
     return UserAnalyticsSummary(
         id=user.id,
         user_id=user.user_id,
         name=user.name,
+        display_name=identity_display_name,
+        avatar_url=identity_avatar_url,
         group_id=user.group_id,
         group_name=group_name,
         created_at=user.created_at,
@@ -127,11 +141,24 @@ def get_group_analytics(group_id: UUID, db: Session = Depends(get_db)) -> dict:
     stats = group_activity_stats(db, group.id)
     members = (
         db.query(User)
-        .filter(User.group_id == group_id)
+        .filter(User.group_id == group_id, User.user_type == USER_TYPE_LEGACY_HOST)
         .order_by(User.user_id)
         .all()
     )
-    member_summaries = [_user_summary(db, m).model_dump(mode="json") for m in members]
+    identities = resolve_creator_identities_with_db(db, (m.user_id for m in members))
+    member_summaries: list[dict] = []
+    for member in members:
+        identity = identity_for_hostname(member.user_id, identities)
+        member_summaries.append(
+            _user_summary(
+                db,
+                member,
+                identity_display_name=(
+                    identity.display_name if identity else member.display_name or member.name
+                ),
+                identity_avatar_url=identity.avatar_url if identity else member.avatar_url,
+            ).model_dump(mode="json")
+        )
     return {
         "group": GroupAnalyticsSummary(
             id=group.id,
@@ -147,11 +174,22 @@ def get_user_analytics(hostname: str, db: Session = Depends(get_db)) -> dict:
     """Per-user usage profile with recent write/read activity."""
     user = db.query(User).filter(User.user_id == hostname).first()
     stats = user_activity_stats(db, hostname)
+    identity = identity_for_hostname(
+        hostname,
+        resolve_creator_identities_with_db(db, [hostname]),
+    )
     if user is not None:
-        summary = _user_summary(db, user)
+        summary = _user_summary(
+            db,
+            user,
+            identity_display_name=identity.display_name if identity else None,
+            identity_avatar_url=identity.avatar_url if identity else None,
+        )
     else:
         summary = UserAnalyticsSummary(
             user_id=hostname,
+            display_name=identity.display_name if identity else None,
+            avatar_url=identity.avatar_url if identity else None,
             writes_total=stats["writes_total"],
             writes_24h=stats["writes_24h"],
             writes_7d=stats["writes_7d"],

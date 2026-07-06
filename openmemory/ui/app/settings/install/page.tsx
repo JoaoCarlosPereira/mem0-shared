@@ -48,6 +48,10 @@ export default function AgentTokenPage() {
             </p>
           ) : loading ? (
             <p className="text-sm text-zinc-400">Carregando…</p>
+          ) : !tokenInfo ? (
+            <p className="text-sm text-zinc-400">
+              Faça login para ver seu token de agente.
+            </p>
           ) : (
             <div className="space-y-3" data-testid="token-block">
               <div className="flex items-center gap-2">

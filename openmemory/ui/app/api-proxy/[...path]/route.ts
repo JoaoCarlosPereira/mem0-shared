@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { sanitizeUpstreamHeaders } from "@/lib/proxy-headers";
+import {
+  rewriteUpstreamRedirectLocation,
+  sanitizeUpstreamHeaders,
+} from "@/lib/proxy-headers";
 
 function internalBase(): string {
   return (process.env.API_INTERNAL_URL || "http://localhost:8765").replace(
@@ -19,10 +22,13 @@ async function proxyRequest(
   const headers = sanitizeUpstreamHeaders(req.headers);
 
   const hasBody = req.method !== "GET" && req.method !== "HEAD";
+  // Follow redirects server-side for GET/HEAD: FastAPI trailing-slash 307s point at
+  // API_INTERNAL_URL (openmemory-mcp:8765), which the browser cannot reach (CSP).
+  const followRedirects = req.method === "GET" || req.method === "HEAD";
   const init: RequestInit = {
     method: req.method,
     headers,
-    redirect: "manual",
+    redirect: followRedirects ? "follow" : "manual",
   };
   if (hasBody) {
     init.body = await req.arrayBuffer();
@@ -41,6 +47,19 @@ async function proxyRequest(
   }
 
   const responseHeaders = new Headers(upstream.headers);
+  if (
+    !followRedirects &&
+    upstream.status >= 300 &&
+    upstream.status < 400
+  ) {
+    const location = responseHeaders.get("location");
+    if (location) {
+      responseHeaders.set(
+        "location",
+        rewriteUpstreamRedirectLocation(location, internalBase()),
+      );
+    }
+  }
   responseHeaders.delete("transfer-encoding");
   responseHeaders.delete("content-encoding");
   responseHeaders.delete("content-length");

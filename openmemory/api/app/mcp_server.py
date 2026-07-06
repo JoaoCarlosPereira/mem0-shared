@@ -44,7 +44,7 @@ from app.utils.env import safe_load_dotenv
 from app.utils.db import get_user_and_app
 from app.utils.attribution import author_hostname_from_payload
 from app.utils.groups import ensure_user_group, ensure_user_registered, requester_group_for_mcp
-from app.utils.identity import resolve_hostname
+from app.utils.identity import is_plausible_hostname, resolve_hostname
 from app.utils.logging_context import auth_method_var, auth_user_var
 from app.utils.memory import get_memory_client_safe
 from app.utils.partitioning import bind_active_collection
@@ -580,11 +580,21 @@ async def delete_all_memories() -> str:
         return f"Error deleting memories: {e}"
 
 
+def _warn_invalid_mcp_hostname(raw_uid: str | None) -> None:
+    if raw_uid and not is_plausible_hostname(str(raw_uid).strip()):
+        logging.warning(
+            "hostname MCP inválido — use ${env:COMPUTERNAME} nos comandos PowerShell "
+            "(não $env:COMPUTERNAME antes de ?token=): %s",
+            str(raw_uid)[:160],
+        )
+
+
 @mcp_router.get("/{client_name}/sse/{user_id}")
 async def handle_sse(request: Request):
     """Handle SSE connections for a specific user and client"""
     # Extract user_id and client_name from path parameters
     uid = request.path_params.get("user_id")
+    _warn_invalid_mcp_hostname(uid)
     user_token = user_id_var.set(uid or "")
     client_name = request.path_params.get("client_name")
     client_token = client_name_var.set(client_name or "")
@@ -659,6 +669,7 @@ async def handle_streamable_http(request: Request):
     causing a "double-response" bug.
     """
     uid = request.path_params.get("user_id")
+    _warn_invalid_mcp_hostname(uid)
     user_token = user_id_var.set(uid or "")
     client_name = request.path_params.get("client_name")
     client_token = client_name_var.set(client_name or "")

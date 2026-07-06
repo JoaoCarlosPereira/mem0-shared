@@ -7,6 +7,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Providers } from "./providers";
 import { APP_DESCRIPTION, APP_PAGE_TITLE } from "@/lib/branding";
+import { ApiProxyGuardScript } from "@/components/ApiProxyGuardScript";
 
 export const metadata: Metadata = {
   title: APP_PAGE_TITLE,
@@ -24,6 +25,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="pt-BR" suppressHydrationWarning>
+      <head>
+        <ApiProxyGuardScript />
+      </head>
       <body className="h-screen font-sans antialiased flex flex-col bg-zinc-950">
         <Providers>
           <ThemeProvider

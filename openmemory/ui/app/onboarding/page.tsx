@@ -27,6 +27,12 @@ import {
   useOnboardingApi,
   type MachineSuggestions,
 } from "@/hooks/useOnboardingApi";
+import {
+  isValidSysmoHostname,
+  normalizeSysmoHostname,
+  SYSMO_HOSTNAME_ERROR,
+  SYSMO_HOSTNAME_HINT,
+} from "@/lib/hostname-validation";
 import type { RootState } from "@/store/store";
 
 const NEW_GROUP_VALUE = "__novo__";
@@ -46,6 +52,10 @@ export default function OnboardingPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
+  const [hostnameError, setHostnameError] = useState<string | null>(null);
+
+  const normalizedHostname = normalizeSysmoHostname(hostname);
+  const hostnameValid = normalizedHostname !== null;
 
   // Usuário já vinculado que acessa diretamente volta ao painel.
   useEffect(() => {
@@ -70,8 +80,14 @@ export default function OnboardingPage() {
     fetchMachineSuggestions()
       .then((data) => {
         setSuggestions(data);
-        if (data.detected_hostname) {
-          setHostname((current) => current || data.detected_hostname!);
+        if (data.detected_hostname && isValidSysmoHostname(data.detected_hostname)) {
+          setHostname(
+            (current) =>
+              current || normalizeSysmoHostname(data.detected_hostname!)!,
+          );
+        }
+        if (data.suggested_group) {
+          setSelectedGroup((current) => current || data.suggested_group!);
         }
       })
       .catch(() => setSuggestions(null));
@@ -80,16 +96,25 @@ export default function OnboardingPage() {
   const groupNameToSend =
     selectedGroup === NEW_GROUP_VALUE ? newGroupName.trim() : selectedGroup;
 
-  const canSubmit =
-    hostname.trim().length > 0 &&
-    (selectedGroup !== NEW_GROUP_VALUE || newGroupName.trim().length > 0) &&
-    !submitting;
+  const groupReady =
+    selectedGroup === NEW_GROUP_VALUE
+      ? newGroupName.trim().length > 0
+      : selectedGroup.length > 0;
+
+  const canSubmit = hostnameValid && groupReady && !submitting;
 
   async function handleSubmit() {
     setSubmitting(true);
     setError(null);
+    setHostnameError(null);
+    const machine = normalizeSysmoHostname(hostname);
+    if (!machine) {
+      setHostnameError(SYSMO_HOSTNAME_ERROR);
+      setSubmitting(false);
+      return;
+    }
     try {
-      await submitOnboarding(hostname.trim(), groupNameToSend || null);
+      await submitOnboarding(machine, groupNameToSend || null);
       // Limpa o flag de onboarding na sessão e vai direto ao painel de instalação.
       await update({ firstLogin: false });
       window.location.assign("/");
@@ -135,8 +160,9 @@ export default function OnboardingPage() {
         <CardHeader>
           <CardTitle>Bem-vindo! Vamos configurar sua conta</CardTitle>
           <CardDescription>
-            Informe a máquina que você usa hoje e sua equipe. Se a máquina já
-            gravou memórias, elas serão vinculadas à sua conta.
+            Informe o <strong>nome da máquina</strong> que você usa hoje e sua
+            equipe. Se a máquina já gravou memórias, elas serão vinculadas à sua
+            conta.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
@@ -150,40 +176,61 @@ export default function OnboardingPage() {
           )}
           <div className="space-y-2">
             <Label htmlFor="hostname">Nome da máquina atual</Label>
+            <p className="text-xs text-zinc-400">
+              Informe <strong>apenas o nome/código da máquina</strong> (ex.:
+              S0281). Não digite seu nome nem o nome da equipe aqui.
+            </p>
             <Input
               id="hostname"
-              placeholder="ex.: S0293, DESKTOP-JOAO"
+              placeholder="ex.: S0281"
               value={hostname}
-              onChange={(e) => setHostname(e.target.value)}
+              onChange={(e) => {
+                setHostname(e.target.value);
+                setHostnameError(null);
+              }}
+              onBlur={() => {
+                if (hostname.trim() && !isValidSysmoHostname(hostname)) {
+                  setHostnameError(SYSMO_HOSTNAME_ERROR);
+                }
+              }}
               list="known-machines"
+              aria-invalid={hostnameError ? true : undefined}
+              className={hostnameError ? "border-red-700" : undefined}
             />
             <datalist id="known-machines">
-              {(suggestions?.unlinked_hostnames ?? []).map((name) => (
+              {(suggestions?.unlinked_hostnames ?? [])
+                .filter((name) => isValidSysmoHostname(name))
+                .map((name) => (
                 <option key={name} value={name} />
               ))}
             </datalist>
-            {suggestions?.detected_hostname &&
-            hostname === suggestions.detected_hostname ? (
+            {hostnameError ? (
+              <p role="alert" className="text-xs text-red-400">
+                {hostnameError}
+              </p>
+            ) : suggestions?.detected_hostname &&
+              hostname === suggestions.detected_hostname ? (
               <p className="text-xs text-zinc-500" data-testid="detected-hint">
                 Detectamos <strong>{suggestions.detected_hostname}</strong> pela
                 rede — confira se é o seu computador antes de continuar.
               </p>
             ) : (
-              <p className="text-xs text-zinc-500">
-                É o hostname do seu computador — o mesmo usado pelos agentes até
-                hoje.
-              </p>
+              <p className="text-xs text-zinc-500">{SYSMO_HOSTNAME_HINT}</p>
             )}
           </div>
           <div className="space-y-2">
             <Label htmlFor="group">Grupo / equipe</Label>
+            <p className="text-xs text-zinc-400">
+              Selecione a equipe à qual você pertence. Evite deixar em
+              &quot;Default&quot; — isso isola suas memórias das demais equipes.
+            </p>
             <select
               id="group"
               className="w-full rounded-md border border-zinc-700 bg-zinc-950 p-2 text-sm"
               value={selectedGroup}
               onChange={(e) => setSelectedGroup(e.target.value)}
             >
-              <option value="">Default</option>
+              <option value="">Selecione sua equipe…</option>
               {groups.map((group) => (
                 <option key={group.id} value={group.name}>
                   {group.name}

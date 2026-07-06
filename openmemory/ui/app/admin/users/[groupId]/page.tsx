@@ -22,6 +22,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useUserAnalyticsApi } from "@/hooks/useUserAnalyticsApi";
+import { ActorLabel } from "@/components/shared/attribution-badge";
 import type { GroupAnalyticsDetail } from "@/types/admin";
 
 function errorMessage(err: unknown, fallback: string): string {
@@ -110,7 +111,7 @@ export default function GroupUsersPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Usuário (hostname)</TableHead>
+              <TableHead>Usuário</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>{WRITES_COLUMN_LABEL}</TableHead>
               <TableHead>{READS_COLUMN_LABEL}</TableHead>
@@ -133,7 +134,13 @@ export default function GroupUsersPage() {
             ) : (
               data.members.map((m) => (
                 <TableRow key={m.user_id}>
-                  <TableCell className="font-medium">{m.user_id}</TableCell>
+                  <TableCell>
+                    <ActorLabel
+                      hostname={m.user_id}
+                      displayName={m.display_name}
+                      avatarUrl={m.avatar_url}
+                    />
+                  </TableCell>
                   <TableCell>
                     <UsageBadge level={m.usage_level} />
                   </TableCell>

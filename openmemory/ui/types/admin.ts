@@ -184,6 +184,8 @@ export type UserAnalytics = {
   id?: string | null;
   user_id: string;
   name?: string | null;
+  display_name?: string | null;
+  avatar_url?: string | null;
   group_id?: string | null;
   group_name?: string | null;
   created_at?: string | null;

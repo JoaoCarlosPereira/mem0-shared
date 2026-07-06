@@ -5,28 +5,74 @@
  * LAN clients never depend on a hard-coded IP or ``localhost`` baked into the
  * JS bundle (avoids stale-cache ERR_CONNECTION_REFUSED).
  */
-const ENV_URL = process.env.NEXT_PUBLIC_API_URL;
+/** Read at call time so runtime env / entrypoint sed cannot bake a stale URL. */
+function readPublicApiUrl(): string | undefined {
+  return process.env.NEXT_PUBLIC_API_URL;
+}
+
+/** Docker service names and other hosts the browser cannot resolve. */
+const INTERNAL_API_HOSTS = new Set(["openmemory-mcp", "openmemory_mcp"]);
 
 function envOverride(): string | null {
-  if (!ENV_URL || ENV_URL === "NEXT_PUBLIC_API_URL" || ENV_URL === "/api-proxy") {
+  const envUrl = readPublicApiUrl();
+  if (!envUrl || envUrl === "NEXT_PUBLIC_API_URL" || envUrl === "/api-proxy") {
     return null;
   }
-  if (ENV_URL.startsWith("http://") || ENV_URL.startsWith("https://")) {
-    return ENV_URL.replace(/\/$/, "");
+  if (envUrl.startsWith("/")) {
+    return envUrl.replace(/\/$/, "") || "/api-proxy";
   }
-  return null;
+  if (!envUrl.startsWith("http://") && !envUrl.startsWith("https://")) {
+    return null;
+  }
+  const normalized = envUrl.replace(/\/$/, "");
+  if (typeof window === "undefined") {
+    return normalized;
+  }
+  try {
+    const parsed = new URL(normalized);
+    if (INTERNAL_API_HOSTS.has(parsed.hostname)) {
+      return null;
+    }
+    // CSP default-src 'self': only same-origin absolute URLs are allowed.
+    if (parsed.origin !== window.location.origin) {
+      return null;
+    }
+    return normalized;
+  } catch {
+    return null;
+  }
 }
 
 /** Resolve API base URL at call time (never trust a stale build-time constant). */
 export function getApiUrl(): string {
+  // Browser: always same-origin proxy — never read NEXT_PUBLIC_* (avoids stale
+  // bundles, entrypoint sed, or CSP blocks on Docker hostnames / LAN IPs).
+  if (typeof window !== "undefined") {
+    return "/api-proxy";
+  }
   const override = envOverride();
   if (override) {
     return override;
   }
-  if (typeof window !== "undefined") {
-    return "/api-proxy";
-  }
   return "/api-proxy";
+}
+
+/** Hosts/IPs that agents on the LAN cannot use (Docker bridge / internal DNS). */
+export function isUnusableMcpAdvertiseUrl(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    if (
+      hostname === "openmemory-mcp" ||
+      hostname === "openmemory_mcp" ||
+      hostname.startsWith("172.17.") ||
+      hostname.startsWith("172.18.")
+    ) {
+      return true;
+    }
+  } catch {
+    return true;
+  }
+  return false;
 }
 
 /** Direct API URL for MCP/SSE clients (cannot use the browser proxy). */
@@ -62,7 +108,7 @@ export async function fetchMcpBaseUrl(): Promise<string> {
     }
     const data = (await res.json()) as DiscoveryResponse;
     const base = data.base_url?.trim();
-    if (base) {
+    if (base && !isUnusableMcpAdvertiseUrl(base)) {
       return base.replace(/\/$/, "");
     }
   } catch {

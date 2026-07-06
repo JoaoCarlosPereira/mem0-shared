@@ -19,6 +19,24 @@ sentinel.
 # logs and the project catalog's ``first_seen_hostname`` stay queryable.
 DEFAULT_HOSTNAME = "unknown-host"
 
+# Fragments from broken PowerShell expansion ($env:COMPUTERNAME?token= → =token…).
+_INVALID_HOST_MARKERS = ("&", "?", "token=", "group=", "omtk_")
+
+
+def is_plausible_hostname(hostname: str) -> bool:
+    """False when the MCP path segment is clearly not a machine name."""
+    if not hostname or hostname == DEFAULT_HOSTNAME:
+        return True
+    h = hostname.strip()
+    if not h or h.startswith("="):
+        return False
+    if h.startswith("$") or (h.startswith("{") and h.endswith("}")):
+        return False
+    lower = h.lower()
+    if any(marker in lower for marker in _INVALID_HOST_MARKERS):
+        return False
+    return True
+
 
 def resolve_hostname(raw: str | None) -> str:
     """Normalize the raw ``user_id`` segment into a hostname for attribution.
@@ -35,4 +53,8 @@ def resolve_hostname(raw: str | None) -> str:
     if raw is None:
         return DEFAULT_HOSTNAME
     hostname = raw.strip()
-    return hostname if hostname else DEFAULT_HOSTNAME
+    if not hostname:
+        return DEFAULT_HOSTNAME
+    if not is_plausible_hostname(hostname):
+        return DEFAULT_HOSTNAME
+    return hostname

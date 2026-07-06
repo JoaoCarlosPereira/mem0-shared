@@ -101,15 +101,89 @@ def have_docker_compose():
 def detect_lan_ip():
     """Return the primary private IPv4 of this host, or None."""
     import socket
+    import subprocess
+
+    candidates = []
+    try:
+        out = subprocess.check_output(
+            ["hostname", "-I"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+        candidates.extend(out.strip().split())
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        pass
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-        if ipaddress.ip_address(ip).is_private:
-            return ip
+            candidates.append(s.getsockname()[0])
     except OSError:
         pass
-    return None
+    return _pick_best_lan_ipv4(candidates)
+
+
+def _is_docker_bridge_ip(addr):
+    return (
+        addr in ipaddress.ip_network("172.17.0.0/16")
+        or addr in ipaddress.ip_network("172.18.0.0/16")
+    )
+
+
+def _pick_best_lan_ipv4(candidates):
+    ranked = []
+    for raw in candidates:
+        try:
+            addr = ipaddress.ip_address(raw)
+        except ValueError:
+            continue
+        if not isinstance(addr, ipaddress.IPv4Address) or addr.is_loopback or not addr.is_private:
+            continue
+        if _is_docker_bridge_ip(addr):
+            score = 0
+        elif addr in ipaddress.ip_network("192.168.0.0/16"):
+            score = 3
+        elif addr in ipaddress.ip_network("10.0.0.0/8"):
+            score = 2
+        else:
+            score = 1
+        ranked.append((score, str(addr)))
+    if not ranked:
+        return None
+    best_score, best_ip = max(ranked, key=lambda item: item[0])
+    return best_ip if best_score > 0 else None
+
+
+def _discovery_url_host_bad(host):
+    if not host:
+        return True
+    h = host.strip("[]").lower()
+    if h in {"openmemory-mcp", "openmemory_mcp", "mem0_store"}:
+        return True
+    try:
+        addr = ipaddress.ip_address(h)
+    except ValueError:
+        return False
+    return _is_docker_bridge_ip(addr)
+
+
+def ensure_discovery_base_url(compose_env, proxy_port="8765"):
+    """Garante OPENMEMORY_DISCOVERY_BASE_URL com IP LAN alcançável pelos agentes."""
+    from urllib.parse import urlsplit
+
+    current = (read_env(compose_env, "OPENMEMORY_DISCOVERY_BASE_URL") or "").strip()
+    bad = _discovery_url_host_bad(urlsplit(current).hostname) if current else True
+    if not bad:
+        return
+    url = discovery_base_url(int(proxy_port))
+    set_env(compose_env, "OPENMEMORY_DISCOVERY_BASE_URL", url)
+    mcp = read_env(compose_env, "NEXT_PUBLIC_MCP_URL") or ""
+    if not mcp or _discovery_url_host_bad(urlsplit(mcp).hostname):
+        set_env(compose_env, "NEXT_PUBLIC_MCP_URL", url)
+    if current:
+        ok(f"OPENMEMORY_DISCOVERY_BASE_URL={url} (era {current!r}; IP Docker não serve para agentes na LAN).")
+    else:
+        ok(f"OPENMEMORY_DISCOVERY_BASE_URL={url}")
 
 
 def discovery_base_url(port, explicit=None):
@@ -139,6 +213,22 @@ def set_env(file_path, key, value):
     if not replaced:
         lines.append(f"{key}={value}")
     file_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def ensure_browser_api_proxy(compose_env):
+    """Garante NEXT_PUBLIC_API_URL=/api-proxy para chamadas do navegador.
+
+    URLs absolutas (IP LAN, openmemory-mcp:8765, etc.) violam CSP default-src
+    'self' e não resolvem hostnames Docker no browser. A API interna continua
+    em API_INTERNAL_URL; comandos MCP usam NEXT_PUBLIC_MCP_URL / discovery.
+    """
+    current = (read_env(compose_env, "NEXT_PUBLIC_API_URL") or "").strip()
+    if current in ("", "/api-proxy"):
+        return
+    if current.startswith("http") and not read_env(compose_env, "NEXT_PUBLIC_MCP_URL"):
+        set_env(compose_env, "NEXT_PUBLIC_MCP_URL", current.rstrip("/"))
+    set_env(compose_env, "NEXT_PUBLIC_API_URL", "/api-proxy")
+    ok(f"NEXT_PUBLIC_API_URL=/api-proxy (era {current!r}; navegador usa proxy same-origin).")
 
 
 def _get_json(url):
@@ -625,6 +715,11 @@ def run_update(args):
 
     compose_env = COMPOSE_DIR / ".env"
 
+    # Corrige .env legado que apontava NEXT_PUBLIC_API_URL para IP LAN ou hostname
+    # Docker — isso quebra a UI (CSP + DNS interno).
+    ensure_browser_api_proxy(compose_env)
+    ensure_discovery_base_url(compose_env, args.proxy_port)
+
     # 0. Funcionalidades novas do compose: garante o destino do backup local
     #    (serviço openmemory-backup-worker + volume /mnt/backups são criados pelo
     #    force-recreate a partir do compose atual; aqui só preparamos o diretório).
@@ -1085,10 +1180,10 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
     set_env(compose_env, "OPENMEMORY_DISCOVERY_BASE_URL", discovery_url)
     ok(f"URL de descoberta/provision: {discovery_url}")
 
-    # NEXT_PUBLIC_API_URL: a UI (porta 3000) chama a API via o proxy. Apontamos
-    # para a MESMA URL de descoberta (IP da LAN:proxy_port) para que navegadores
-    # remotos alcancem a API — o entrypoint da UI aplica esse valor no bundle.
-    set_env(compose_env, "NEXT_PUBLIC_API_URL", discovery_url)
+    # NEXT_PUBLIC_API_URL: o navegador chama a API via /api-proxy (same-origin).
+    # Discovery/MCP para agentes ficam em OPENMEMORY_DISCOVERY_BASE_URL e
+    # NEXT_PUBLIC_MCP_URL — nunca injete hostname Docker ou IP no bundle da UI.
+    set_env(compose_env, "NEXT_PUBLIC_API_URL", "/api-proxy")
     # NEXT_PUBLIC_MCP_URL: URL direta que os comandos de instalação MCP exibem.
     # Fixada no discovery URL (IP da LAN:proxy_port) para que, mesmo acessando a
     # UI por um hostname (ex.: https://memorias.sysmo.com.br), os agentes

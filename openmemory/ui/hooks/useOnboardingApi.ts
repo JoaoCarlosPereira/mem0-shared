@@ -13,6 +13,7 @@ export interface OnboardingResult {
 export interface MachineSuggestions {
   detected_hostname: string | null;
   unlinked_hostnames: string[];
+  suggested_group?: string | null;
 }
 
 /**

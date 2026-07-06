@@ -12,8 +12,8 @@
 /** Bash / Git Bash / WSL / macOS — expands when pasted in the terminal. */
 export const HOSTNAME_SHELL_BASH = "${COMPUTERNAME:-${HOSTNAME:-$(hostname)}}";
 
-/** Windows PowerShell — expands when pasted in PowerShell. */
-export const HOSTNAME_SHELL_PS = '$env:COMPUTERNAME';
+/** Windows PowerShell — ``${}`` required before ``?`` in MCP URLs (``?token=``). */
+export const HOSTNAME_SHELL_PS = "${env:COMPUTERNAME}";
 
 export function mcpSsePath(client: string, hostnameExpr: string): string {
   return `/mcp/${client}/sse/${hostnameExpr}`;

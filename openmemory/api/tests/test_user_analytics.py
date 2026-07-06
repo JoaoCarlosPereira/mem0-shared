@@ -10,7 +10,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import get_db
-from app.models import Base, DEFAULT_GROUP_NAME, Group, User, WriteAuditLog, WriteQueueJob
+from app.models import Base, DEFAULT_GROUP_NAME, Group, Machine, MachineStatus, User, WriteAuditLog, WriteQueueJob
+from app.models import USER_TYPE_LEGACY_HOST, USER_TYPE_PERSON
 from app.read_audit_log_model import ReadAuditLog
 from app.routers.user_analytics import router
 
@@ -119,6 +120,38 @@ def test_group_analytics_with_member_stats(factory, client):
     assert len(body["members"]) == 1
     assert body["members"][0]["user_id"] == hostname
     assert body["members"][0]["usage_level"] == "ativo"
+
+
+def test_group_analytics_shows_google_display_name_for_linked_machine(factory, client):
+    group_id, hostname = _seed_group_and_user(factory, hostname="S0293")
+    s = factory()
+    try:
+        person = User(
+            user_id="google-sub-1",
+            google_sub="google-sub-1",
+            display_name="João Silva",
+            user_type=USER_TYPE_PERSON,
+        )
+        legacy = s.query(User).filter(User.user_id == hostname).one()
+        s.add(person)
+        s.flush()
+        s.add(
+            Machine(
+                hostname=hostname,
+                linked_user_id=person.id,
+                legacy_user_id=legacy.id,
+                status=MachineStatus.linked,
+            )
+        )
+        s.commit()
+    finally:
+        s.close()
+
+    r = client.get(f"/admin/analytics/groups/{group_id}")
+    assert r.status_code == 200
+    member = r.json()["members"][0]
+    assert member["user_id"] == hostname
+    assert member["display_name"] == "João Silva"
 
 
 def test_user_analytics_detail(factory, client):

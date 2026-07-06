@@ -77,7 +77,7 @@ def _person(Session, sub="sub-1"):
         db.close()
 
 
-def _legacy(Session, hostname="DESKTOP-01"):
+def _legacy(Session, hostname="S0281"):
     db = Session()
     try:
         user = User(user_id=hostname)  # user_type default legacy_host
@@ -92,19 +92,19 @@ def _legacy(Session, hostname="DESKTOP-01"):
 class TestOnboarding:
     def test_vinculo_com_legado_retorna_contagem_e_grupo(self, env):
         Session, client = env
-        legacy_id = _legacy(Session, "DESKTOP-01")
+        legacy_id = _legacy(Session, "S0281")
         user_id, headers = _person(Session)
 
         resp = client.post(
             "/api/v1/auth/onboarding",
-            json={"hostname": "DESKTOP-01", "group_name": "Equipe Fiscal"},
+            json={"hostname": "S0281", "group_name": "Equipe Fiscal"},
             headers=headers,
         )
         assert resp.status_code == 200
         body = resp.json()
         assert body == {
             "linked": True,
-            "hostname": "DESKTOP-01",
+            "hostname": "S0281",
             "group": "Equipe Fiscal",
             "memories_count": 42,
             "legacy_user_linked": True,
@@ -124,9 +124,72 @@ class TestOnboarding:
             group = db.query(Group).filter(Group.name == "Equipe Fiscal").one()
             assert person.group_id == group.id
             legacy = db.query(User).filter(User.id == legacy_id).one()
-            assert legacy.group_id is None, "grupo do legado não muda no onboarding"
+            assert legacy.group_id == group.id, "grupo do legado sincronizado com o da pessoa"
         finally:
             db.close()
+
+    def test_herda_grupo_do_legado_quando_nao_informado(self, env):
+        Session, client = env
+        db = Session()
+        try:
+            fiscal = Group(name="Fiscal")
+            db.add(fiscal)
+            db.flush()
+            legacy = User(user_id="S0293", group_id=fiscal.id)
+            db.add(legacy)
+            db.commit()
+        finally:
+            db.close()
+        _, headers = _person(Session)
+
+        body = client.post(
+            "/api/v1/auth/onboarding",
+            json={"hostname": "S0293", "group_name": None},
+            headers=headers,
+        ).json()
+        assert body["group"] == "Fiscal"
+
+        db = Session()
+        try:
+            person = db.query(User).filter(User.user_type == USER_TYPE_PERSON).one()
+            legacy = db.query(User).filter(User.user_id == "S0293").one()
+            assert person.group_id == legacy.group_id
+        finally:
+            db.close()
+
+    def test_me_prioriza_grupo_do_hostname_legado(self, env):
+        Session, client = env
+        db = Session()
+        try:
+            fiscal = Group(name="Fiscal")
+            default = Group(name="Default")
+            db.add_all([fiscal, default])
+            db.flush()
+            legacy = User(user_id="S0293", group_id=fiscal.id)
+            person = User(
+                user_id="sub-me",
+                user_type=USER_TYPE_PERSON,
+                google_sub="sub-me",
+                group_id=default.id,
+            )
+            db.add_all([legacy, person])
+            db.flush()
+            db.add(
+                Machine(
+                    hostname="S0293",
+                    linked_user_id=person.id,
+                    legacy_user_id=legacy.id,
+                    status=MachineStatus.linked,
+                )
+            )
+            db.commit()
+            person_id = person.id
+        finally:
+            db.close()
+
+        headers = {"Authorization": f"Bearer {issue_session_jwt(user_id=person_id)}"}
+        me = client.get("/api/v1/auth/me", headers=headers).json()
+        assert me["group"] == "Fiscal"
 
     def test_hostname_inedito_vincula_sem_legado(self, env):
         Session, client = env
@@ -134,7 +197,7 @@ class TestOnboarding:
 
         body = client.post(
             "/api/v1/auth/onboarding",
-            json={"hostname": "NOVA-MAQ", "group_name": None},
+            json={"hostname": "S0999", "group_name": None},
             headers=headers,
         ).json()
         assert body["legacy_user_linked"] is False
@@ -144,7 +207,7 @@ class TestOnboarding:
         Session, client = env
         _legacy(Session)
         _, headers = _person(Session)
-        payload = {"hostname": "DESKTOP-01", "group_name": "Equipe Fiscal"}
+        payload = {"hostname": "S0281", "group_name": "Equipe Fiscal"}
 
         assert client.post("/api/v1/auth/onboarding", json=payload, headers=headers).status_code == 200
         assert client.post("/api/v1/auth/onboarding", json=payload, headers=headers).status_code == 200
@@ -160,7 +223,7 @@ class TestOnboarding:
         Session, client = env
         _, headers_a = _person(Session, "sub-a")
         _, headers_b = _person(Session, "sub-b")
-        payload = {"hostname": "DESKTOP-01"}
+        payload = {"hostname": "S0281"}
 
         assert client.post("/api/v1/auth/onboarding", json=payload, headers=headers_a).status_code == 200
         resp = client.post("/api/v1/auth/onboarding", json=payload, headers=headers_b)
@@ -187,6 +250,17 @@ class TestOnboarding:
         )
         assert resp.status_code == 422
 
+    def test_hostname_formato_invalido_422(self, env):
+        Session, client = env
+        _, headers = _person(Session)
+        resp = client.post(
+            "/api/v1/auth/onboarding",
+            json={"hostname": "S0281 - Ana Paula", "group_name": "Fiscal"},
+            headers=headers,
+        )
+        assert resp.status_code == 422
+        assert "S + 4 dígitos" in resp.json()["detail"]
+
     def test_fluxo_completo_login_onboarding_me(self, env, monkeypatch):
         Session, client = env
         monkeypatch.setattr(
@@ -208,11 +282,11 @@ class TestOnboarding:
 
         client.post(
             "/api/v1/auth/onboarding",
-            json={"hostname": "DESKTOP-E2E", "group_name": "Equipe X"},
+            json={"hostname": "S0100", "group_name": "Equipe X"},
             headers=headers,
         )
         me = client.get("/api/v1/auth/me", headers=headers).json()
-        assert me["machine"]["hostname"] == "DESKTOP-E2E"
+        assert me["machine"]["hostname"] == "S0100"
         assert me["group"] == "Equipe X"
 
 
@@ -226,11 +300,11 @@ class TestMachineSuggestions:
         user_id, headers = _person(Session)
         db = Session()
         try:
-            db.add(Machine(hostname="LIVRE-01"))
-            db.add(Machine(hostname="LIVRE-02"))
+            db.add(Machine(hostname="S0701"))
+            db.add(Machine(hostname="S0702"))
             db.add(
                 Machine(
-                    hostname="OCUPADA",
+                    hostname="S0800",
                     linked_user_id=user_id,
                     status=MachineStatus.linked,
                 )
@@ -240,7 +314,7 @@ class TestMachineSuggestions:
             db.close()
 
         body = client.get("/api/v1/auth/machine-suggestions", headers=headers).json()
-        assert body["unlinked_hostnames"] == ["LIVRE-01", "LIVRE-02"]
+        assert body["unlinked_hostnames"] == ["S0701", "S0702"]
 
     def test_dns_reverso_sugere_hostname_com_grafia_do_cadastro(self, env, monkeypatch):
         from app.routers import auth as auth_mod
@@ -263,6 +337,30 @@ class TestMachineSuggestions:
             headers={**headers, "x-forwarded-for": "192.168.3.50"},
         ).json()
         assert body["detected_hostname"] == "S0293"
+        assert body.get("suggested_group") is None
+
+    def test_sugere_grupo_do_usuario_legado(self, env, monkeypatch):
+        from app.routers import auth as auth_mod
+
+        Session, client = env
+        _, headers = _person(Session)
+        db = Session()
+        try:
+            fiscal = Group(name="Fiscal")
+            db.add(fiscal)
+            db.flush()
+            db.add(User(user_id="S0293", group_id=fiscal.id))
+            db.add(Machine(hostname="S0293"))
+            db.commit()
+        finally:
+            db.close()
+
+        monkeypatch.setattr(auth_mod, "_reverse_dns_hostname", lambda ip: "s0293")
+        body = client.get(
+            "/api/v1/auth/machine-suggestions",
+            headers={**headers, "x-forwarded-for": "192.168.3.50"},
+        ).json()
+        assert body["suggested_group"] == "Fiscal"
 
     def test_sem_ip_resolvivel_detected_none(self, env):
         Session, client = env
@@ -278,10 +376,10 @@ class TestIdentityLinksCache:
         Session, client = env
         user_id, headers = _person(Session)
         client.post(
-            "/api/v1/auth/onboarding", json={"hostname": "DESKTOP-01"}, headers=headers
+            "/api/v1/auth/onboarding", json={"hostname": "S0281"}, headers=headers
         )
 
-        assert identity_links.resolve_person_for_hostname("DESKTOP-01") == str(user_id)
+        assert identity_links.resolve_person_for_hostname("S0281") == str(user_id)
         assert identity_links.resolve_person_for_hostname("OUTRA") is None
         assert identity_links.resolve_person_for_hostname("") is None
 
@@ -289,9 +387,9 @@ class TestIdentityLinksCache:
         Session, client = env
         user_id, headers = _person(Session)
         client.post(
-            "/api/v1/auth/onboarding", json={"hostname": "DESKTOP-01"}, headers=headers
+            "/api/v1/auth/onboarding", json={"hostname": "S0281"}, headers=headers
         )
-        assert identity_links.resolve_person_for_hostname("DESKTOP-01") == str(user_id)
+        assert identity_links.resolve_person_for_hostname("S0281") == str(user_id)
 
         # Desvincula direto no banco e invalida — a resolução muda na hora.
         db = Session()
@@ -302,8 +400,8 @@ class TestIdentityLinksCache:
             db.commit()
         finally:
             db.close()
-        identity_links.invalidate_identity_link_cache("DESKTOP-01")
-        assert identity_links.resolve_person_for_hostname("DESKTOP-01") is None
+        identity_links.invalidate_identity_link_cache("S0281")
+        assert identity_links.resolve_person_for_hostname("S0281") is None
 
     def test_falha_de_banco_nao_propaga(self, env, monkeypatch):
         def _boom(hostname):

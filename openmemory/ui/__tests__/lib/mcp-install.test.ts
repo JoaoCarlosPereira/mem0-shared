@@ -22,6 +22,13 @@ describe("mcp-install", () => {
     );
   });
 
+  it("PowerShell usa ${env:COMPUTERNAME} antes de ?token=", () => {
+    const psHost = "${env:COMPUTERNAME}";
+    expect(mcpSseUrl(base, "cursor", psHost, "Fiscal", "omtk_abc")).toBe(
+      `${base}/mcp/cursor/sse/\${env:COMPUTERNAME}?token=omtk_abc&group=Fiscal`,
+    );
+  });
+
   it("installLocalCommand inclui grupo na URL de instalação", () => {
     const cmd = installLocalCommand(base, "claude", host, "Fiscal");
     expect(cmd).toContain("?group=Fiscal");

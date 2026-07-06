@@ -71,11 +71,13 @@ export default function UserDetailPage() {
       <PageHeader
         className="mb-4"
         icon={User}
-        title={hostname}
+        title={user?.display_name || hostname}
         description={
-          user?.group_name
-            ? `Grupo: ${user.group_name} — perfil de uso da memória`
-            : "Perfil de uso da memória compartilhada"
+          user?.display_name
+            ? `${hostname}${user.group_name ? ` · Grupo: ${user.group_name}` : ""} — perfil de uso da memória`
+            : user?.group_name
+              ? `Grupo: ${user.group_name} — perfil de uso da memória`
+              : "Perfil de uso da memória compartilhada"
         }
       />
 

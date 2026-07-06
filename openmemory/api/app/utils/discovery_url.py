@@ -22,6 +22,33 @@ from fastapi import Request
 
 _LOOPBACK_NAMES = frozenset({"localhost"})
 
+_DOCKER_SERVICE_HOSTS = frozenset({"openmemory-mcp", "openmemory_mcp", "mem0_store"})
+
+_DOCKER_BRIDGE_NETS = (
+    ipaddress.ip_network("172.17.0.0/16"),
+    ipaddress.ip_network("172.18.0.0/16"),
+)
+
+
+def is_docker_bridge_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if not isinstance(addr, ipaddress.IPv4Address):
+        return False
+    return any(addr in net for net in _DOCKER_BRIDGE_NETS)
+
+
+def is_unusable_advertise_host(host: str | None) -> bool:
+    """True when agents on the LAN cannot reach this host (Docker DNS / bridge IP)."""
+    if not host:
+        return True
+    h = host.strip("[]").lower()
+    if h in _DOCKER_SERVICE_HOSTS:
+        return True
+    try:
+        addr = ipaddress.ip_address(h)
+    except ValueError:
+        return False
+    return is_docker_bridge_ip(addr)
+
 
 def is_loopback_host(host: str | None) -> bool:
     if not host:
@@ -50,16 +77,57 @@ def is_ip_host(host: str | None) -> bool:
 
 
 def detect_lan_ip() -> str | None:
-    """Return the primary private IPv4 of this host, or None."""
+    """Return the primary private IPv4 of this host, or None.
+
+    Inside Docker the UDP default-route trick often yields a bridge address
+    (172.17/172.18.x). Those are skipped in favour of 192.168.x.x / 10.x.x.x
+    from ``hostname -I`` when the API runs on the host; in containers the caller
+    should set ``OPENMEMORY_DISCOVERY_BASE_URL`` to the host LAN IP.
+    """
+    candidates: list[str] = []
+    try:
+        import subprocess
+
+        out = subprocess.check_output(
+            ["hostname", "-I"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+        candidates.extend(out.strip().split())
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        pass
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.connect(("8.8.8.8", 80))
-            ip = sock.getsockname()[0]
-        if ipaddress.ip_address(ip).is_private:
-            return ip
+            candidates.append(sock.getsockname()[0])
     except OSError:
         pass
-    return None
+    return _pick_best_lan_ipv4(candidates)
+
+
+def _pick_best_lan_ipv4(candidates: list[str]) -> str | None:
+    ranked: list[tuple[int, str]] = []
+    for raw in candidates:
+        try:
+            addr = ipaddress.ip_address(raw)
+        except ValueError:
+            continue
+        if not isinstance(addr, ipaddress.IPv4Address) or addr.is_loopback or not addr.is_private:
+            continue
+        if is_docker_bridge_ip(addr):
+            score = 0
+        elif addr in ipaddress.ip_network("192.168.0.0/16"):
+            score = 3
+        elif addr in ipaddress.ip_network("10.0.0.0/8"):
+            score = 2
+        else:
+            score = 1
+        ranked.append((score, str(addr)))
+    if not ranked:
+        return None
+    best_score, best_ip = max(ranked, key=lambda item: item[0])
+    return best_ip if best_score > 0 else None
 
 
 def url_with_host(url: str, host: str) -> str:
@@ -71,6 +139,12 @@ def url_with_host(url: str, host: str) -> str:
 def ensure_ip_host(url: str) -> str:
     """Replace a DNS hostname with the server's LAN IP when possible."""
     parts = urlsplit(url)
+    if is_unusable_advertise_host(parts.hostname):
+        lan_ip = detect_lan_ip()
+        if lan_ip:
+            return url_with_host(url, lan_ip).rstrip("/")
+        return url.rstrip("/")
+
     if is_ip_host(parts.hostname) or is_loopback_host(parts.hostname):
         return url.rstrip("/")
 
@@ -81,7 +155,8 @@ def ensure_ip_host(url: str) -> str:
     if parts.hostname:
         try:
             resolved = socket.gethostbyname(parts.hostname)
-            if not ipaddress.ip_address(resolved).is_loopback:
+            addr = ipaddress.ip_address(resolved)
+            if not addr.is_loopback and not is_docker_bridge_ip(addr):
                 return url_with_host(url, resolved).rstrip("/")
         except OSError:
             pass
@@ -112,4 +187,12 @@ def resolve_discovery_base_url(request: Request) -> str:
             else:
                 base = override or req_url
 
-    return ensure_ip_host(base)
+    result = ensure_ip_host(base)
+    host = urlsplit(result).hostname
+    if is_unusable_advertise_host(host):
+        if override and not is_loopback_url(override):
+            return ensure_ip_host(override)
+        lan = detect_lan_ip()
+        if lan:
+            return url_with_host(result, lan)
+    return result

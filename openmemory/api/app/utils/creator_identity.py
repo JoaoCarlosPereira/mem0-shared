@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional
 
+from sqlalchemy.orm import Session
+
 from app.utils.identity import resolve_hostname
 
 
@@ -33,22 +35,17 @@ def _normalize_hostnames(hostnames: Iterable[Optional[str]]) -> list[str]:
     return keys
 
 
-def resolve_creator_identities(
+def resolve_creator_identities_with_db(
+    db: Session,
     hostnames: Iterable[Optional[str]],
 ) -> dict[str, CreatorIdentity]:
-    """Batch-resolve hostnames to linked person display fields.
-
-    Returns a map keyed by normalized hostname. Missing or unlinked hostnames
-    are omitted (best-effort; never raises).
-    """
+    """Batch-resolve hostnames using an existing SQLAlchemy session."""
     keys = _normalize_hostnames(hostnames)
     if not keys:
         return {}
 
-    from app.database import SessionLocal
     from app.models import Machine, MachineStatus, User
 
-    db = SessionLocal()
     try:
         rows = (
             db.query(Machine.hostname, User.display_name, User.avatar_url, User.name)
@@ -67,6 +64,27 @@ def resolve_creator_identities(
             )
             for hostname, display_name, avatar_url, name in rows
         }
+    except Exception:  # noqa: BLE001 - enrichment is best-effort on read paths
+        return {}
+
+
+def resolve_creator_identities(
+    hostnames: Iterable[Optional[str]],
+) -> dict[str, CreatorIdentity]:
+    """Batch-resolve hostnames to linked person display fields.
+
+    Returns a map keyed by normalized hostname. Missing or unlinked hostnames
+    are omitted (best-effort; never raises).
+    """
+    keys = _normalize_hostnames(hostnames)
+    if not keys:
+        return {}
+
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        return resolve_creator_identities_with_db(db, keys)
     except Exception:  # noqa: BLE001 - enrichment is best-effort on read paths
         return {}
     finally:

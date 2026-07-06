@@ -28,13 +28,44 @@ function tagRequest(config: any) {
   return config;
 }
 
+const DOCKER_API_HOSTS = /^(openmemory-mcp|openmemory-api|openmemory_mcp)$/i;
+
+/** Force browser calls through /api-proxy (CSP + stale bundle safety). */
+function rewriteBrowserApiUrl(url: string): string {
+  if (typeof window === "undefined" || !url) {
+    return url;
+  }
+  if (url.startsWith("/api-proxy")) {
+    return url;
+  }
+  try {
+    const parsed = new URL(url, window.location.origin);
+    if (
+      DOCKER_API_HOSTS.test(parsed.hostname) ||
+      (parsed.port === "8765" && parsed.origin !== window.location.origin)
+    ) {
+      return `/api-proxy${parsed.pathname}${parsed.search}`;
+    }
+  } catch {
+    // keep original url
+  }
+  return url;
+}
+
+function proxyGuardRequest(config: any) {
+  if (config.url) {
+    config.url = rewriteBrowserApiUrl(String(config.url));
+  }
+  return tagRequest(config);
+}
+
 /** Tagged axios instance for new code. (Fallback p/ axios auto-mockado em testes.) */
 const createdInstance =
   typeof axios.create === "function"
     ? axios.create({ headers: { "x-client-name": UI_CLIENT } })
     : undefined;
 export const apiClient = createdInstance ?? axios;
-createdInstance?.interceptors?.request?.use(tagRequest);
+createdInstance?.interceptors?.request?.use(proxyGuardRequest);
 
 // Existing hooks import bare `axios` — tag those requests too.
-axios.interceptors?.request?.use(tagRequest);
+axios.interceptors?.request?.use(proxyGuardRequest);
