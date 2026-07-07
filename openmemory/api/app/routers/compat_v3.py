@@ -28,6 +28,7 @@ from typing import Any, Optional
 from app.utils.attribution import author_hostname_from_payload
 from app.utils.groups import ensure_user_registered, requester_group_for_mcp
 from app.utils.identity import resolve_hostname
+from app.utils.write_guard import check_write_allowed
 from app.utils.memory import get_memory_client
 from app.utils.partitioning import bind_active_collection
 from app.utils.read_audit import record_memory_reads
@@ -272,6 +273,11 @@ async def add(request: AddRequest) -> dict:
     metadata.setdefault("source_app", "openmemory")
     if request.user_id:
         metadata.setdefault("hostname", resolve_hostname(request.user_id))
+
+    resolved_host = resolve_hostname(request.user_id) if request.user_id else None
+    blocked = check_write_allowed(resolved_host)
+    if blocked:
+        return {"status": "error", "error": blocked.removeprefix("Error: "), "results": []}
 
     ensure_user_registered(request.user_id)
 

@@ -42,6 +42,7 @@ from app.workers.write_worker import embedded_worker_enabled, write_worker
 from app.utils.logging_context import install_structured_logging
 from app.utils.tracing import configure_tracing
 from app.utils.deletion_guard import deletion_guard_status, log_deletion_guard_startup
+from app.utils.write_guard import log_write_guard_startup
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_pagination import add_pagination
@@ -156,6 +157,7 @@ add_pagination(app)
 @app.on_event("startup")
 async def _start_write_worker():
     log_deletion_guard_startup()
+    log_write_guard_startup()
     if embedded_worker_enabled():
         write_worker.start()
 

@@ -52,6 +52,7 @@ from app.utils.permissions import check_memory_access_permissions
 from app.utils.read_cache import read_cache
 from app.utils.recency import rank_search_results
 from app.utils.token_usage_wrapper import usage_attribution
+from app.utils.write_guard import check_write_allowed
 from app.utils.write_queue import WriteJob, write_queue
 from fastapi import FastAPI, Request
 from fastapi.routing import APIRouter
@@ -100,13 +101,28 @@ async def add_memories(text: str, project: str) -> str:
     hostname = resolve_hostname(user_id_var.get(None))
     client_name = client_name_var.get(None) or DEFAULT_CLIENT_NAME
 
-    # Garante cadastro do hostname; grupo vem de users.group_id (Admin), não da URL.
-    ensure_user_registered(hostname)
-
     if not text or not text.strip():
         return "Error: text not provided"
     if not project or not project.strip():
         return "Error: project not provided"
+
+    blocked = check_write_allowed(
+        hostname,
+        auth_method=auth_method_var.get(),
+        auth_user=auth_user_var.get(),
+    )
+    if blocked:
+        logging.warning(
+            "write rejected hostname=%s client=%s auth_method=%s auth_user=%s",
+            hostname,
+            client_name,
+            auth_method_var.get() or "legacy",
+            auth_user_var.get() or "-",
+        )
+        return blocked
+
+    # Garante cadastro do hostname; grupo vem de users.group_id (Admin), não da URL.
+    ensure_user_registered(hostname)
 
     project = project.strip()
 

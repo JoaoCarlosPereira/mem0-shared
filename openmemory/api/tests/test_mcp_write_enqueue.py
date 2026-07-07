@@ -24,16 +24,18 @@ from unittest.mock import MagicMock, patch
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 import pytest
+import app.database as database_module
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app import mcp_server
 from app.mcp_server import add_memories
-from app.models import WriteAuditLog
+from app.database import Base
+from app.models import Machine, MachineStatus, User, USER_TYPE_LEGACY_HOST, USER_TYPE_PERSON, WriteAuditLog
 from app.models import WriteQueueJob as WriteQueueModel
 from app.models import WriteQueueStatus
 from app.mcp_server import DEFAULT_CLIENT_NAME
-from app.utils.identity import DEFAULT_HOSTNAME
 from app.utils.write_queue import WriteQueue
 
 
@@ -44,6 +46,38 @@ def _audit_factory():
     )
     WriteAuditLog.__table__.create(bind=engine, checkfirst=True)
     return sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def _linked_session_factory(hostname: str = "maqA"):
+    """SQLite with linked machine so write guard allows enqueue in unit tests."""
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    session = Session()
+    person = User(
+        user_id="google-sub-test",
+        google_sub="google-sub-test",
+        display_name="Test User",
+        user_type=USER_TYPE_PERSON,
+    )
+    legacy = User(user_id=hostname, user_type=USER_TYPE_LEGACY_HOST)
+    session.add_all([person, legacy])
+    session.flush()
+    session.add(
+        Machine(
+            hostname=hostname,
+            linked_user_id=person.id,
+            legacy_user_id=legacy.id,
+            status=MachineStatus.linked,
+        )
+    )
+    session.commit()
+    session.close()
+    return Session
 
 
 # A fixed but realistic UUID (contains hex letters so SQLite keeps TEXT affinity;
@@ -63,8 +97,10 @@ class _FakeQueue:
 
 
 @pytest.fixture
-def fake_queue():
+def fake_queue(monkeypatch):
     q = _FakeQueue()
+    linked_factory = _linked_session_factory("maqA")
+    monkeypatch.setattr(database_module, "SessionLocal", linked_factory)
     # Also redirect the audit write to an isolated in-memory DB so unit tests do
     # not touch the real application database.
     with patch.object(mcp_server, "write_queue", q), \
@@ -110,12 +146,13 @@ class TestEnqueueAck:
         assert fake_queue.jobs[0].project == "alpha"
 
     @pytest.mark.asyncio
-    async def test_missing_hostname_uses_default(self, fake_queue):
-        # No user_id in context -> attribution falls back to the sentinel.
+    async def test_missing_hostname_rejected(self, fake_queue):
+        # No user_id in context -> attribution falls back to the sentinel; guard blocks.
         mcp_server.user_id_var.set("")
         mcp_server.client_name_var.set("cursor")
-        await add_memories("x", project="alpha")
-        assert fake_queue.jobs[0].hostname == DEFAULT_HOSTNAME
+        out = await add_memories("x", project="alpha")
+        assert "memory write blocked" in out
+        assert fake_queue.jobs == []
 
     @pytest.mark.asyncio
     async def test_missing_client_name_uses_default(self, fake_queue):
@@ -178,14 +215,35 @@ class TestNoLlmOnRequestPath:
 # --------------------------------------------------------------------------- #
 class TestIntegrationWithQueue:
     @pytest.mark.asyncio
-    async def test_add_memories_lands_consumable_row(self, tmp_path):
+    async def test_add_memories_lands_consumable_row(self, tmp_path, monkeypatch):
         db_path = str(tmp_path / "enqueue_it.db")
         engine = create_engine(
             f"sqlite:///{db_path}", connect_args={"check_same_thread": False}
         )
-        WriteQueueModel.__table__.create(bind=engine, checkfirst=True)
-        WriteAuditLog.__table__.create(bind=engine, checkfirst=True)
+        Base.metadata.create_all(bind=engine)
         factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        session = factory()
+        person = User(
+            user_id="google-sub-it",
+            google_sub="google-sub-it",
+            display_name="IT User",
+            user_type=USER_TYPE_PERSON,
+        )
+        legacy = User(user_id="maqA", user_type=USER_TYPE_LEGACY_HOST)
+        session.add_all([person, legacy])
+        session.flush()
+        session.add(
+            Machine(
+                hostname="maqA",
+                linked_user_id=person.id,
+                legacy_user_id=legacy.id,
+                status=MachineStatus.linked,
+            )
+        )
+        session.commit()
+        session.close()
+
+        monkeypatch.setattr(database_module, "SessionLocal", factory)
         real_queue = WriteQueue(session_factory=factory)
 
         with patch.object(mcp_server, "write_queue", real_queue), \
@@ -249,7 +307,7 @@ class TestIntegrationWithQueue:
 class TestWriteAudit:
     @pytest.mark.asyncio
     async def test_enqueue_records_audit_with_hostname(self, fake_queue):
-        _set_ctx(uid="maqZ", client="claude")
+        _set_ctx(uid="maqA", client="claude")
         out = await add_memories("remember X", project="alpha")
         assert json.loads(out)["status"] == "accepted"
         job_id = FAKE_JOB_ID
@@ -260,7 +318,7 @@ class TestWriteAudit:
                 WriteAuditLog.job_id == uuid.UUID(job_id)
             ).first()
             assert audit is not None
-            assert audit.hostname == "maqZ"        # attribution (task_04)
+            assert audit.hostname == "maqA"        # attribution (task_04)
             assert audit.project == "alpha"
             assert audit.client_name == "claude"
         finally:

@@ -331,6 +331,23 @@ def deletion_guard_admin() -> dict:
     }
 
 
+@router.get("/write-guard")
+def write_guard_admin() -> dict:
+    """Expose current write-protection flags for operators."""
+    from app.utils.write_guard import write_guard_status
+
+    status = write_guard_status()
+    return {
+        **status,
+        "message": (
+            "Writes from unknown or unregistered hostnames blocked (default). "
+            "Set MEM0_ALLOW_UNREGISTERED_WRITES=1 to permit unknown-host writes."
+            if status["write_guard_active"]
+            else "Unregistered writes are ENABLED — use with caution."
+        ),
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Admin dashboard: overview, write-queue & write-audit (Interface Admin)
 # --------------------------------------------------------------------------- #
