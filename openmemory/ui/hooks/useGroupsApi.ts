@@ -12,6 +12,8 @@ export interface GroupMember {
   id: string;
   user_id: string;
   name?: string | null;
+  display_name?: string | null;
+  avatar_url?: string | null;
 }
 
 /**

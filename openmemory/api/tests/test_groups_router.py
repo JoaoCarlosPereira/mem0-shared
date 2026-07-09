@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import get_db
-from app.models import Base, DEFAULT_GROUP_NAME, Group, User
+from app.models import Base, DEFAULT_GROUP_NAME, Group, User, USER_TYPE_LEGACY_HOST, USER_TYPE_PERSON
 from app.routers.groups import router
 
 
@@ -162,6 +162,31 @@ def test_add_member_creates_user_when_missing(client):
     assert r.json()["user_id"] == "host-novo"
     members = client.get(f"/admin/groups/{gid}/members").json()["members"]
     assert any(m["user_id"] == "host-novo" for m in members)
+
+
+def test_list_members_excludes_person_accounts(client, factory):
+    """Contas Google (person) não são membros de grupo — só hostnames legacy."""
+    gid = client.post("/admin/groups", json={"name": "Fiscal"}).json()["id"]
+    _seed_user(factory, "S0293", group_id=gid)
+    s = factory()
+    try:
+        s.add(
+            User(
+                user_id="10315647575415088256",
+                user_type=USER_TYPE_PERSON,
+                google_sub="10315647575415088256",
+                group_id=gid,
+            )
+        )
+        s.commit()
+    finally:
+        s.close()
+
+    members = client.get(f"/admin/groups/{gid}/members").json()["members"]
+    assert [m["user_id"] for m in members] == ["S0293"]
+
+    groups = {g["name"]: g for g in client.get("/admin/groups").json()["groups"]}
+    assert groups["Fiscal"]["member_count"] == 1
 
 
 def test_remove_member_moves_to_default(client, factory, monkeypatch):

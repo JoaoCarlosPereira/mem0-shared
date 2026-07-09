@@ -14,6 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useGroupsApi, Group, GroupMember } from "@/hooks/useGroupsApi";
+import { ActorLabel } from "@/components/shared/attribution-badge";
 
 function errorMessage(err: any, fallback: string): string {
   return err?.response?.data?.detail || err?.message || fallback;
@@ -235,7 +236,13 @@ export default function GroupsPage() {
               ) : (
                 members.map((m) => (
                   <TableRow key={m.id}>
-                    <TableCell>{m.user_id}</TableCell>
+                    <TableCell>
+                      <ActorLabel
+                        hostname={m.user_id}
+                        displayName={m.display_name ?? m.name}
+                        avatarUrl={m.avatar_url}
+                      />
+                    </TableCell>
                     <TableCell className="text-right">
                       <Button
                         variant="secondary"

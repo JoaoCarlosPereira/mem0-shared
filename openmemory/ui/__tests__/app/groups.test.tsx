@@ -71,13 +71,21 @@ describe("GroupsPage (task_08)", () => {
   });
 
   it("abrir membros carrega e exibe a lista do grupo", async () => {
-    fetchMembers.mockResolvedValue([{ id: "u1", user_id: "host-a", name: null }]);
+    fetchMembers.mockResolvedValue([
+      {
+        id: "u1",
+        user_id: "host-a",
+        name: null,
+        display_name: "Ana Silva",
+        avatar_url: null,
+      },
+    ]);
     render(<GroupsPage />);
     await screen.findByText("Equipe A");
 
     fireEvent.click(screen.getAllByRole("button", { name: "Membros" })[0]);
 
     await waitFor(() => expect(fetchMembers).toHaveBeenCalledWith("g1"));
-    expect(await screen.findByText("host-a")).toBeInTheDocument();
+    expect(await screen.findByText("Ana Silva")).toBeInTheDocument();
   });
 });
