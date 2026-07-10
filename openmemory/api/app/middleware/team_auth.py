@@ -47,7 +47,15 @@ from app.utils.session_jwt import SessionJwtError, decode_session_jwt
 
 logger = logging.getLogger(__name__)
 
-_SKIP_PREFIXES = ("/health", "/metrics", "/docs", "/openapi", "/redoc")
+_SKIP_PREFIXES = (
+    "/health",
+    "/metrics",
+    "/docs",
+    "/openapi",
+    "/redoc",
+    "/.well-known/oauth-authorization-server",
+    "/token",
+)
 
 # Hostname posicional das rotas MCP: /mcp/{client}/(sse|http)/{hostname}
 _MCP_HOST_RE = re.compile(r"^/mcp/[^/]+/(?:sse|http)/([^/?]+)")

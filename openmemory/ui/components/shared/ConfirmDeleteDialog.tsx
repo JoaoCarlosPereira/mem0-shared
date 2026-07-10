@@ -136,3 +136,76 @@ export function ConfirmDeleteDialog({
     </AlertDialog>
   );
 }
+
+type StrongDeleteUserDialogProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  hostname: string;
+  loading?: boolean;
+  onConfirm: () => void | Promise<void>;
+};
+
+/** Exige digitar o hostname exato antes de excluir o usuário legado. */
+export function StrongDeleteUserDialog({
+  open,
+  onOpenChange,
+  hostname,
+  loading = false,
+  onConfirm,
+}: StrongDeleteUserDialogProps) {
+  const [typed, setTyped] = useState("");
+
+  const handleOpenChange = (next: boolean) => {
+    if (!next) setTyped("");
+    onOpenChange(next);
+  };
+
+  const canConfirm = typed === hostname && !loading;
+
+  return (
+    <AlertDialog open={open} onOpenChange={handleOpenChange}>
+      <AlertDialogContent className="bg-zinc-900 border-zinc-800">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Excluir usuário permanentemente?</AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div className="space-y-3 text-sm text-zinc-400">
+              <p>
+                Remove o usuário{" "}
+                <strong className="text-zinc-200">{hostname}</strong> do cadastro.
+                As memórias no repositório vetorial (Qdrant){" "}
+                <strong className="text-zinc-200">não serão apagadas</strong>.
+              </p>
+              <p>Digite o hostname abaixo para confirmar:</p>
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <div className="py-2">
+          <Label htmlFor="confirm-user-hostname" className="sr-only">
+            Hostname do usuário
+          </Label>
+          <Input
+            id="confirm-user-hostname"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder={hostname}
+            className="bg-zinc-950 border-zinc-700"
+            autoComplete="off"
+          />
+        </div>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={loading}>Cancelar</AlertDialogCancel>
+          <AlertDialogAction
+            disabled={!canConfirm}
+            onClick={(e) => {
+              e.preventDefault();
+              void onConfirm();
+            }}
+            className="bg-red-600 hover:bg-red-700 disabled:opacity-50"
+          >
+            {loading ? "Excluindo…" : "Excluir usuário"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}

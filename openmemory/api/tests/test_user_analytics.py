@@ -1,5 +1,6 @@
 """Tests for /admin/analytics endpoints."""
 
+import json
 from datetime import datetime, timedelta
 
 import pytest
@@ -101,6 +102,51 @@ def _seed_audit(factory, hostname="alice-pc"):
         s.close()
 
 
+def test_classify_presence_online_with_recent_activity():
+    from app.models import get_current_utc_time
+    from app.utils.user_analytics import classify_presence
+
+    now = get_current_utc_time()
+    level, days = classify_presence(
+        writes_24h=1,
+        reads_24h=0,
+        last_write_at=now,
+        last_read_at=None,
+    )
+    assert level == "online"
+    assert days is None
+
+
+def test_classify_presence_offline_after_24h():
+    from app.models import get_current_utc_time
+    from app.utils.user_analytics import classify_presence
+
+    now = get_current_utc_time()
+    last = now - timedelta(days=3)
+    level, days = classify_presence(
+        writes_24h=0,
+        reads_24h=0,
+        last_write_at=last,
+        last_read_at=None,
+        now=now,
+    )
+    assert level == "offline"
+    assert days == 3
+
+
+def test_classify_presence_offline_without_history():
+    from app.utils.user_analytics import classify_presence
+
+    level, days = classify_presence(
+        writes_24h=0,
+        reads_24h=0,
+        last_write_at=None,
+        last_read_at=None,
+    )
+    assert level == "offline"
+    assert days is None
+
+
 def test_list_groups_analytics_empty(client):
     r = client.get("/admin/analytics/groups")
     assert r.status_code == 200
@@ -119,7 +165,8 @@ def test_group_analytics_with_member_stats(factory, client):
     assert body["group"]["reads_total"] == 1
     assert len(body["members"]) == 1
     assert body["members"][0]["user_id"] == hostname
-    assert body["members"][0]["usage_level"] == "ativo"
+    assert body["members"][0]["usage_level"] == "online"
+    assert body["members"][0]["offline_days"] is None
 
 
 def test_group_analytics_shows_google_display_name_for_linked_machine(factory, client):
@@ -220,3 +267,76 @@ def test_analytics_overview(factory, client):
     assert body["reads_total"] >= 1
     assert body["reads_24h"] >= 1
     assert body["reads_7d"] >= 1
+
+
+def _delete_legacy_user(client, hostname: str, confirm: str):
+    return client.request(
+        "DELETE",
+        f"/admin/analytics/users/{hostname}",
+        content=json.dumps({"confirm": confirm}),
+        headers={"Content-Type": "application/json"},
+    )
+
+
+def test_delete_legacy_user_requires_confirm(factory, client):
+    hostname = "junk-host"
+    _seed_group_and_user(factory, hostname=hostname)
+    r = _delete_legacy_user(client, hostname, "wrong")
+    assert r.status_code == 400
+
+
+def test_delete_legacy_user_removes_sql_row(factory, client):
+    hostname = "junk-host"
+    _seed_group_and_user(factory, hostname=hostname)
+    r = _delete_legacy_user(client, hostname, hostname)
+    assert r.status_code == 200
+    assert r.json()["status"] == "deleted"
+    assert r.json()["qdrant_preserved"] is True
+
+    s = factory()
+    try:
+        assert s.query(User).filter(User.user_id == hostname).first() is None
+    finally:
+        s.close()
+
+    assert client.get(f"/admin/analytics/users/{hostname}").status_code == 200
+
+
+def test_group_analytics_dedupes_case_insensitive_members(factory, client):
+    s = factory()
+    try:
+        default = Group(name=DEFAULT_GROUP_NAME)
+        team = Group(name="Dev")
+        s.add_all([default, team])
+        s.flush()
+        s.add_all(
+            [
+                User(user_id="Hermes", group_id=team.id),
+                User(user_id="hermes", group_id=team.id),
+            ]
+        )
+        s.commit()
+        group_id = str(team.id)
+    finally:
+        s.close()
+
+    r = client.get(f"/admin/analytics/groups/{group_id}")
+    assert r.status_code == 200
+    members = r.json()["members"]
+    assert len(members) == 1
+    assert members[0]["user_id"] == "Hermes"
+
+
+def test_delete_legacy_user_blocks_system_user(factory, client, monkeypatch):
+    monkeypatch.setenv("USER", "openmemory")
+    s = factory()
+    try:
+        g = Group(name=DEFAULT_GROUP_NAME)
+        s.add(g)
+        s.flush()
+        s.add(User(user_id="openmemory", group_id=g.id))
+        s.commit()
+    finally:
+        s.close()
+    r = _delete_legacy_user(client, "openmemory", "openmemory")
+    assert r.status_code == 403

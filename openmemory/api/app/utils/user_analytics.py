@@ -8,11 +8,12 @@ from uuid import UUID
 
 from app.models import User, WriteAuditLog, WriteQueueJob, USER_TYPE_LEGACY_HOST, get_current_utc_time
 from app.read_audit_log_model import ReadAuditLog
+from app.utils.machine_resolver import legacy_hostname_variants
 from app.utils.read_audit import read_audit_hostname_variants
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-UsageLevel = str  # ativo | escrita | leitura | inativo | sem_atividade
+UsageLevel = str  # online | offline
 
 PREVIEW_MAX_LEN = 160
 
@@ -35,6 +36,20 @@ def _since(hours: Optional[int] = None, days: Optional[int] = None) -> Optional[
     return now - timedelta(days=days)
 
 
+def _audit_variants_for_hosts(db: Session, hostnames: list[str]) -> tuple[list[str], dict[str, str]]:
+    """Expande hostnames para variantes de auditoria e mapeia de volta ao membro canônico."""
+    all_variants: list[str] = []
+    variant_to_member: dict[str, str] = {}
+    for host in hostnames:
+        keys = set(legacy_hostname_variants(db, host))
+        for variant in read_audit_hostname_variants(host):
+            keys.add(variant)
+        for variant in keys:
+            all_variants.append(variant)
+            variant_to_member[variant] = host
+    return all_variants, variant_to_member
+
+
 def _write_stats_for_hostnames(
     db: Session,
     hostnames: list[str],
@@ -43,23 +58,47 @@ def _write_stats_for_hostnames(
 ) -> dict[str, dict]:
     if not hostnames:
         return {}
+    all_variants, variant_to_member = _audit_variants_for_hosts(db, hostnames)
+    if not all_variants:
+        return {}
     q = db.query(
         WriteAuditLog.hostname,
         func.count(WriteAuditLog.id).label("total"),
         func.count(func.distinct(WriteAuditLog.project)).label("projects"),
         func.max(WriteAuditLog.created_at).label("last_at"),
-    ).filter(WriteAuditLog.hostname.in_(hostnames))
+    ).filter(WriteAuditLog.hostname.in_(all_variants))
     if since is not None:
         q = q.filter(WriteAuditLog.created_at >= since)
     rows = q.group_by(WriteAuditLog.hostname).all()
-    return {
-        row.hostname: {
-            "total": int(row.total or 0),
-            "projects": int(row.projects or 0),
-            "last_at": row.last_at,
-        }
-        for row in rows
+
+    result: dict[str, dict] = {
+        host: {"total": 0, "projects": 0, "last_at": None} for host in hostnames
     }
+    project_sets: dict[str, set[str]] = {host: set() for host in hostnames}
+    for row in rows:
+        member = variant_to_member.get(row.hostname, row.hostname)
+        if member not in result:
+            continue
+        bucket = result[member]
+        bucket["total"] += int(row.total or 0)
+        if row.last_at and (bucket["last_at"] is None or row.last_at > bucket["last_at"]):
+            bucket["last_at"] = row.last_at
+
+    project_rows = (
+        db.query(WriteAuditLog.hostname, WriteAuditLog.project)
+        .filter(WriteAuditLog.hostname.in_(all_variants))
+        .distinct()
+    )
+    if since is not None:
+        project_rows = project_rows.filter(WriteAuditLog.created_at >= since)
+    for hostname, project in project_rows:
+        member = variant_to_member.get(hostname, hostname)
+        if member in project_sets and project:
+            project_sets[member].add(project)
+
+    for host in hostnames:
+        result[host]["projects"] = len(project_sets[host])
+    return result
 
 
 def _read_stats_for_hostnames(
@@ -71,11 +110,7 @@ def _read_stats_for_hostnames(
     if not hostnames:
         return {}
 
-    all_variants: list[str] = []
-    for host in hostnames:
-        for variant in read_audit_hostname_variants(host):
-            all_variants.append(variant)
-
+    all_variants, variant_to_member = _audit_variants_for_hosts(db, hostnames)
     if not all_variants:
         return {}
 
@@ -95,40 +130,53 @@ def _read_stats_for_hostnames(
         q = q.filter(ReadAuditLog.accessed_at >= since)
     rows = q.group_by(canonical).all()
 
-    result: dict[str, dict] = {}
+    result: dict[str, dict] = {
+        host: {"total": 0, "projects": 0, "memories": 0, "last_at": None} for host in hostnames
+    }
     for row in rows:
         key = (row.canonical or "").strip()
-        if not key or key not in hostnames:
+        member = variant_to_member.get(key, key)
+        if member not in result:
             continue
-        result[key] = {
-            "total": int(row.total or 0),
-            "projects": int(row.projects or 0),
-            "memories": int(row.memories or 0),
-            "last_at": row.last_at,
-        }
+        bucket = result[member]
+        bucket["total"] += int(row.total or 0)
+        bucket["projects"] += int(row.projects or 0)
+        bucket["memories"] += int(row.memories or 0)
+        if row.last_at and (bucket["last_at"] is None or row.last_at > bucket["last_at"]):
+            bucket["last_at"] = row.last_at
     return result
 
 
-def classify_usage(
+def _last_interaction_at(
+    last_write_at: Optional[datetime],
+    last_read_at: Optional[datetime],
+) -> Optional[datetime]:
+    candidates = [dt for dt in (last_write_at, last_read_at) if dt is not None]
+    if not candidates:
+        return None
+    return max(candidates)
+
+
+def classify_presence(
     *,
-    writes_total: int,
-    reads_total: int,
-    writes_7d: int,
-    reads_7d: int,
-    writes_30d: int,
-    reads_30d: int,
-) -> UsageLevel:
-    if writes_total == 0 and reads_total == 0:
-        return "sem_atividade"
-    if writes_7d > 0 and reads_7d > 0:
-        return "ativo"
-    if writes_7d > 0:
-        return "escrita"
-    if reads_7d > 0:
-        return "leitura"
-    if writes_30d > 0 or reads_30d > 0:
-        return "inativo"
-    return "sem_atividade"
+    writes_24h: int,
+    reads_24h: int,
+    last_write_at: Optional[datetime],
+    last_read_at: Optional[datetime],
+    now: Optional[datetime] = None,
+) -> tuple[UsageLevel, Optional[int]]:
+    """Online = escrita ou leitura nas últimas 24h; offline = sem interação nesse período."""
+    if writes_24h > 0 or reads_24h > 0:
+        return "online", None
+
+    last_at = _last_interaction_at(last_write_at, last_read_at)
+    if last_at is None:
+        return "offline", None
+
+    reference = now or get_current_utc_time()
+    elapsed = reference - last_at
+    offline_days = max(1, elapsed.days)
+    return "offline", offline_days
 
 
 def user_activity_stats(db: Session, hostname: str) -> dict:
@@ -157,6 +205,14 @@ def user_activity_stats(db: Session, hostname: str) -> dict:
     reads_7d_count = r7.get("total", 0)
     writes_30d_count = w30.get("total", 0)
     reads_30d_count = r30.get("total", 0)
+    last_write_at = w.get("last_at")
+    last_read_at = r.get("last_at")
+    usage_level, offline_days = classify_presence(
+        writes_24h=w24.get("total", 0),
+        reads_24h=r24.get("total", 0),
+        last_write_at=last_write_at,
+        last_read_at=last_read_at,
+    )
 
     return {
         "writes_total": writes_total,
@@ -170,16 +226,10 @@ def user_activity_stats(db: Session, hostname: str) -> dict:
         "distinct_projects_written": w.get("projects", 0),
         "distinct_projects_read": r.get("projects", 0),
         "distinct_memories_read": r.get("memories", 0),
-        "last_write_at": w.get("last_at"),
-        "last_read_at": r.get("last_at"),
-        "usage_level": classify_usage(
-            writes_total=writes_total,
-            reads_total=reads_total,
-            writes_7d=writes_7d_count,
-            reads_7d=reads_7d_count,
-            writes_30d=writes_30d_count,
-            reads_30d=reads_30d_count,
-        ),
+        "last_write_at": last_write_at,
+        "last_read_at": last_read_at,
+        "usage_level": usage_level,
+        "offline_days": offline_days,
     }
 
 
@@ -237,10 +287,11 @@ def group_activity_stats(db: Session, group_id: UUID) -> dict:
 
 
 def recent_user_writes(db: Session, hostname: str, *, limit: int = 20) -> list[dict]:
+    variants = legacy_hostname_variants(db, hostname)
     rows = (
         db.query(WriteAuditLog, WriteQueueJob)
         .outerjoin(WriteQueueJob, WriteAuditLog.job_id == WriteQueueJob.id)
-        .filter(WriteAuditLog.hostname == hostname)
+        .filter(WriteAuditLog.hostname.in_(variants))
         .order_by(WriteAuditLog.created_at.desc())
         .limit(limit)
         .all()
@@ -263,7 +314,9 @@ def recent_user_writes(db: Session, hostname: str, *, limit: int = 20) -> list[d
 def recent_user_reads(db: Session, hostname: str, *, limit: int = 20) -> list[dict]:
     from app.utils.vector_stats import get_shared_memories_by_ids
 
-    variants = read_audit_hostname_variants(hostname)
+    variants: list[str] = []
+    for host_variant in legacy_hostname_variants(db, hostname):
+        variants.extend(read_audit_hostname_variants(host_variant))
     if not variants:
         return []
     rows = (

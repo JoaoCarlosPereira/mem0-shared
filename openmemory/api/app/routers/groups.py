@@ -18,6 +18,7 @@ from uuid import UUID
 
 from app.database import get_db
 from app.models import DEFAULT_GROUP_NAME, Group, Machine, User, USER_TYPE_LEGACY_HOST
+from app.utils.machine_resolver import consolidate_legacy_host_users, find_legacy_host_user
 from app.utils.creator_identity import identity_for_hostname, resolve_creator_identities_with_db
 from app.utils.groups import (
     get_or_create_group,
@@ -219,13 +220,12 @@ def list_members(group_id: UUID, db: Session = Depends(get_db)) -> dict:
 @router.post("/{group_id}/members")
 def add_member(group_id: UUID, payload: MemberAdd, db: Session = Depends(get_db)) -> dict:
     group = _get_group_or_404(db, group_id)
-    user = (
-        db.query(User)
-        .filter(User.user_id == payload.user_id, User.user_type == USER_TYPE_LEGACY_HOST)
-        .first()
-    )
+    hostname = payload.user_id.strip()
+    user = consolidate_legacy_host_users(db, hostname)
     if user is None:
-        user = User(user_id=payload.user_id.strip(), user_type=USER_TYPE_LEGACY_HOST)
+        user = find_legacy_host_user(db, hostname)
+    if user is None:
+        user = User(user_id=hostname, user_type=USER_TYPE_LEGACY_HOST)
         db.add(user)
         db.flush()
     user.group_id = group.id

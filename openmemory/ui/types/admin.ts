@@ -160,12 +160,7 @@ export type WriteAuditFilter = {
 };
 
 // Analytics dashboard — espelha /admin/analytics/*
-export type UsageLevel =
-  | "ativo"
-  | "escrita"
-  | "leitura"
-  | "inativo"
-  | "sem_atividade";
+export type UsageLevel = "online" | "offline";
 
 export type GroupAnalytics = {
   id: string;
@@ -199,6 +194,7 @@ export type UserAnalytics = {
   last_write_at?: string | null;
   last_read_at?: string | null;
   usage_level: UsageLevel;
+  offline_days?: number | null;
 };
 
 export type UserAnalyticsDetail = UserAnalytics & {

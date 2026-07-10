@@ -14,6 +14,8 @@ because the caller omitted its hostname; attribution simply records the
 sentinel.
 """
 
+from app.utils.hostname_validation import normalize_sysmo_hostname
+
 # Sentinel attribution used when the MCP caller provides no (or a blank)
 # hostname in the ``user_id`` slot. Kept as a single well-known value so audit
 # logs and the project catalog's ``first_seen_hostname`` stay queryable.
@@ -57,4 +59,7 @@ def resolve_hostname(raw: str | None) -> str:
         return DEFAULT_HOSTNAME
     if not is_plausible_hostname(hostname):
         return DEFAULT_HOSTNAME
+    normalized = normalize_sysmo_hostname(hostname)
+    if normalized is not None:
+        return normalized
     return hostname

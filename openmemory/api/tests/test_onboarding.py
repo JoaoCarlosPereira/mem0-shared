@@ -290,6 +290,40 @@ class TestOnboarding:
         assert me["group"] == "Equipe X"
 
 
+    def test_onboarding_com_duplicata_minuscula_vincula_legado(self, env):
+        """Regressão: MCP prévio com hostname minúsculo não pode perder o legado."""
+        Session, client = env
+        legacy_id = _legacy(Session, "S0350")
+        db = Session()
+        try:
+            db.add(Machine(hostname="s0350", status=MachineStatus.unlinked))
+            db.commit()
+        finally:
+            db.close()
+
+        user_id, headers = _person(Session)
+        resp = client.post(
+            "/api/v1/auth/onboarding",
+            json={"hostname": "s0350", "group_name": "Fiscal"},
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["hostname"] == "S0350"
+        assert body["legacy_user_linked"] is True
+
+        db = Session()
+        try:
+            machines = db.query(Machine).all()
+            assert len(machines) == 1
+            machine = machines[0]
+            assert machine.hostname == "S0350"
+            assert machine.legacy_user_id == legacy_id
+            assert machine.linked_user_id == user_id
+        finally:
+            db.close()
+
+
 class TestMachineSuggestions:
     def test_sem_sessao_401(self, env):
         Session, client = env

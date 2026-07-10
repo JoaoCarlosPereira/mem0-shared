@@ -15,6 +15,9 @@ export const HOSTNAME_SHELL_BASH = "${COMPUTERNAME:-${HOSTNAME:-$(hostname)}}";
 /** Windows PowerShell — ``${}`` required before ``?`` in MCP URLs (``?token=``). */
 export const HOSTNAME_SHELL_PS = "${env:COMPUTERNAME}";
 
+// Bearer fixo alinhado ao shim OAuth legado do servidor (AUTH_MODE off|warn).
+export const LEGACY_MCP_AUTH_HEADER = "Bearer local";
+
 export function mcpSsePath(client: string, hostnameExpr: string): string {
   return `/mcp/${client}/sse/${hostnameExpr}`;
 }
@@ -62,6 +65,26 @@ export function mcpHttpUrl(
   token?: string,
 ): string {
   return `${baseUrl.replace(/\/$/, "")}/mcp/${client}/http/${hostnameExpr}${mcpQuery(group, token)}`;
+}
+
+/** Bloco JSON do servidor MCP HTTP (Cursor / Claude Code) com header legado quando sem token. */
+export function mcpHttpServerConfig(
+  baseUrl: string,
+  client: string,
+  hostnameExpr: string,
+  group?: string,
+  token?: string,
+): Record<string, unknown> {
+  const entry: Record<string, unknown> = {
+    url: mcpHttpUrl(baseUrl, client, hostnameExpr, group, token),
+  };
+  if (!(token ?? "").trim()) {
+    entry.headers = { Authorization: LEGACY_MCP_AUTH_HEADER };
+  }
+  if (client === "claude-code") {
+    entry.type = "http";
+  }
+  return entry;
 }
 
 /** Claude Code CLI — registra o servidor MCP HTTP no escopo do usuário. */

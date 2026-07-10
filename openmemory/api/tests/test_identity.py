@@ -41,6 +41,10 @@ class TestResolveHostname:
         assert resolve_hostname("{hostname}") == DEFAULT_HOSTNAME
         assert resolve_hostname("$env:COMPUTERNAME") == DEFAULT_HOSTNAME
 
+    def test_sysmo_hostname_is_canonicalized_to_uppercase(self):
+        assert resolve_hostname("s0281") == "S0281"
+        assert resolve_hostname("S0293") == "S0293"
+
     def test_default_is_a_stable_sentinel(self):
         # Audit/catalog rely on a single well-known value.
         assert DEFAULT_HOSTNAME == "unknown-host"

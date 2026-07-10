@@ -21,6 +21,7 @@ import time
 from typing import Optional
 
 from app.utils.identity import resolve_hostname
+from app.utils.machine_resolver import canonical_machine_hostname
 
 # TTL do cache em segundos. Curto por padrão: equilibra carga no banco e frescor após
 # uma mudança de grupo que não tenha invalidado o cache explicitamente.
@@ -40,10 +41,11 @@ def _query_group_name(hostname: str) -> Optional[str]:
     """Consulta o nome do grupo atual do usuário cujo ``user_id`` == hostname."""
     from app.database import SessionLocal
     from app.models import User
+    from app.utils.machine_resolver import find_legacy_host_user
 
     db = SessionLocal()
     try:
-        user = db.query(User).filter(User.user_id == hostname).first()
+        user = find_legacy_host_user(db, hostname)
         if user is None or user.group is None:
             return None
         return user.group.name
@@ -150,18 +152,22 @@ def ensure_user_group(hostname: Optional[str], group_name: Optional[str] = None)
     Admin prevalecem — não sobrescrevem ajustes posteriores. Ausente recai no Default.
     Best-effort: falhas não derrubam a conexão MCP.
     """
-    key = resolve_hostname(hostname)
+    key = canonical_machine_hostname(hostname)
     from app.database import SessionLocal
-    from app.models import User
+    from app.models import USER_TYPE_LEGACY_HOST, User
+    from app.utils.machine_resolver import consolidate_legacy_host_users, find_legacy_host_user
 
     db = SessionLocal()
     try:
-        user = db.query(User).filter(User.user_id == key).first()
+        user = consolidate_legacy_host_users(db, key)
+        if user is None:
+            user = find_legacy_host_user(db, key)
         if user is not None and user.group_id is not None:
+            db.commit()
             return
         group = get_or_create_group(db, group_name)
         if user is None:
-            user = User(user_id=key, group_id=group.id)
+            user = User(user_id=key, group_id=group.id, user_type=USER_TYPE_LEGACY_HOST)
             db.add(user)
         else:
             user.group_id = group.id

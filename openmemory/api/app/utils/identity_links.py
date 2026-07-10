@@ -31,20 +31,19 @@ def _now() -> float:
 
 def _query_linked_person(hostname: str) -> Optional[str]:
     from app.database import SessionLocal
-    from app.models import Machine, MachineStatus
+    from app.models import MachineStatus
+    from app.utils.machine_resolver import find_machine
 
     db = SessionLocal()
     try:
-        machine = (
-            db.query(Machine)
-            .filter(
-                Machine.hostname == hostname,
-                Machine.status == MachineStatus.linked,
-                Machine.linked_user_id.isnot(None),
-            )
-            .first()
-        )
-        return str(machine.linked_user_id) if machine is not None else None
+        machine = find_machine(db, hostname)
+        if (
+            machine is not None
+            and machine.status == MachineStatus.linked
+            and machine.linked_user_id is not None
+        ):
+            return str(machine.linked_user_id)
+        return None
     finally:
         db.close()
 

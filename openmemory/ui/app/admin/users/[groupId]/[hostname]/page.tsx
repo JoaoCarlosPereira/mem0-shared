@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, User } from "lucide-react";
 import { formatDateTimeFull } from "@/lib/datetime";
 import { PageHeader } from "@/components/shared/PageHeader";
+import { StrongDeleteUserDialog } from "@/components/shared/ConfirmDeleteDialog";
 import { StatCard } from "@/components/admin/StatCard";
 import { UsageBadge } from "@/components/admin/UsageBadge";
 import { MemoryPreviewLink } from "@/components/admin/MemoryPreviewLink";
@@ -36,12 +37,15 @@ function fmt(dt: string | null | undefined): string {
 
 export default function UserDetailPage() {
   const params = useParams<{ groupId: string; hostname: string }>();
+  const router = useRouter();
   const hostname = decodeURIComponent(params.hostname);
   const groupId = params.groupId;
-  const { fetchUserAnalytics } = useUserAnalyticsApi();
+  const { fetchUserAnalytics, deleteLegacyUser } = useUserAnalyticsApi();
   const [user, setUser] = useState<UserAnalyticsDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -58,6 +62,20 @@ export default function UserDetailPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function handleDeleteUser() {
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteLegacyUser(hostname);
+      setDeleteOpen(false);
+      router.push(`/admin/users/${groupId}`);
+    } catch (err) {
+      setError(errorMessage(err, "Falha ao excluir usuário"));
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   return (
     <div>
@@ -92,7 +110,7 @@ export default function UserDetailPage() {
       ) : user ? (
         <>
           <div className="mb-4 flex items-center gap-3">
-            <UsageBadge level={user.usage_level} />
+            <UsageBadge level={user.usage_level} offlineDays={user.offline_days} />
             <span className="text-sm text-zinc-400">
               Última gravação: {fmt(user.last_write_at)} · Última leitura:{" "}
               {fmt(user.last_read_at)}
@@ -222,8 +240,25 @@ export default function UserDetailPage() {
               </TableBody>
             </Table>
           </div>
+          <div className="mb-6 flex justify-end">
+            <button
+              type="button"
+              onClick={() => setDeleteOpen(true)}
+              className="rounded-md border border-red-900/60 bg-red-950/40 px-4 py-2 text-sm text-red-300 hover:bg-red-950/70"
+            >
+              Excluir usuário
+            </button>
+          </div>
         </>
       ) : null}
+
+      <StrongDeleteUserDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        hostname={hostname}
+        loading={deleting}
+        onConfirm={handleDeleteUser}
+      />
     </div>
   );
 }

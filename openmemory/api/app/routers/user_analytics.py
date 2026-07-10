@@ -18,6 +18,8 @@ from app.utils.user_analytics import (
     recent_user_writes,
     user_activity_stats,
 )
+from app.utils.legacy_user_deletion import purge_legacy_host_user
+from app.utils.machine_resolver import consolidate_group_legacy_members, find_legacy_host_user
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func
@@ -61,7 +63,8 @@ class UserAnalyticsSummary(BaseModel):
     distinct_memories_read: int = 0
     last_write_at: Optional[datetime] = None
     last_read_at: Optional[datetime] = None
-    usage_level: str = "sem_atividade"
+    usage_level: str = "offline"
+    offline_days: Optional[int] = None
 
 
 class UserAnalyticsDetail(UserAnalyticsSummary):
@@ -71,6 +74,12 @@ class UserAnalyticsDetail(UserAnalyticsSummary):
     distinct_projects_read: int = 0
     recent_writes: list[dict] = []
     recent_reads: list[dict] = []
+
+
+class UserDeleteRequest(BaseModel):
+    """Confirmação explícita — deve repetir o hostname exato."""
+
+    confirm: str
 
 
 def _get_group_or_404(db: Session, group_id: UUID) -> Group:
@@ -108,6 +117,7 @@ def _user_summary(
         last_write_at=stats["last_write_at"],
         last_read_at=stats["last_read_at"],
         usage_level=stats["usage_level"],
+        offline_days=stats["offline_days"],
     )
 
 
@@ -138,6 +148,7 @@ def list_groups_analytics(db: Session = Depends(get_db)) -> dict:
 def get_group_analytics(group_id: UUID, db: Session = Depends(get_db)) -> dict:
     """Group detail with per-member usage stats."""
     group = _get_group_or_404(db, group_id)
+    consolidate_group_legacy_members(db, group_id)
     stats = group_activity_stats(db, group.id)
     members = (
         db.query(User)
@@ -172,11 +183,12 @@ def get_group_analytics(group_id: UUID, db: Session = Depends(get_db)) -> dict:
 @router.get("/users/{hostname}")
 def get_user_analytics(hostname: str, db: Session = Depends(get_db)) -> dict:
     """Per-user usage profile with recent write/read activity."""
-    user = db.query(User).filter(User.user_id == hostname).first()
-    stats = user_activity_stats(db, hostname)
+    user = find_legacy_host_user(db, hostname)
+    canonical = user.user_id if user is not None else hostname
+    stats = user_activity_stats(db, canonical)
     identity = identity_for_hostname(
-        hostname,
-        resolve_creator_identities_with_db(db, [hostname]),
+        canonical,
+        resolve_creator_identities_with_db(db, [canonical]),
     )
     if user is not None:
         summary = _user_summary(
@@ -187,7 +199,7 @@ def get_user_analytics(hostname: str, db: Session = Depends(get_db)) -> dict:
         )
     else:
         summary = UserAnalyticsSummary(
-            user_id=hostname,
+            user_id=canonical,
             display_name=identity.display_name if identity else None,
             avatar_url=identity.avatar_url if identity else None,
             writes_total=stats["writes_total"],
@@ -200,6 +212,7 @@ def get_user_analytics(hostname: str, db: Session = Depends(get_db)) -> dict:
             last_write_at=stats["last_write_at"],
             last_read_at=stats["last_read_at"],
             usage_level=stats["usage_level"],
+            offline_days=stats["offline_days"],
         )
     detail = UserAnalyticsDetail(
         **summary.model_dump(),
@@ -207,10 +220,28 @@ def get_user_analytics(hostname: str, db: Session = Depends(get_db)) -> dict:
         reads_30d=stats["reads_30d"],
         distinct_projects_written=stats["distinct_projects_written"],
         distinct_projects_read=stats["distinct_projects_read"],
-        recent_writes=recent_user_writes(db, hostname),
-        recent_reads=recent_user_reads(db, hostname),
+        recent_writes=recent_user_writes(db, canonical),
+        recent_reads=recent_user_reads(db, canonical),
     )
     return detail.model_dump(mode="json")
+
+
+@router.delete("/users/{hostname}")
+def delete_legacy_user(
+    hostname: str,
+    payload: UserDeleteRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Remove permanentemente um usuário legado (hostname) do catálogo SQL.
+
+    Exige ``confirm`` igual ao hostname. Não apaga vetores no Qdrant.
+    """
+    if payload.confirm.strip() != hostname.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="confirmação inválida: digite o hostname exato do usuário",
+        )
+    return purge_legacy_host_user(db, hostname)
 
 
 @router.get("/overview")

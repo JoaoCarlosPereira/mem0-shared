@@ -43,11 +43,19 @@ export const useUserAnalyticsApi = () => {
     [],
   );
 
+  const deleteLegacyUser = useCallback(async (hostname: string): Promise<void> => {
+    await axios.delete(
+      `${getApiUrl()}/admin/analytics/users/${encodeURIComponent(hostname)}`,
+      { data: { confirm: hostname } },
+    );
+  }, []);
+
   return {
     fetchOverview,
     fetchGroupsAnalytics,
     fetchGroupAnalytics,
     fetchUserAnalytics,
+    deleteLegacyUser,
   };
 };
 

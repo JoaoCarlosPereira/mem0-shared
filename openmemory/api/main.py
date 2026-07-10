@@ -34,6 +34,7 @@ from app.routers import (
     health_router,
     memories_router,
     metrics_router,
+    mcp_oauth_compat_router,
     ops_metrics_router,
     provision_router,
     stats_router,
@@ -141,6 +142,7 @@ app.include_router(stats_router)
 app.include_router(config_router)
 app.include_router(backup_router)
 app.include_router(discovery_router)
+app.include_router(mcp_oauth_compat_router)
 app.include_router(compat_v3_router)
 app.include_router(provision_router)
 app.include_router(health_router)

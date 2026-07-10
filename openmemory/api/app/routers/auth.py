@@ -24,6 +24,11 @@ from app.models import (
 )
 from app.utils.groups import get_or_create_group, group_of_hostname, normalize_group_name
 from app.utils.hostname_validation import require_sysmo_hostname
+from app.utils.machine_resolver import (
+    backfill_legacy_user_id,
+    canonical_machine_hostname,
+    resolve_or_create_machine,
+)
 from app.utils.identity import resolve_hostname
 from app.utils.identity_links import invalidate_identity_link_cache
 from app.utils.logging_context import auth_method_var
@@ -564,20 +569,8 @@ def onboarding(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    machine = db.query(Machine).filter(Machine.hostname == hostname).first()
-    legacy_user = (
-        db.query(User)
-        .filter(User.user_id == hostname, User.user_type == USER_TYPE_LEGACY_HOST)
-        .first()
-    )
-
-    if machine is None:
-        machine = Machine(
-            hostname=hostname,
-            legacy_user_id=legacy_user.id if legacy_user is not None else None,
-        )
-        db.add(machine)
-        db.flush()
+    machine, legacy_user = resolve_or_create_machine(db, hostname)
+    hostname = machine.hostname
 
     # Conflito: máquina pertence a outra conta — bloqueia e registra.
     if machine.linked_user_id is not None and machine.linked_user_id != user.id:
@@ -617,13 +610,14 @@ def onboarding(
     if legacy_user is not None:
         legacy_user.group_id = group.id
 
+    backfill_legacy_user_id(machine, legacy_user)
+
     if not already_linked:
         machine.linked_user_id = user.id
         machine.status = MachineStatus.linked
         machine.linked_at = get_current_utc_time()
         machine.linked_by = user.id
-        if machine.legacy_user_id is None and legacy_user is not None:
-            machine.legacy_user_id = legacy_user.id
+        backfill_legacy_user_id(machine, legacy_user)
         db.add(
             LinkAuditLog(
                 machine_id=machine.id,

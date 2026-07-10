@@ -120,9 +120,25 @@ class TestAgentTokenInRecipe:
     @pytest.mark.asyncio
     async def test_sem_token_urls_identicas_ao_legado(self, client):
         data = (await client.get("/provision?host=claude-code")).json()
-        url = data["mcp_config"]["content"]["mcpServers"]["mem0"]["url"]
+        mem0 = data["mcp_config"]["content"]["mcpServers"]["mem0"]
+        url = mem0["url"]
         assert "token=" not in url
+        assert mem0["headers"] == {"Authorization": "Bearer local"}
         assert data["env"]["MEM0_API_KEY"] == "local"
+
+    @pytest.mark.asyncio
+    async def test_sem_token_cursor_inclui_header_legado(self, client):
+        mem0 = (await client.get("/provision?host=cursor")).json()["mcp_config"]["content"][
+            "mcpServers"
+        ]["mem0"]
+        assert mem0["headers"] == {"Authorization": "Bearer local"}
+
+    @pytest.mark.asyncio
+    async def test_com_token_nao_inclui_header_legado(self, client):
+        mem0 = (
+            await client.get("/provision?host=claude-code&token=omtk_abc123")
+        ).json()["mcp_config"]["content"]["mcpServers"]["mem0"]
+        assert "headers" not in mem0
 
     @pytest.mark.asyncio
     async def test_token_embutido_na_url_e_no_env(self, client):

@@ -27,6 +27,8 @@ router = APIRouter(prefix="/provision", tags=["provision"])
 
 PROVISION_VERSION = "1"
 SUPPORTED_HOSTS = ("claude-code", "cursor", "codex")
+# Bearer fixo do shim OAuth legado (``mcp_oauth_compat``) e ``MEM0_API_KEY`` sem token.
+LEGACY_MCP_AUTH_HEADER = "Bearer local"
 
 # Memory modes — preset over the existing ~/.mem0/settings.json flags.
 MODES = [
@@ -70,6 +72,21 @@ def _query_suffix(group: Optional[str], token: Optional[str] = None) -> str:
     return f"?{'&'.join(parts)}" if parts else ""
 
 
+def _legacy_mcp_headers(token: Optional[str] = None) -> Optional[dict]:
+    """Header estático para clientes HTTP que disparam OAuth sem credencial na URL."""
+    if (token or "").strip():
+        return None
+    return {"Authorization": LEGACY_MCP_AUTH_HEADER}
+
+
+def _mcp_http_entry(http_url: str, token: Optional[str] = None) -> dict:
+    entry: dict = {"url": http_url}
+    headers = _legacy_mcp_headers(token)
+    if headers:
+        entry["headers"] = headers
+    return entry
+
+
 def _mcp_config(
     host: str,
     base_url: str,
@@ -102,13 +119,15 @@ def _mcp_config(
         return {
             "format": "json",
             "target_file": ".cursor/mcp.json",
-            "content": {"mcpServers": {"mem0": {"url": http_url}}},
+            "content": {"mcpServers": {"mem0": _mcp_http_entry(http_url, token)}},
         }
     # claude-code (and default)
+    http_entry = _mcp_http_entry(http_url, token)
+    http_entry["type"] = "http"
     return {
         "format": "json",
         "target_file": ".mcp.json",
-        "content": {"mcpServers": {"mem0": {"type": "http", "url": http_url}}},
+        "content": {"mcpServers": {"mem0": http_entry}},
         "sse_url": sse_url,
     }
 

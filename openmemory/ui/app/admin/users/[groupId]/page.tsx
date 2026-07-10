@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Users } from "lucide-react";
 import { PageHeader } from "@/components/shared/PageHeader";
+import { StrongDeleteUserDialog } from "@/components/shared/ConfirmDeleteDialog";
 import { StatCard } from "@/components/admin/StatCard";
 import { UsageBadge } from "@/components/admin/UsageBadge";
 import {
@@ -33,10 +34,12 @@ function errorMessage(err: unknown, fallback: string): string {
 export default function GroupUsersPage() {
   const params = useParams<{ groupId: string }>();
   const groupId = params.groupId;
-  const { fetchGroupAnalytics } = useUserAnalyticsApi();
+  const { fetchGroupAnalytics, deleteLegacyUser } = useUserAnalyticsApi();
   const [data, setData] = useState<GroupAnalyticsDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -53,6 +56,21 @@ export default function GroupUsersPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function handleDeleteUser() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteLegacyUser(deleteTarget);
+      setDeleteTarget(null);
+      await load();
+    } catch (err) {
+      setError(errorMessage(err, "Falha ao excluir usuário"));
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   const group = data?.group;
 
@@ -142,7 +160,7 @@ export default function GroupUsersPage() {
                     />
                   </TableCell>
                   <TableCell>
-                    <UsageBadge level={m.usage_level} />
+                    <UsageBadge level={m.usage_level} offlineDays={m.offline_days} />
                   </TableCell>
                   <TableCell>
                     <ActivityMetricsCell
@@ -159,12 +177,21 @@ export default function GroupUsersPage() {
                     />
                   </TableCell>
                   <TableCell className="text-right">
-                    <Link
-                      href={`/admin/users/${groupId}/${encodeURIComponent(m.user_id)}`}
-                      className="rounded-md bg-zinc-800 px-3 py-1.5 text-sm text-zinc-100 hover:bg-zinc-700"
-                    >
-                      Detalhes
-                    </Link>
+                    <div className="flex justify-end gap-2">
+                      <Link
+                        href={`/admin/users/${groupId}/${encodeURIComponent(m.user_id)}`}
+                        className="rounded-md bg-zinc-800 px-3 py-1.5 text-sm text-zinc-100 hover:bg-zinc-700"
+                      >
+                        Detalhes
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => setDeleteTarget(m.user_id)}
+                        className="rounded-md border border-red-900/60 bg-red-950/40 px-3 py-1.5 text-sm text-red-300 hover:bg-red-950/70"
+                      >
+                        Excluir
+                      </button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
@@ -172,6 +199,16 @@ export default function GroupUsersPage() {
           </TableBody>
         </Table>
       </div>
+
+      <StrongDeleteUserDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        hostname={deleteTarget ?? ""}
+        loading={deleting}
+        onConfirm={handleDeleteUser}
+      />
     </div>
   );
 }
