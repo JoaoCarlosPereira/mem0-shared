@@ -6,25 +6,18 @@ jest.mock("axios");
 jest.mock("next/navigation", () => ({
   usePathname: () => "/",
 }));
-// Stub do dialog de criação para isolar o teste do link "Admin".
 jest.mock("@/app/memories/components/CreateMemoryDialog", () => ({
   CreateMemoryDialog: () => null,
 }));
-// Navbar renderiza <UserMenu/> (feature auth Google); sem SessionProvider no
-// teste, o hook é mockado como não autenticado (menu oculto).
-jest.mock("next-auth/react", () => ({
-  useSession: () => ({ data: null, status: "unauthenticated" }),
-  signOut: jest.fn(),
-}));
 
 import { store } from "@/store/store";
-import { Navbar } from "@/components/Navbar";
+import { AppSidebar } from "@/components/layout/AppSidebar";
 
-describe("Navbar", () => {
+describe("AppSidebar", () => {
   it("contém o link 'Admin' apontando para /admin", () => {
     render(
       <Provider store={store}>
-        <Navbar />
+        <AppSidebar open isMobile={false} onClose={jest.fn()} onNavigate={jest.fn()} />
       </Provider>,
     );
     const adminLink = screen.getByRole("link", { name: /admin/i });
@@ -32,10 +25,10 @@ describe("Navbar", () => {
     expect(adminLink).toHaveAttribute("href", "/admin");
   });
 
-  it("mantém os links existentes (Painel, Memórias, Projetos, Configurações)", () => {
+  it("mantém os links de navegação (Painel, Memórias, Projetos, Configurações)", () => {
     render(
       <Provider store={store}>
-        <Navbar />
+        <AppSidebar open isMobile={false} onClose={jest.fn()} onNavigate={jest.fn()} />
       </Provider>,
     );
     expect(screen.getByText("Painel")).toBeInTheDocument();

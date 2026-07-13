@@ -15,6 +15,7 @@ import profileReducer from "@/store/profileSlice";
 import memoriesReducer from "@/store/memoriesSlice";
 import { useMemoriesApi } from "@/hooks/useMemoriesApi";
 import { useStats } from "@/hooks/useStats";
+import { setApiAccessToken } from "@/lib/api-client";
 
 function makeStore() {
   return configureStore({
@@ -105,6 +106,8 @@ describe("useMemoriesApi regression", () => {
 
 describe("useStats regression", () => {
   it("fetchStats usa trailing slash em /api/v1/stats/", async () => {
+    setApiAccessToken("jwt-test");
+
     mockedAxios.get.mockResolvedValue({
       data: { total_memories: 525, total_apps: 1, apps: [] },
     });

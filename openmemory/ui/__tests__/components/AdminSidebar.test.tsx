@@ -32,7 +32,7 @@ function makeStore() {
 function renderSidebar(store = makeStore()) {
   return render(
     <Provider store={store}>
-      <AdminSidebar />
+      <AdminSidebar open isMobile={false} onClose={jest.fn()} onNavigate={jest.fn()} />
     </Provider>,
   );
 }

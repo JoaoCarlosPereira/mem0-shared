@@ -128,13 +128,13 @@ export function MemoryTable() {
   };
 
   return (
-    <div className="rounded-md border">
-      <Table className="">
+    <div className="glass overflow-hidden rounded-2xl border border-slate-800">
+      <Table>
         <TableHeader>
-          <TableRow className="bg-zinc-800 hover:bg-zinc-800">
+          <TableRow className="border-slate-800 bg-slate-900/60 hover:bg-slate-900/60">
             <TableHead className="w-[50px] pl-4">
               <Checkbox
-                className="data-[state=checked]:border-primary border-zinc-500/50"
+                className="data-[state=checked]:border-primary border-slate-600/50"
                 checked={isAllSelected}
                 data-state={
                   isPartiallySelected
@@ -146,34 +146,34 @@ export function MemoryTable() {
                 onCheckedChange={handleSelectAll}
               />
             </TableHead>
-            <TableHead className="border-zinc-700">
+            <TableHead className="border-slate-800">
               <div className="flex items-center min-w-[600px]">
                 <HiMiniRectangleStack className="mr-1" />
                 Memória
               </div>
             </TableHead>
-            <TableHead className="border-zinc-700">
+            <TableHead className="border-slate-800">
               <div className="flex items-center">
                 <PiSwatches className="mr-1" size={15} />
                 Categorias
               </div>
             </TableHead>
-            <TableHead className="w-[140px] border-zinc-700">
+            <TableHead className="w-[140px] border-slate-800">
               <div className="flex items-center">
                 <GoPackage className="mr-1" />
                 Criado por
               </div>
             </TableHead>
-            <TableHead className="w-[120px] border-zinc-700">
+            <TableHead className="w-[120px] border-slate-800">
               <div className="flex items-center justify-center">Grupo</div>
             </TableHead>
-            <TableHead className="w-[140px] border-zinc-700">
+            <TableHead className="w-[140px] border-slate-800">
               <div className="flex items-center w-full justify-center">
                 <CiCalendar className="mr-1" size={16} />
                 Criada em
               </div>
             </TableHead>
-            <TableHead className="text-right border-zinc-700 flex justify-center">
+            <TableHead className="text-right border-slate-800 flex justify-center">
               <div className="flex items-center justify-end">
                 <MoreHorizontal className="h-4 w-4 mr-2" />
               </div>
@@ -184,15 +184,15 @@ export function MemoryTable() {
           {memories.map((memory) => (
             <TableRow
               key={memory.id}
-              className={`hover:bg-zinc-900/50 ${
+              className={`hover:bg-slate-900/50 ${
                 memory.state === "paused" || memory.state === "archived"
-                  ? "text-zinc-400"
+                  ? "text-slate-400"
                   : ""
               } ${isLoading ? "animate-pulse opacity-50" : ""}`}
             >
               <TableCell className="pl-4">
                 <Checkbox
-                  className="data-[state=checked]:border-primary border-zinc-500/50"
+                  className="data-[state=checked]:border-primary border-slate-600/50"
                   checked={selectedMemoryIds.includes(memory.id)}
                   onCheckedChange={(checked) =>
                     handleSelectMemory(memory.id, checked as boolean)
@@ -209,7 +209,7 @@ export function MemoryTable() {
                           className={`font-medium ${
                             memory.state === "paused" ||
                             memory.state === "archived"
-                              ? "text-zinc-400"
+                              ? "text-slate-400"
                               : "text-white"
                           } cursor-pointer`}
                         >
@@ -259,7 +259,7 @@ export function MemoryTable() {
               </TableCell>
               <TableCell className="w-[120px] text-center">
                 <span
-                  className="inline-block rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-300"
+                  className="inline-block rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-300"
                   aria-label="Grupo do autor"
                 >
                   {memory.group ?? "—"}
@@ -277,7 +277,7 @@ export function MemoryTable() {
                   </DropdownMenuTrigger>
                   <DropdownMenuContent
                     align="end"
-                    className="bg-zinc-900 border-zinc-800"
+                    className="glass border-slate-800"
                   >
                     <DropdownMenuItem
                       className="cursor-pointer"

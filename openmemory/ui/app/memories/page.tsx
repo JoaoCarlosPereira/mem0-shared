@@ -26,30 +26,28 @@ function MemoriesPageContent() {
   }, [router, searchParams]);
 
   return (
-    <div className="">
+    <>
       <UpdateMemory
         memoryId={updateMemoryDialog.memoryId || ""}
         memoryContent={updateMemoryDialog.memoryContent || ""}
         open={updateMemoryDialog.isOpen}
         onOpenChange={handleCloseUpdateMemoryDialog}
       />
-      <main className="flex-1 py-6">
-        <div className="container">
-          <PageHeader
-            className="mb-4 animate-fade-slide-down"
-            icon={Layers}
-            title="Memórias"
-            description="Busque, filtre e gerencie memórias compartilhadas"
-          />
-          <div className="mt-1 pb-4 animate-fade-slide-down">
-            <MemoryFilters />
-          </div>
-          <div className="animate-fade-slide-down delay-1">
-            <MemoriesSection />
-          </div>
-        </div>
-      </main>
-    </div>
+      <div className="space-y-4">
+      <PageHeader
+        className="animate-fade-slide-down"
+        icon={Layers}
+        title="Memórias"
+        description="Busque, filtre e gerencie memórias compartilhadas"
+      />
+      <div className="animate-fade-slide-down">
+        <MemoryFilters />
+      </div>
+      <div className="animate-fade-slide-down delay-1">
+        <MemoriesSection />
+      </div>
+      </div>
+    </>
   );
 }
 

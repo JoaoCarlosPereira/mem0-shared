@@ -104,18 +104,17 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="text-white py-6">
-      <div className="container mx-auto py-10 max-w-4xl">
-        <div className="flex justify-between items-center mb-8">
-          <div className="animate-fade-slide-down">
-            <PageHeader
-              size="large"
-              icon={Settings}
-              title="Configurações"
-              description={`Gerencie sua configuração do ${APP_NAME} e do Mem0`}
-            />
-          </div>
-          <div className="flex space-x-2">
+    <div className="mx-auto max-w-4xl space-y-8">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="animate-fade-slide-down">
+          <PageHeader
+            size="large"
+            icon={Settings}
+            title="Configurações"
+            description={`Gerencie sua configuração do ${APP_NAME} e do Mem0`}
+          />
+        </div>
+        <div className="flex flex-wrap gap-2">
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="outline" className="border-zinc-800 text-zinc-200 hover:bg-zinc-700 hover:text-zinc-50 animate-fade-slide-down" disabled={isLoading}>
@@ -145,10 +144,10 @@ export default function SettingsPage() {
               <SaveIcon className="mr-2 h-4 w-4" />
               {isLoading ? "Salvando..." : "Salvar configuração"}
             </Button>
-          </div>
         </div>
+      </div>
 
-        <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as "form" | "json")} className="w-full animate-fade-slide-down delay-1">
+      <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as "form" | "json")} className="w-full animate-fade-slide-down delay-1">
           <TabsList className="grid w-full grid-cols-2 mb-8">
             <TabsTrigger value="form">Formulário</TabsTrigger>
             <TabsTrigger value="json">Editor JSON</TabsTrigger>
@@ -170,7 +169,6 @@ export default function SettingsPage() {
             </Card>
           </TabsContent>
         </Tabs>
-      </div>
     </div>
   )
 }

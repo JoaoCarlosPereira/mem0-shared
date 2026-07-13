@@ -4,6 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useSelector } from "react-redux";
+import { ChevronLeft } from "lucide-react";
 import {
   BarChart3,
   LayoutDashboard,
@@ -18,6 +19,7 @@ import {
 import { selectSidebarFailedCount } from "@/store/queuesSlice";
 import { useQueueFailedAlerts } from "@/hooks/useQueueFailedAlerts";
 import { APP_NAME } from "@/lib/branding";
+import { cn } from "@/lib/utils";
 
 interface NavItem {
   label: string;
@@ -37,56 +39,108 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Log de Auditoria", href: "/admin/audit", icon: ScrollText },
 ];
 
-export function AdminSidebar() {
+interface AdminSidebarProps {
+  open?: boolean;
+  isMobile?: boolean;
+  onClose?: () => void;
+  onNavigate?: () => void;
+}
+
+export function AdminSidebar({
+  open = true,
+  isMobile = false,
+  onClose,
+  onNavigate,
+}: AdminSidebarProps) {
   const pathname = usePathname();
   useQueueFailedAlerts();
   const failedCount = useSelector(selectSidebarFailedCount);
 
   return (
-    <nav
-      aria-label="Navegação do painel admin"
-      className="flex w-56 shrink-0 flex-col gap-1 border-r border-zinc-800 bg-zinc-950 p-3"
-    >
-      <Link
-        href="/admin/overview"
-        className="mb-3 flex items-center gap-2 rounded-md px-2 py-2 text-zinc-200 hover:bg-zinc-900"
+    <>
+      {open && isMobile ? (
+        <button
+          type="button"
+          aria-label="Fechar menu"
+          className="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-sm"
+          onClick={onClose}
+        />
+      ) : null}
+
+      <aside
+        id="sidebar"
+        aria-label="Navegação do painel admin"
+        aria-hidden={!open && isMobile ? true : undefined}
+        className={cn(
+          "fixed top-0 left-0 z-50 flex h-full w-80 flex-col overflow-y-auto custom-scroll glass border-r border-slate-800 shadow-2xl",
+          !open && "collapsed",
+          open && "open",
+        )}
       >
-        <Image src="/logo.svg" alt={APP_NAME} width={24} height={24} />
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold">{APP_NAME}</div>
-          <div className="text-xs text-zinc-500">Admin</div>
-        </div>
-      </Link>
-      {NAV_ITEMS.map((item) => {
-        const Icon = item.icon;
-        const isActive = pathname?.startsWith(item.href);
-        return (
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-800 bg-slate-950/20 p-6">
           <Link
-            key={item.href}
-            href={item.href}
-            aria-current={isActive ? "page" : undefined}
-            className={`flex items-center justify-between gap-2 rounded-md px-3 py-2 text-sm transition-colors ${
-              isActive
-                ? "bg-zinc-800 text-white"
-                : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
-            }`}
+            href="/admin/overview"
+            className="flex min-w-0 items-center gap-3"
+            onClick={onNavigate}
           >
-            <span className="flex items-center gap-2">
-              <Icon className="h-4 w-4" />
-              {item.label}
-            </span>
-            {item.label === "Filas" && failedCount > 0 && (
-              <span
-                aria-label={`${failedCount} jobs com falha`}
-                className="inline-flex min-w-5 items-center justify-center rounded-full bg-red-600 px-1.5 text-xs font-semibold text-white"
-              >
-                {failedCount}
-              </span>
-            )}
+            <Image src="/logo.svg" alt={APP_NAME} width={24} height={24} />
+            <div className="min-w-0">
+              <div className="truncate text-sm font-bold text-white">{APP_NAME}</div>
+              <div className="text-ui-caption font-black uppercase tracking-widest text-violet-400">
+                Admin
+              </div>
+            </div>
           </Link>
-        );
-      })}
-    </nav>
+          {onClose ? (
+            <button
+              type="button"
+              onClick={onClose}
+              className="hidden h-10 w-10 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-800 hover:text-white lg:inline-flex"
+              aria-label="Recolher menu"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+          ) : null}
+        </div>
+
+        <nav className="flex-1 space-y-2 p-4" aria-label="Seções administrativas">
+          <p className="px-2 pb-2 text-ui-body-sm font-black uppercase tracking-widest text-slate-500">
+            Operações
+          </p>
+          {NAV_ITEMS.map((item) => {
+            const Icon = item.icon;
+            const isActive = pathname?.startsWith(item.href);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                aria-current={isActive ? "page" : undefined}
+                onClick={onNavigate}
+                className={cn(
+                  "flex min-h-11 items-center justify-between gap-2 rounded-xl border border-transparent border-l-[3px] px-3 py-2.5 text-sm transition-all",
+                  isActive
+                    ? "nav-item-active border-l-blue-500"
+                    : "border-l-transparent text-slate-400 hover:border-slate-700/50 hover:bg-slate-800/60 hover:text-slate-200",
+                )}
+              >
+                <span className="flex items-center gap-2">
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {item.label}
+                </span>
+                {item.label === "Filas" && failedCount > 0 && (
+                  <span
+                    aria-label={`${failedCount} jobs com falha`}
+                    className="inline-flex min-w-5 items-center justify-center rounded-full bg-rose-600 px-1.5 text-xs font-semibold text-white"
+                  >
+                    {failedCount}
+                  </span>
+                )}
+              </Link>
+            );
+          })}
+        </nav>
+      </aside>
+    </>
   );
 }
 

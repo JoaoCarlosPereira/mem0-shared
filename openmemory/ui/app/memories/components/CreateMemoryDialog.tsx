@@ -50,24 +50,26 @@ export function CreateMemoryDialog() {
           Criar Memória
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-[525px] bg-zinc-900 border-zinc-800">
+      <DialogContent className="glass sm:max-w-[525px] border-slate-800">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <PlusCircle className="h-5 w-5 text-violet-400" />
+          <DialogTitle className="flex items-center gap-2 text-white">
+            <PlusCircle className="h-5 w-5 text-blue-400" />
             Criar Nova Memória
           </DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="text-slate-500">
             Adicione uma nova memória à sua instância {APP_NAME}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">
           <div className="grid gap-2">
-            <Label htmlFor="memory">Memória</Label>
+            <Label htmlFor="memory" className="text-ui-label font-black uppercase tracking-widest text-slate-500">
+              Memória
+            </Label>
             <Textarea
               ref={textRef}
               id="memory"
               placeholder="ex.: Mora em São Paulo"
-              className="bg-zinc-950 border-zinc-800 min-h-[150px]"
+              className="min-h-[150px] rounded-xl border-slate-800 bg-slate-950 text-slate-200"
             />
           </div>
         </div>

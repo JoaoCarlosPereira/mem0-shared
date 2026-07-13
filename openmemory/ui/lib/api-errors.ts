@@ -6,6 +6,9 @@ export function parseApiError(
   fallback = "Falha na requisição",
 ): string {
   if (axios.isAxiosError(err)) {
+    if (err.response?.status === 401) {
+      return "Sessão expirada — faça login novamente com sua conta Google.";
+    }
     const detail = err.response?.data?.detail;
     if (typeof detail === "string" && detail.trim()) {
       if (

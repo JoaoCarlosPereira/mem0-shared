@@ -111,22 +111,22 @@ export function MemoryFilters() {
     activeFilters.selectedCategories.length > 0;
 
   return (
-    <div className="flex flex-col md:flex-row gap-4 mb-4">
+    <div className="glass mb-4 flex flex-col gap-3 rounded-2xl border border-slate-800 p-4 md:flex-row md:items-center">
       <div className="relative flex-1">
-        <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
         <Input
           ref={inputRef}
           placeholder="Buscar memórias..."
-          className="pl-8 bg-zinc-950 border-zinc-800 max-w-[500px]"
+          className="max-w-[500px] rounded-xl border-slate-800 bg-slate-950 pl-9 text-slate-200"
           onChange={(e) => handleSearch(e.target.value)}
         />
       </div>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <FilterComponent />
         {hasActiveFilters && (
           <Button
             variant="outline"
-            className="bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
+            className="border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800"
             onClick={handleClearAllFilters}
           >
             Limpar Filtros
@@ -138,15 +138,12 @@ export function MemoryFilters() {
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="outline"
-                  className="border-zinc-700/50 bg-zinc-900 hover:bg-zinc-800"
+                  className="border-slate-700 bg-slate-900 hover:bg-slate-800"
                 >
                   Ações
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="end"
-                className="bg-zinc-900 border-zinc-800"
-              >
+              <DropdownMenuContent align="end" className="glass border-slate-800">
                 <DropdownMenuItem onClick={handleArchiveSelected}>
                   <Archive className="mr-2 h-4 w-4" />
                   Arquivar Selecionadas

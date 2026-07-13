@@ -9,12 +9,16 @@ export interface PersonProfile {
   group: string | null;
 }
 
+export type ApiSessionStatus = 'idle' | 'validating' | 'valid' | 'invalid';
+
 interface ProfileState {
   /**
    * Âncora de dados das rotas REST legadas (?user_id=). A identidade real da
    * pessoa vem da sessão Google (campo `person`), não deste valor.
    */
   userId: string;
+  /** Validação do JWT da API via GET /auth/me (AuthBridge). */
+  apiSessionStatus: ApiSessionStatus;
   person: PersonProfile | null;
   totalMemories: number;
   totalApps: number;
@@ -25,6 +29,7 @@ interface ProfileState {
 
 const initialState: ProfileState = {
   userId: process.env.NEXT_PUBLIC_USER_ID || 'user',
+  apiSessionStatus: 'idle',
   person: null,
   totalMemories: 0,
   totalApps: 0,
@@ -62,11 +67,15 @@ const profileSlice = createSlice({
     setApps: (state, action: PayloadAction<any[]>) => {
       state.apps = action.payload;
     },
+    setApiSessionStatus: (state, action: PayloadAction<ApiSessionStatus>) => {
+      state.apiSessionStatus = action.payload;
+    },
     setPersonProfile: (state, action: PayloadAction<PersonProfile>) => {
       state.person = action.payload;
     },
     clearPersonProfile: (state) => {
       state.person = null;
+      state.apiSessionStatus = 'idle';
     }
   },
 });
@@ -79,6 +88,7 @@ export const {
   setTotalMemories,
   setTotalApps,
   setApps,
+  setApiSessionStatus,
   setPersonProfile,
   clearPersonProfile
 } = profileSlice.actions;

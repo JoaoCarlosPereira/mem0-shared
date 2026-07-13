@@ -3,10 +3,8 @@
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 
-import {
-  useAgentTokenApi,
-  type AgentToken,
-} from "@/hooks/useAgentTokenApi";
+import { useApiSessionReady } from "@/hooks/useApiSessionReady";
+import { getApiAccessToken } from "@/lib/api-client";
 
 /**
  * Carrega o token de agente imutável (ADR-008) somente após a sessão da UI
@@ -14,21 +12,21 @@ import {
  * ao painel sem passar pelo onboarding).
  */
 export function useImmutableAgentToken() {
-  const { data: session, status } = useSession();
+  const { status } = useSession();
+  const apiSessionReady = useApiSessionReady();
   const { getOrCreateToken } = useAgentTokenApi();
   const [tokenInfo, setTokenInfo] = useState<AgentToken | null>(null);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const apiAccessToken = (session as { apiAccessToken?: string | null } | null)
-    ?.apiAccessToken;
+  const apiAccessToken = apiSessionReady ? getApiAccessToken() : null;
 
   useEffect(() => {
     if (status === "loading") {
       return;
     }
 
-    if (status !== "authenticated" || !apiAccessToken) {
+    if (status !== "authenticated" || !apiSessionReady || !apiAccessToken) {
       setLoading(false);
       return;
     }
@@ -51,7 +49,7 @@ export function useImmutableAgentToken() {
     return () => {
       cancelled = true;
     };
-  }, [status, apiAccessToken, getOrCreateToken]);
+  }, [status, apiSessionReady, apiAccessToken, getOrCreateToken]);
 
   return {
     rawToken: tokenInfo?.token ?? null,

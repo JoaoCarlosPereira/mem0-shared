@@ -1,30 +1,20 @@
 "use client";
 
-/**
- * Login Google via redirect OAuth (ADR-002).
- * Requer a UI publicada em hostname+HTTPS com redirect cadastrado no Google.
- * O backend valida o domínio corporativo (403 fora dele).
- */
 import { Suspense } from "react";
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { APP_NAME } from "@/lib/branding";
+import { APP_NAME, APP_TAGLINE } from "@/lib/branding";
 
 const REDIRECT_ERROR_MESSAGES: Record<string, string> = {
   AccessDenied:
     "Acesso restrito a contas Google do domínio da empresa. Use sua conta corporativa.",
   Configuration:
     "Login com Google indisponível no momento. Verifique a configuração ou fale com quem administra a stack.",
+  SessionExpired:
+    "Sua sessão expirou ou ficou inválida. Entre novamente com sua conta Google.",
   Default: "Não foi possível concluir o login. Tente novamente.",
 };
 
@@ -36,33 +26,36 @@ function LoginContent() {
     : null;
 
   return (
-    <div className="flex min-h-[calc(100vh-64px)] items-center justify-center px-4">
-      <Card className="w-full max-w-md border-zinc-800 bg-zinc-900">
-        <CardHeader className="items-center text-center">
-          <Image src="/logo.svg" alt={APP_NAME} width={48} height={48} />
-          <CardTitle className="mt-2 text-2xl">{APP_NAME}</CardTitle>
-          <CardDescription>
-            Entre com sua conta Google corporativa para acessar a rede de
-            memórias.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
+    <div className="fixed inset-0 z-50 flex min-h-screen items-center justify-center bg-slate-950/95 backdrop-blur-sm">
+      <div className="glass mx-4 w-full max-w-md rounded-3xl border border-slate-700/50 p-8 shadow-2xl md:p-10">
+        <div className="mb-8 flex flex-col items-center">
+          <div className="mb-4 rounded-2xl bg-blue-600 p-4 shadow-xl shadow-blue-500/20">
+            <Image src="/logo.svg" alt={APP_NAME} width={32} height={32} />
+          </div>
+          <h1 className="text-xl font-bold text-white">{APP_NAME}</h1>
+          <p className="mt-1 text-ui-caption font-black uppercase tracking-widest text-slate-500">
+            {APP_TAGLINE}
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-4">
           {error && (
             <p
+              id="login-error"
               role="alert"
-              className="rounded-md border border-red-900 bg-red-950/50 p-3 text-sm text-red-300"
+              className="rounded-xl border border-rose-500/30 bg-rose-500/5 p-3 text-center text-ui-body-sm font-bold uppercase text-rose-400"
             >
               {error}
             </p>
           )}
           <Button
-            className="w-full"
+            className="min-h-11 w-full rounded-xl py-6 text-sm font-black uppercase tracking-widest shadow-xl shadow-blue-600/20"
             onClick={() => signIn("google", { redirectTo: "/" })}
           >
             Entrar com Google
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

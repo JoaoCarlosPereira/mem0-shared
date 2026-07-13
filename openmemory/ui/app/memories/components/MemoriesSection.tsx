@@ -6,6 +6,8 @@ import { MemoryPagination } from "./MemoryPagination";
 import { CreateMemoryDialog } from "./CreateMemoryDialog";
 import { PageSizeSelector } from "./PageSizeSelector";
 import { useMemoriesApi } from "@/hooks/useMemoriesApi";
+import { useApiSessionReady, useApiSessionStatus } from "@/hooks/useApiSessionReady";
+import { parseApiError } from "@/lib/api-errors";
 import { useRouter, useSearchParams } from "next/navigation";
 import { MemoryTableSkeleton } from "@/skeleton/MemoryTableSkeleton";
 
@@ -13,6 +15,8 @@ export function MemoriesSection() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { fetchMemories } = useMemoriesApi();
+  const apiSessionReady = useApiSessionReady();
+  const apiSessionStatus = useApiSessionStatus();
   const [memories, setMemories] = useState<any[]>([]);
   const [totalItems, setTotalItems] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
@@ -29,6 +33,8 @@ export function MemoriesSection() {
   const [selectedClient, setSelectedClient] = useState<Client | "all">("all");
 
   useEffect(() => {
+    if (!apiSessionReady) return;
+
     let cancelled = false;
 
     const loadMemories = async () => {
@@ -44,12 +50,15 @@ export function MemoriesSection() {
         setMemories(result.memories);
         setTotalItems(result.total);
         setTotalPages(result.pages);
-      } catch (error: any) {
+      } catch (error: unknown) {
         if (cancelled) return;
         const message =
-          error?.response?.status === 429
+          error &&
+          typeof error === "object" &&
+          "response" in error &&
+          (error as { response?: { status?: number } }).response?.status === 429
             ? "Muitas requisições — aguarde alguns segundos e tente novamente."
-            : error?.message || "Falha ao buscar memórias";
+            : parseApiError(error, "Falha ao buscar memórias");
         setLoadError(message);
         setMemories([]);
         setTotalItems(0);
@@ -65,7 +74,7 @@ export function MemoriesSection() {
     return () => {
       cancelled = true;
     };
-  }, [currentPage, itemsPerPage, fetchMemories, searchKey, searchQuery]);
+  }, [currentPage, itemsPerPage, fetchMemories, searchKey, searchQuery, apiSessionReady]);
 
   const setCurrentPage = (page: number) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -81,14 +90,14 @@ export function MemoriesSection() {
     router.push(`?${params.toString()}`);
   };
 
-  if (isLoading) {
+  if (isLoading || apiSessionStatus === "validating") {
     return (
       <div className="w-full bg-transparent">
         <MemoryTableSkeleton />
         <div className="flex items-center justify-between mt-4">
-          <div className="h-8 w-32 bg-zinc-800 rounded animate-pulse" />
-          <div className="h-8 w-48 bg-zinc-800 rounded animate-pulse" />
-          <div className="h-8 w-32 bg-zinc-800 rounded animate-pulse" />
+          <div className="h-8 w-32 animate-pulse rounded bg-slate-800" />
+          <div className="h-8 w-48 animate-pulse rounded bg-slate-800" />
+          <div className="h-8 w-32 animate-pulse rounded bg-slate-800" />
         </div>
       </div>
     );
@@ -109,8 +118,8 @@ export function MemoriesSection() {
                 setTotalItems(result.total);
                 setTotalPages(result.pages);
               })
-              .catch((error: any) => {
-                setLoadError(error?.message || "Falha ao buscar memórias");
+              .catch((error: unknown) => {
+                setLoadError(parseApiError(error, "Falha ao buscar memórias"));
               })
               .finally(() => setIsLoading(false));
           }}
@@ -132,7 +141,7 @@ export function MemoriesSection() {
                 pageSize={itemsPerPage}
                 onPageSizeChange={handlePageSizeChange}
               />
-              <div className="text-sm text-zinc-500 mr-2">
+              <div className="mr-2 text-sm text-slate-500">
                 Exibindo {(currentPage - 1) * itemsPerPage + 1} a{" "}
                 {Math.min(currentPage * itemsPerPage, totalItems)} de{" "}
                 {totalItems} memórias
@@ -146,7 +155,7 @@ export function MemoriesSection() {
           </>
         ) : (
           <div className="flex flex-col items-center justify-center py-12 text-center">
-            <div className="rounded-full bg-zinc-800 p-3 mb-4">
+            <div className="mb-4 rounded-full border border-slate-800 bg-slate-900/60 p-3">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 width="24"
@@ -157,7 +166,7 @@ export function MemoriesSection() {
                 strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                className="h-6 w-6 text-zinc-400"
+                className="h-6 w-6 text-slate-400"
               >
                 <path d="M21 9v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7"></path>
                 <path d="M16 2v6h6"></path>
@@ -166,7 +175,7 @@ export function MemoriesSection() {
               </svg>
             </div>
             <h3 className="text-lg font-medium">Nenhuma memória encontrada</h3>
-            <p className="text-zinc-400 mt-1 mb-4">
+            <p className="mt-1 mb-4 text-slate-400">
               {searchQuery
                 ? `Nenhum resultado para "${searchQuery}"`
                 : selectedCategory !== "all" || selectedClient !== "all"

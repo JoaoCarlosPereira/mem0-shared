@@ -1,13 +1,23 @@
 import type React from "react";
 import type { Metadata } from "next";
+import { Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import "@/app/globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
-import { Navbar } from "@/components/Navbar";
 import { Toaster } from "@/components/ui/toaster";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Providers } from "./providers";
 import { APP_DESCRIPTION, APP_PAGE_TITLE } from "@/lib/branding";
 import { ApiProxyGuardScript } from "@/components/ApiProxyGuardScript";
+import { AppShell } from "@/components/layout/AppShell";
+
+const spaceGrotesk = Space_Grotesk({
+  subsets: ["latin"],
+  variable: "--font-space-grotesk",
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains-mono",
+});
 
 export const metadata: Metadata = {
   title: APP_PAGE_TITLE,
@@ -24,20 +34,21 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="pt-BR" suppressHydrationWarning>
+    <html lang="pt-BR" className="dark" suppressHydrationWarning>
       <head>
         <ApiProxyGuardScript />
       </head>
-      <body className="h-screen font-sans antialiased flex flex-col bg-zinc-950">
+      <body
+        className={`${spaceGrotesk.variable} ${jetbrainsMono.variable} h-screen font-sans antialiased`}
+      >
         <Providers>
           <ThemeProvider
             attribute="class"
             defaultTheme="dark"
-            enableSystem
+            enableSystem={false}
             disableTransitionOnChange
           >
-            <Navbar />
-            <ScrollArea className="h-[calc(100vh-64px)]">{children}</ScrollArea>
+            <AppShell>{children}</AppShell>
             <Toaster />
           </ThemeProvider>
         </Providers>

@@ -125,10 +125,15 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
   const [deletionPolicy, setDeletionPolicy] = useState<DeletionPolicy | null>(null);
   const dispatch = useDispatch<AppDispatch>();
   const user_id = useSelector((state: RootState) => state.profile.userId);
+  const apiSessionReady = useSelector(
+    (state: RootState) => state.profile.apiSessionStatus === "valid",
+  );
   const memories = useSelector((state: RootState) => state.memories.memories);
   const selectedMemory = useSelector((state: RootState) => state.memories.selectedMemory);
 
   useEffect(() => {
+    if (!apiSessionReady) return;
+
     let cancelled = false;
     (async () => {
       try {
@@ -150,7 +155,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [apiSessionReady]);
 
   
   const fetchMemories = useCallback(async (

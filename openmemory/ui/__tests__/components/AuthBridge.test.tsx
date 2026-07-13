@@ -10,8 +10,10 @@ import axios from "axios";
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 let mockSession: any = null;
+const mockSignOut = jest.fn();
 jest.mock("next-auth/react", () => ({
   useSession: () => ({ data: mockSession, status: mockSession ? "authenticated" : "unauthenticated" }),
+  signOut: (...args: unknown[]) => mockSignOut(...args),
 }));
 
 import { AuthBridge } from "@/components/AuthBridge";
@@ -21,8 +23,10 @@ import { store } from "@/store/store";
 describe("AuthBridge", () => {
   beforeEach(() => {
     mockedAxios.get.mockReset();
+    mockSignOut.mockReset();
     setApiAccessToken(null);
     mockSession = null;
+    store.dispatch({ type: "profile/clearPersonProfile" });
   });
 
   it("com sessão: registra o Bearer e popula o perfil via /auth/me", async () => {
@@ -50,6 +54,7 @@ describe("AuthBridge", () => {
       expect(mockedAxios.get).toHaveBeenCalledWith(
         expect.stringContaining("/api/v1/auth/me"),
       );
+      expect(store.getState().profile.apiSessionStatus).toBe("valid");
       expect(store.getState().profile.person).toEqual({
         email: "joao@sysmo.com.br",
         displayName: "João Carlos",
@@ -73,7 +78,30 @@ describe("AuthBridge", () => {
     await waitFor(() => {
       expect(getApiAccessToken()).toBeNull();
       expect(store.getState().profile.person).toBeNull();
+      expect(store.getState().profile.apiSessionStatus).toBe("idle");
       expect(mockedAxios.get).not.toHaveBeenCalled();
+    });
+  });
+
+  it("JWT inválido em /auth/me: encerra sessão e redireciona ao login", async () => {
+    mockSession = { apiAccessToken: "jwt-expirado" };
+    mockedAxios.get.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 401 },
+    });
+    mockedAxios.isAxiosError = jest.fn().mockReturnValue(true);
+
+    render(
+      <Provider store={store}>
+        <AuthBridge />
+      </Provider>,
+    );
+
+    await waitFor(() => {
+      expect(store.getState().profile.apiSessionStatus).toBe("invalid");
+      expect(mockSignOut).toHaveBeenCalledWith({
+        callbackUrl: "/login?error=SessionExpired",
+      });
     });
   });
 });

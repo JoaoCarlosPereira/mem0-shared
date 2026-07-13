@@ -1,5 +1,7 @@
 import axios from "axios";
 
+import { notifySessionExpired } from "@/lib/session-expiry";
+
 const UI_CLIENT = "openmemory-ui";
 
 /**
@@ -69,3 +71,25 @@ createdInstance?.interceptors?.request?.use(proxyGuardRequest);
 
 // Existing hooks import bare `axios` — tag those requests too.
 axios.interceptors?.request?.use(proxyGuardRequest);
+
+function attachUnauthorizedInterceptor(instance: typeof axios) {
+  instance.interceptors?.response?.use(
+    (response) => response,
+    (error) => {
+      if (
+        axios.isAxiosError(error) &&
+        error.response?.status === 401 &&
+        apiAccessToken
+      ) {
+        setApiAccessToken(null);
+        notifySessionExpired();
+      }
+      return Promise.reject(error);
+    },
+  );
+}
+
+attachUnauthorizedInterceptor(axios);
+if (createdInstance) {
+  attachUnauthorizedInterceptor(createdInstance);
+}

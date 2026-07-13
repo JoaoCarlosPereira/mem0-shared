@@ -23,20 +23,20 @@ export function PageHeader({
       {Icon ? (
         <div
           className={cn(
-            "flex shrink-0 items-center justify-center rounded-lg border border-violet-500/25 bg-violet-500/10",
-            isLarge ? "h-12 w-12" : "h-10 w-10",
+            "flex shrink-0 items-center justify-center rounded-2xl border border-blue-500/20 bg-blue-600/10 shadow-inner",
+            isLarge ? "h-14 w-14" : "h-12 w-12",
           )}
         >
           <Icon
-            className={cn("text-violet-400", isLarge ? "h-6 w-6" : "h-5 w-5")}
+            className={cn("text-blue-400", isLarge ? "h-7 w-7" : "h-5 w-5")}
           />
         </div>
       ) : null}
       <div className="min-w-0">
         <h1
           className={cn(
-            "font-semibold tracking-tight text-zinc-100",
-            isLarge ? "text-3xl font-bold" : "text-xl",
+            "font-bold tracking-tight text-white",
+            isLarge ? "text-3xl" : "text-2xl",
           )}
         >
           {title}
@@ -44,8 +44,10 @@ export function PageHeader({
         {description ? (
           <p
             className={cn(
-              "text-zinc-500",
-              isLarge ? "mt-1 text-base" : "mt-0.5 text-sm",
+              "text-slate-500",
+              isLarge
+                ? "mt-1 text-ui-body uppercase tracking-[0.15em]"
+                : "mt-1 text-ui-body-sm uppercase tracking-widest",
             )}
           >
             {description}
