@@ -13,8 +13,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useGroupsApi, Group, GroupMember } from "@/hooks/useGroupsApi";
+import {
+  useGroupsApi,
+  Group,
+  GroupMember,
+  GroupMemberCandidate,
+} from "@/hooks/useGroupsApi";
 import { ActorLabel } from "@/components/shared/attribution-badge";
+import { MemberHostnameCombobox } from "@/components/admin/MemberHostnameCombobox";
 
 function errorMessage(err: any, fallback: string): string {
   return err?.response?.data?.detail || err?.message || fallback;
@@ -23,6 +29,7 @@ function errorMessage(err: any, fallback: string): string {
 export default function GroupsPage() {
   const {
     fetchGroups,
+    fetchMemberCandidates,
     createGroup,
     updateGroup,
     deleteGroup,
@@ -38,7 +45,9 @@ export default function GroupsPage() {
 
   const [selected, setSelected] = useState<Group | null>(null);
   const [members, setMembers] = useState<GroupMember[]>([]);
+  const [candidates, setCandidates] = useState<GroupMemberCandidate[]>([]);
   const [newMember, setNewMember] = useState("");
+  const [adding, setAdding] = useState(false);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -91,24 +100,38 @@ export default function GroupsPage() {
 
   const openMembers = async (group: Group) => {
     setSelected(group);
+    setNewMember("");
     setError(null);
     try {
-      setMembers(await fetchMembers(group.id));
+      const [nextMembers, nextCandidates] = await Promise.all([
+        fetchMembers(group.id),
+        fetchMemberCandidates(),
+      ]);
+      setMembers(nextMembers);
+      setCandidates(nextCandidates);
     } catch (err) {
       setError(errorMessage(err, "Falha ao carregar membros"));
     }
   };
 
   const handleAddMember = async () => {
-    if (!selected) return;
+    if (!selected || !newMember.trim()) return;
+    setAdding(true);
     setError(null);
     try {
       await addMember(selected.id, newMember);
       setNewMember("");
-      setMembers(await fetchMembers(selected.id));
+      const [nextMembers, nextCandidates] = await Promise.all([
+        fetchMembers(selected.id),
+        fetchMemberCandidates(),
+      ]);
+      setMembers(nextMembers);
+      setCandidates(nextCandidates);
       await reload();
     } catch (err) {
       setError(errorMessage(err, "Falha ao adicionar membro"));
+    } finally {
+      setAdding(false);
     }
   };
 
@@ -117,7 +140,12 @@ export default function GroupsPage() {
     setError(null);
     try {
       await removeMember(selected.id, member.user_id);
-      setMembers(await fetchMembers(selected.id));
+      const [nextMembers, nextCandidates] = await Promise.all([
+        fetchMembers(selected.id),
+        fetchMemberCandidates(),
+      ]);
+      setMembers(nextMembers);
+      setCandidates(nextCandidates);
       await reload();
     } catch (err) {
       setError(errorMessage(err, "Falha ao remover membro"));
@@ -208,17 +236,24 @@ export default function GroupsPage() {
           <h2 className="mb-3 text-lg font-semibold text-white">
             Membros de {selected.name}
           </h2>
-          <div className="mb-3 flex gap-2">
-            <Input
-              placeholder="hostname do usuário…"
-              className="w-72"
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <MemberHostnameCombobox
+              candidates={candidates}
               value={newMember}
-              onChange={(e) => setNewMember(e.target.value)}
+              onChange={setNewMember}
+              excludeUserIds={members.map((m) => m.user_id)}
             />
-            <Button onClick={handleAddMember} disabled={!newMember.trim()}>
+            <Button
+              onClick={handleAddMember}
+              disabled={!newMember.trim() || adding}
+            >
               Adicionar / mover
             </Button>
           </div>
+          <p className="mb-3 text-xs text-zinc-500">
+            Selecione um hostname já cadastrado. Digitação livre foi desabilitada
+            para evitar usuários fantasma.
+          </p>
           <Table>
             <TableHeader>
               <TableRow>

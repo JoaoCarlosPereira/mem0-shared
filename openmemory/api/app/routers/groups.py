@@ -66,6 +66,20 @@ class MemberAdd(BaseModel):
     user_id: str  # hostname (User.user_id)
 
 
+class MemberCandidate(BaseModel):
+    """Hostname legado existente — opções do combobox de mover membros."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    user_id: str
+    name: Optional[str] = None
+    display_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    group_id: Optional[UUID] = None
+    group_name: Optional[str] = None
+
+
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
@@ -195,6 +209,39 @@ def delete_group(group_id: UUID, db: Session = Depends(get_db)) -> dict:
 # --------------------------------------------------------------------------- #
 # Membros
 # --------------------------------------------------------------------------- #
+@router.get("/member-candidates")
+def list_member_candidates(db: Session = Depends(get_db)) -> dict:
+    """Lista hostnames legados existentes para o combobox de adicionar/mover.
+
+    Não inclui contas Google (``person``). Evita digitação livre que criava
+    usuários fantasma (ex.: nome de pessoa no lugar do hostname da máquina).
+    """
+    users = (
+        db.query(User)
+        .filter(User.user_type == USER_TYPE_LEGACY_HOST)
+        .order_by(User.user_id)
+        .all()
+    )
+    identities = resolve_creator_identities_with_db(db, (u.user_id for u in users))
+    items: list[dict] = []
+    for user in users:
+        identity = identity_for_hostname(user.user_id, identities)
+        items.append(
+            MemberCandidate(
+                id=user.id,
+                user_id=user.user_id,
+                name=user.name,
+                display_name=(
+                    identity.display_name if identity else user.display_name or user.name
+                ),
+                avatar_url=identity.avatar_url if identity else user.avatar_url,
+                group_id=user.group_id,
+                group_name=user.group.name if user.group else None,
+            ).model_dump()
+        )
+    return {"candidates": items}
+
+
 @router.get("/{group_id}/members")
 def list_members(group_id: UUID, db: Session = Depends(get_db)) -> dict:
     _get_group_or_404(db, group_id)
@@ -219,15 +266,23 @@ def list_members(group_id: UUID, db: Session = Depends(get_db)) -> dict:
 
 @router.post("/{group_id}/members")
 def add_member(group_id: UUID, payload: MemberAdd, db: Session = Depends(get_db)) -> dict:
+    """Move um hostname legado existente para o grupo.
+
+    Não cria usuários novos — evita fantasmas digitados à mão (nome de pessoa,
+    typo, etc.). Use ``GET /admin/groups/member-candidates`` para listar opções.
+    """
     group = _get_group_or_404(db, group_id)
     hostname = payload.user_id.strip()
+    if not hostname:
+        raise HTTPException(status_code=400, detail="user_id must not be empty")
     user = consolidate_legacy_host_users(db, hostname)
     if user is None:
         user = find_legacy_host_user(db, hostname)
     if user is None:
-        user = User(user_id=hostname, user_type=USER_TYPE_LEGACY_HOST)
-        db.add(user)
-        db.flush()
+        raise HTTPException(
+            status_code=404,
+            detail="Hostname não encontrado; selecione um usuário existente",
+        )
     user.group_id = group.id
     _sync_linked_person_group(db, user, group.id)
     db.commit()

@@ -2,6 +2,7 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 const fetchGroups = jest.fn();
+const fetchMemberCandidates = jest.fn();
 const createGroup = jest.fn();
 const updateGroup = jest.fn();
 const deleteGroup = jest.fn();
@@ -12,6 +13,7 @@ const removeMember = jest.fn();
 jest.mock("@/hooks/useGroupsApi", () => ({
   useGroupsApi: () => ({
     fetchGroups,
+    fetchMemberCandidates,
     createGroup,
     updateGroup,
     deleteGroup,
@@ -28,6 +30,20 @@ beforeEach(() => {
   fetchGroups.mockResolvedValue([
     { id: "g1", name: "Equipe A", member_count: 2 },
     { id: "g2", name: "Equipe B", member_count: 0 },
+  ]);
+  fetchMemberCandidates.mockResolvedValue([
+    {
+      id: "c1",
+      user_id: "S0136",
+      display_name: "Mauricio Spaniol",
+      group_name: "Default",
+    },
+    {
+      id: "c2",
+      user_id: "host-a",
+      display_name: "Ana Silva",
+      group_name: "Equipe A",
+    },
   ]);
   createGroup.mockResolvedValue({ id: "g3", name: "Nova", member_count: 0 });
 });
@@ -86,6 +102,34 @@ describe("GroupsPage (task_08)", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Membros" })[0]);
 
     await waitFor(() => expect(fetchMembers).toHaveBeenCalledWith("g1"));
+    expect(fetchMemberCandidates).toHaveBeenCalled();
     expect(await screen.findByText("Ana Silva")).toBeInTheDocument();
+    expect(
+      screen.getByRole("combobox", { name: /buscar hostname ou nome/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("mover membro seleciona hostname existente via combobox", async () => {
+    fetchMembers.mockResolvedValue([]);
+    addMember.mockResolvedValue({
+      id: "u2",
+      user_id: "S0136",
+      display_name: "Mauricio Spaniol",
+    });
+    render(<GroupsPage />);
+    await screen.findByText("Equipe A");
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Membros" })[0]);
+    await waitFor(() => expect(fetchMemberCandidates).toHaveBeenCalled());
+
+    fireEvent.click(
+      screen.getByRole("combobox", { name: /buscar hostname ou nome/i }),
+    );
+    fireEvent.click(await screen.findByText("Mauricio Spaniol"));
+    fireEvent.click(screen.getByRole("button", { name: "Adicionar / mover" }));
+
+    await waitFor(() =>
+      expect(addMember).toHaveBeenCalledWith("g1", "S0136"),
+    );
   });
 });

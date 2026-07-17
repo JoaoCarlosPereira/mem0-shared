@@ -155,17 +155,50 @@ def test_add_member_moves_user_and_invalidates_cache(client, factory, monkeypatc
     assert any(m["user_id"] == "host-move" for m in members)
 
 
-def test_add_member_creates_user_when_missing(client):
+def test_add_member_missing_hostname_returns_404(client):
+    """Não cria fantasmas — só move hostnames já cadastrados."""
     gid = client.post("/admin/groups", json={"name": "Z"}).json()["id"]
-    r = client.post(f"/admin/groups/{gid}/members", json={"user_id": "host-novo"})
-    assert r.status_code == 200
-    assert r.json()["user_id"] == "host-novo"
+    r = client.post(f"/admin/groups/{gid}/members", json={"user_id": "host-fantasma"})
+    assert r.status_code == 404
     members = client.get(f"/admin/groups/{gid}/members").json()["members"]
-    assert any(m["user_id"] == "host-novo" for m in members)
+    assert members == []
+
+
+def test_list_member_candidates_returns_legacy_hosts_with_group(client, factory):
+    import uuid as _uuid
+
+    default_id = _seed_default(factory)
+    gid = client.post("/admin/groups", json={"name": "Fiscal"}).json()["id"]
+    _seed_user(factory, "S0136", group_id=default_id)
+    _seed_user(factory, "S0293", group_id=gid)
+    s = factory()
+    try:
+        s.add(
+            User(
+                user_id="10315647575415088256",
+                user_type=USER_TYPE_PERSON,
+                google_sub="10315647575415088256",
+                group_id=_uuid.UUID(gid),
+            )
+        )
+        s.commit()
+    finally:
+        s.close()
+
+    r = client.get("/admin/groups/member-candidates")
+    assert r.status_code == 200
+    by_id = {c["user_id"]: c for c in r.json()["candidates"]}
+    assert "S0136" in by_id
+    assert "S0293" in by_id
+    assert "10315647575415088256" not in by_id
+    assert by_id["S0136"]["group_name"] == DEFAULT_GROUP_NAME
+    assert by_id["S0293"]["group_name"] == "Fiscal"
 
 
 def test_list_members_excludes_person_accounts(client, factory):
     """Contas Google (person) não são membros de grupo — só hostnames legacy."""
+    import uuid as _uuid
+
     gid = client.post("/admin/groups", json={"name": "Fiscal"}).json()["id"]
     _seed_user(factory, "S0293", group_id=gid)
     s = factory()
@@ -175,7 +208,7 @@ def test_list_members_excludes_person_accounts(client, factory):
                 user_id="10315647575415088256",
                 user_type=USER_TYPE_PERSON,
                 google_sub="10315647575415088256",
-                group_id=gid,
+                group_id=_uuid.UUID(gid),
             )
         )
         s.commit()

@@ -30,6 +30,24 @@ describe("useGroupsApi (task_08)", () => {
     expect(out).toEqual(groups);
   });
 
+  it("fetchMemberCandidates faz GET /admin/groups/member-candidates", async () => {
+    const candidates = [
+      { id: "c1", user_id: "S0136", display_name: "Mauricio", group_name: "Default" },
+    ];
+    mockedAxios.get.mockResolvedValue({ data: { candidates } });
+    const { result } = renderHook(() => useGroupsApi());
+
+    let out: any;
+    await act(async () => {
+      out = await result.current.fetchMemberCandidates();
+    });
+
+    expect(mockedAxios.get).toHaveBeenCalledWith(
+      expect.stringContaining("/admin/groups/member-candidates"),
+    );
+    expect(out).toEqual(candidates);
+  });
+
   it("createGroup faz POST /admin/groups com o nome", async () => {
     mockedAxios.post.mockResolvedValue({
       data: { id: "g2", name: "Nova", member_count: 0 },

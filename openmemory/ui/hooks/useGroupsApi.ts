@@ -16,6 +16,16 @@ export interface GroupMember {
   avatar_url?: string | null;
 }
 
+export interface GroupMemberCandidate {
+  id: string;
+  user_id: string;
+  name?: string | null;
+  display_name?: string | null;
+  avatar_url?: string | null;
+  group_id?: string | null;
+  group_name?: string | null;
+}
+
 /**
  * Hook de acesso aos endpoints de gestão de grupos (`/admin/groups`) — task_06/08.
  * Segue o padrão de `useAdminApi`: axios + `getApiUrl()` (proxy `/api-proxy`).
@@ -24,6 +34,13 @@ export const useGroupsApi = () => {
   const fetchGroups = useCallback(async (): Promise<Group[]> => {
     const res = await axios.get<{ groups: Group[] }>(`${getApiUrl()}/admin/groups`);
     return res.data.groups;
+  }, []);
+
+  const fetchMemberCandidates = useCallback(async (): Promise<GroupMemberCandidate[]> => {
+    const res = await axios.get<{ candidates: GroupMemberCandidate[] }>(
+      `${getApiUrl()}/admin/groups/member-candidates`,
+    );
+    return res.data.candidates;
   }, []);
 
   const createGroup = useCallback(async (name: string): Promise<Group> => {
@@ -78,6 +95,7 @@ export const useGroupsApi = () => {
 
   return {
     fetchGroups,
+    fetchMemberCandidates,
     createGroup,
     updateGroup,
     deleteGroup,
