@@ -1,7 +1,6 @@
 """Testes do shim OAuth para MCP HTTP legado (hostname-only)."""
 
 import importlib.util
-import os
 from pathlib import Path
 
 import pytest

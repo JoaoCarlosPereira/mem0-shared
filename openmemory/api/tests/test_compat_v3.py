@@ -14,25 +14,20 @@ import sys
 import types
 from pathlib import Path
 
-# The router only needs ``get_memory_client`` from app.utils.memory. Stub that
-# module (and its parent packages) so we can path-load the router WITHOUT
-# importing app.routers.__init__, which pulls heavy deps (fastapi_pagination,
-# an import-time OpenAI() client) that aren't installed outside Docker.
+# Path-load the router WITHOUT importing app.routers.__init__ (heavy deps /
+# import-time OpenAI client). Stub only the heavy utils the router imports;
+# keep real ``app`` / ``app.utils`` packages so lightweight deps
+# (identity, groups, write_guard, read_audit, recency) resolve normally.
 #
-# Save originals so the stubs are torn down after compat_v3 is loaded; without
-# this, later test files that import app.utils.memory get the bare stub instead
-# of the real module and fail with "cannot import name …".
+# Save originals so stubs are torn down after load — later test files that
+# import app.utils.memory must get the real module, not the bare stub.
+import app.database  # noqa: E402, F401 — prime DB before models↔read_audit cycle
+
 _stub_names = (
-    "app",
-    "app.utils",
     "app.utils.memory",
     "app.utils.partitioning",
-    "app.utils.recency",
 )
 _saved_modules = {n: sys.modules.get(n) for n in _stub_names}
-# Swap in *fresh* stub modules (not setdefault): if these were already imported
-# for real, mutating their attributes would leak into the rest of the suite and
-# never get restored. We replace the module objects and restore them after load.
 for _name in _stub_names:
     sys.modules[_name] = types.ModuleType(_name)
 sys.modules["app.utils.memory"].get_memory_client = lambda: None
@@ -42,19 +37,12 @@ sys.modules["app.utils.partitioning"].bind_active_collection = lambda *a, **k: "
 sys.modules["app.utils.partitioning"].resolve_and_bind = (
     lambda *a, **k: types.SimpleNamespace(collection="openmemory", shard_key=None)
 )
-# recency.py has no heavy deps (datetime/os only), so path-load the REAL module
-# to exercise true recency-weighted ordering rather than a no-op stub.
-_REC_PATH = Path(__file__).resolve().parents[1] / "app" / "utils" / "recency.py"
-_rec_spec = importlib.util.spec_from_file_location("app.utils.recency", _REC_PATH)
-sys.modules["app.utils.recency"] = importlib.util.module_from_spec(_rec_spec)
-_rec_spec.loader.exec_module(sys.modules["app.utils.recency"])
 
 _PATH = Path(__file__).resolve().parents[1] / "app" / "routers" / "compat_v3.py"
 _spec = importlib.util.spec_from_file_location("compat_v3_under_test", _PATH)
 compat_v3 = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(compat_v3)
 
-# Restore sys.modules: remove stubs that were not present before this block.
 for _name in _stub_names:
     _prior = _saved_modules[_name]
     if _prior is None:
@@ -69,6 +57,12 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+
+
+def _allow_writes(monkeypatch):
+    """Bypass fail-closed write guard — this suite tests the REST contract, not registration."""
+    monkeypatch.setattr(compat_v3, "check_write_allowed", lambda *a, **k: None)
+    monkeypatch.setattr(compat_v3, "ensure_user_registered", lambda *a, **k: None)
 
 
 async def _search(body):
@@ -134,6 +128,7 @@ def _hits():
 
 @pytest_asyncio.fixture
 async def client(monkeypatch):
+    _allow_writes(monkeypatch)
     fake = _FakeClient(_hits())
     monkeypatch.setattr(compat_v3, "get_memory_client", lambda: fake)
     app = FastAPI()

@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import get_db
 from app.models import Base, DEFAULT_GROUP_NAME, Group, Machine, MachineStatus, User, WriteAuditLog, WriteQueueJob
-from app.models import USER_TYPE_LEGACY_HOST, USER_TYPE_PERSON
+from app.models import USER_TYPE_PERSON
 from app.read_audit_log_model import ReadAuditLog
 from app.routers.user_analytics import router
 

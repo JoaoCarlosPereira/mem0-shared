@@ -26,10 +26,8 @@ from app.utils.groups import get_or_create_group, group_of_hostname, normalize_g
 from app.utils.hostname_validation import require_sysmo_hostname
 from app.utils.machine_resolver import (
     backfill_legacy_user_id,
-    canonical_machine_hostname,
     resolve_or_create_machine,
 )
-from app.utils.identity import resolve_hostname
 from app.utils.identity_links import invalidate_identity_link_cache
 from app.utils.logging_context import auth_method_var
 from app.utils.session_jwt import (

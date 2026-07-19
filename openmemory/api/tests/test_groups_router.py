@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import get_db
-from app.models import Base, DEFAULT_GROUP_NAME, Group, User, USER_TYPE_LEGACY_HOST, USER_TYPE_PERSON
+from app.models import Base, DEFAULT_GROUP_NAME, Group, User, USER_TYPE_PERSON
 from app.routers.groups import router
 
 
