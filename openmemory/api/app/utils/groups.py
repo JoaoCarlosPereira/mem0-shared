@@ -40,7 +40,6 @@ def _now() -> float:
 def _query_group_name(hostname: str) -> Optional[str]:
     """Consulta o nome do grupo atual do usuário cujo ``user_id`` == hostname."""
     from app.database import SessionLocal
-    from app.models import User
     from app.utils.machine_resolver import find_legacy_host_user
 
     db = SessionLocal()

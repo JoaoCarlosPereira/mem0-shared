@@ -8,7 +8,6 @@ no payload, conforme ADR-005.
 from __future__ import annotations
 
 import os
-from typing import Optional
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -22,7 +21,6 @@ from app.models import (
     MemoryAccessLog,
     MemoryStatusHistory,
     User,
-    USER_TYPE_LEGACY_HOST,
     USER_TYPE_PERSON,
     memory_categories,
 )
