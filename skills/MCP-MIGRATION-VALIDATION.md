@@ -42,3 +42,21 @@
       sobrescreve silenciosamente**.
 - [ ] **HARD-GATE preservado:** confirmar que nenhuma gravação MCP ocorre antes da
       aprovação do usuário.
+
+---
+
+## Tarefa 10 — `/cy-create-techspec`
+
+- [ ] **Fluxo encadeado PRD → TechSpec:** para um workspace com PRD já gravado pela
+      Tarefa 9, rodar `/cy-create-techspec`; confirmar que o PRD é lido via
+      `read_spec_document` (document_type="prd") e a TechSpec é gravada via
+      `write_spec_document` (document_type="techspec") — sem `_prd.md`/`_techspec.md`
+      locais.
+- [ ] **Modo standalone (sem PRD):** rodar em um workspace sem PRD; confirmar que a
+      skill **pede a descrição ao usuário** em vez de falhar.
+- [ ] **ADRs locais:** confirmar que os ADRs criados nesta skill continuam gravados
+      em `.docs/tasks/<name>/adrs/` (fora do escopo remoto do MVP).
+- [ ] **Conflito de versão:** simular gravação concorrente da TechSpec; confirmar que
+      não sobrescreve silenciosamente.
+- [ ] **Indisponibilidade do serviço:** parar o MCP e confirmar falha clara, sem
+      fallback local.
