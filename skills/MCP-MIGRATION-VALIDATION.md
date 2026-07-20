@@ -60,3 +60,21 @@
       não sobrescreve silenciosamente.
 - [ ] **Indisponibilidade do serviço:** parar o MCP e confirmar falha clara, sem
       fallback local.
+
+---
+
+## Tarefa 11 — `/cy-create-tasks`
+
+- [ ] **Fluxo encadeado PRD → TechSpec → Tasks:** para um workspace com PRD e
+      TechSpec já gravados (Tarefas 9 e 10), rodar `/cy-create-tasks`; confirmar que
+      PRD/TechSpec são lidos via `read_spec_document`, a lista mestra é gravada via
+      `write_spec_document` (document_type="tasks") e **cada tarefa vira uma
+      `TaskCard`** via `create_task` — sem `_tasks.md`/`task_NN.md` locais.
+- [ ] **Metadados e dependências:** confirmar que tipo/complexidade/dependências
+      ficam preservados no `description` da `TaskCard` e que a ordem de dependência
+      é consistente no quadro.
+- [ ] **Falha parcial:** simular indisponibilidade do MCP **após** algumas tasks
+      criadas; confirmar que a skill reporta **exatamente quais tasks já foram
+      criadas** antes da falha, sem inventar arquivo local.
+- [ ] **Cards no backlog:** confirmar que as tasks nascem na coluna `tasks`
+      (backlog) do quadro Kanban.
