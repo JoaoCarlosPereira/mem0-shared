@@ -1,0 +1,44 @@
+# Validação manual — Migração das skills `/cy-create-*` para MCP (Tarefas 9–11)
+
+> As skills `/cy-create-*` rodam por um agente Claude, não por um test runner.
+> A validação é **manual, contra um servidor MCP ao vivo** (OpenMemory + Qdrant +
+> LLM/embeddings). Este documento é o checklist a executar. Marque cada item ao
+> validar no seu ambiente.
+>
+> **Pré-requisitos do ambiente:**
+> - Stack OpenMemory no ar com as tools MCP das Tarefas 7 e 8 disponíveis
+>   (`create_spec_workspace`, `list_spec_workspaces`, `write_spec_document`,
+>   `read_spec_document`, `search_specs`, `create_task`, `claim_task`,
+>   `release_task`, `update_task_status`, `add_spec_comment`).
+> - Qdrant com a collection `openmemory_specs` (provisionada no primeiro uso).
+> - As skills atualizadas instaladas na máquina do agente
+>   (`C:\Users\s293\.claude\skills\cy-create-*` — espelho versionado em
+>   `skills/cy-create-*/` neste repo).
+
+## Rollout (decisão registrada)
+
+- As skills piloto foram **espelhadas neste repositório** em `skills/cy-create-prd/`,
+  `skills/cy-create-techspec/` e `skills/cy-create-tasks/` para tornar a migração
+  auditável no PR. O `SKILL.md` global (`~/.claude/skills/...`) foi atualizado com
+  o mesmo conteúdo. **Cada máquina/usuário que usa as skills precisa receber a
+  versão atualizada** (copiar do espelho do repo para o caminho global).
+
+---
+
+## Tarefa 9 — `/cy-create-prd`
+
+- [ ] **Fluxo feliz ponta a ponta:** rodar `/cy-create-prd <feature>` até a
+      aprovação; confirmar que o PRD foi gravado via `write_spec_document`
+      (document_type="prd") no workspace compartilhado e que **nenhum**
+      `.docs/tasks/<slug>/_prd.md` local foi criado.
+- [ ] **Workspace idempotente:** rodar de novo com o mesmo slug; confirmar que
+      reaproveita o workspace existente (não cria duplicado) e entra em modo de
+      atualização (lê a versão atual via `read_spec_document`).
+- [ ] **Indisponibilidade do serviço:** parar o servidor MCP e rodar a skill;
+      confirmar que ela **falha com mensagem clara**, sem gravar `_prd.md` local.
+- [ ] **Conflito de versão:** simular duas gravações concorrentes (gravar uma vez
+      por outro caminho e então aprovar a skill com versão desatualizada);
+      confirmar que a skill informa o conflito, relê a versão atual e **não
+      sobrescreve silenciosamente**.
+- [ ] **HARD-GATE preservado:** confirmar que nenhuma gravação MCP ocorre antes da
+      aprovação do usuário.
