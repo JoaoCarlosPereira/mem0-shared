@@ -112,13 +112,20 @@ def release_task(
     task_id: uuid.UUID,
     actor: str | None,
     reason: str | None = None,
+    expected_version: int | None = None,
 ) -> ClaimTaskResult:
     """Libera uma task manualmente (ou via job de timeout — Tarefa 5).
 
     Volta o status para ``tasks``, limpa ``assignee`` e o marcador de bloqueio
     (``is_blocked``/``block_reason``) e registra ``TaskStatusHistory``. Bump de
-    ``version`` invalida qualquer gravação otimista em voo. Idempotente em
-    efeito: liberar uma task já em ``tasks`` apenas reafirma o estado.
+    ``version`` invalida qualquer gravação otimista em voo.
+
+    ``expected_version``:
+    - ``None`` (release manual): incondicional — sempre aplica. ``claimed=False``.
+    - inteiro (job de timeout): usa ``UPDATE ... WHERE version = :expected`` para
+      ser idempotente entre réplicas — só uma consegue liberar. ``claimed=True``
+      quando ESTA chamada aplicou a liberação; ``claimed=False`` quando outra
+      réplica já a fez (no-op).
     """
     task = db.get(TaskCard, task_id)
     if task is None:
@@ -127,13 +134,42 @@ def release_task(
     old_status = task.status
     now = get_current_utc_time()
 
-    task.status = TaskCardStatus.tasks
-    task.assignee = None
-    task.is_blocked = False
-    task.block_reason = None
-    task.version = task.version + 1
-    task.last_activity_at = now
-    task.updated_at = now
+    if expected_version is not None:
+        result = db.execute(
+            sa.update(TaskCard)
+            .where(
+                TaskCard.id == task_id,
+                TaskCard.version == expected_version,
+            )
+            .values(
+                status=TaskCardStatus.tasks,
+                assignee=None,
+                is_blocked=False,
+                block_reason=None,
+                version=TaskCard.version + 1,
+                last_activity_at=now,
+                updated_at=now,
+            )
+        )
+        if result.rowcount == 0:
+            # Outra réplica já liberou (ou a versão mudou): no-op idempotente.
+            db.rollback()
+            fresh = db.get(TaskCard, task_id)
+            return ClaimTaskResult(
+                claimed=False,
+                current_assignee=fresh.assignee,
+                version=fresh.version,
+            )
+        applied = True
+    else:
+        task.status = TaskCardStatus.tasks
+        task.assignee = None
+        task.is_blocked = False
+        task.block_reason = None
+        task.version = task.version + 1
+        task.last_activity_at = now
+        task.updated_at = now
+        applied = False  # release manual não é um "claim"
 
     db.add(
         TaskStatusHistory(
@@ -152,12 +188,12 @@ def release_task(
         )
     )
     db.commit()
-    db.refresh(task)
+    fresh = db.get(TaskCard, task_id)
 
     return ClaimTaskResult(
-        claimed=False,
+        claimed=applied,
         current_assignee=None,
-        version=task.version,
+        version=fresh.version,
     )
 
 
