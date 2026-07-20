@@ -24,6 +24,8 @@ const customJestConfig = {
     "hooks/useQueuesApi.ts",
     "hooks/useMetricsApi.ts",
     "store/metricsSlice.ts",
+    "hooks/useSpecsApi.ts",
+    "store/specsSlice.ts",
     "components/admin/**/*.{ts,tsx}",
     "components/metrics/**/*.{ts,tsx}",
     "app/admin/**/*.{ts,tsx}",
