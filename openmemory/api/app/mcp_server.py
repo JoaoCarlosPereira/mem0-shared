@@ -738,6 +738,184 @@ async def search_specs(query: str, project: str | None = None) -> str:
         return f"Error: {e}"
 
 
+# --------------------------------------------------------------------------- #
+# Tools de tasks e comentários (Tarefa 8) — completam a superfície MCP do quadro
+# Kanban. Mesmo molde da Tarefa 7; delegam a task_lock (Tarefa 2) e ao router
+# (Tarefa 4), sem duplicar lógica de negócio.
+# --------------------------------------------------------------------------- #
+@mcp.tool(description="Create a task card in a spec workspace. The card starts in the 'tasks' (backlog) column. Returns JSON with the task id, status and version.")
+async def create_task(
+    workspace_id: str, title: str, description: str | None = None, branch_ref: str | None = None
+) -> str:
+    try:
+        from app.routers.specs import TaskCreate, TaskResponse
+        from app.routers.specs import create_task as _create_task_endpoint
+
+        db = SessionLocal()
+        try:
+            payload = TaskCreate(
+                workspace_id=uuid.UUID(workspace_id),
+                title=title,
+                description=description,
+                branch_ref=branch_ref,
+            )
+            task = _create_task_endpoint(
+                payload, subject_type="user", subject_id=None, db=db
+            )
+            return json.dumps(
+                TaskResponse.model_validate(task).model_dump(mode="json"), default=str
+            )
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="Claim a task so you become its assignee and it moves to 'em_andamento'. This CAN FAIL by exclusivity: if the task is already active with another assignee, the returned JSON has claimed=false and current_assignee set — do NOT retry blindly; treat that task as taken and pick another (use list_spec_workspaces / read the board to see current state). On success claimed=true with the new version.")
+async def claim_task(task_id: str) -> str:
+    try:
+        from app.models import TaskCard
+        from app.utils.task_lock import claim_task as _claim_task
+
+        claimant = resolve_hostname(user_id_var.get(None))
+        db = SessionLocal()
+        try:
+            tid = uuid.UUID(task_id)
+            if db.query(TaskCard).filter(TaskCard.id == tid).first() is None:
+                return f"Error: task {task_id} não encontrada"
+            result = _claim_task(db, tid, claimant)
+            if result.claimed:
+                return json.dumps(
+                    {"claimed": True, "assignee": claimant, "version": result.version}
+                )
+            return json.dumps(
+                {
+                    "claimed": False,
+                    "current_assignee": result.current_assignee,
+                    "version": result.version,
+                    "message": (
+                        "Task já está ativa com outro responsável — escolha outra. "
+                        "Consulte o quadro (list_spec_workspaces) antes de tentar de novo."
+                    ),
+                }
+            )
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="Release a task you no longer work on: it returns to the 'tasks' column, unassigned, and its block marker is cleared. Returns JSON with the new version.")
+async def release_task(task_id: str) -> str:
+    try:
+        from app.models import TaskCard
+        from app.utils.task_lock import release_task as _release_task
+
+        actor = resolve_hostname(user_id_var.get(None))
+        db = SessionLocal()
+        try:
+            tid = uuid.UUID(task_id)
+            if db.query(TaskCard).filter(TaskCard.id == tid).first() is None:
+                return f"Error: task {task_id} não encontrada"
+            result = _release_task(db, tid, actor, reason="release via MCP")
+            return json.dumps({"released": True, "version": result.version})
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="Move a task to a new Kanban column and/or set its block marker, using optimistic concurrency. new_status must be one of: tasks, em_andamento, revisao_codigo, fase_teste, concluido. Pass expected_version (the version you last read). To report a blocker without changing column, pass new_status equal to the current status and is_blocked=true (+ block_reason). Returns JSON {updated:true,...}; on a version conflict returns {conflict:true, current_version, current_status}; on an invalid status returns {error:..., valid:[...]}.")
+async def update_task_status(
+    task_id: str,
+    new_status: str,
+    expected_version: int,
+    is_blocked: bool | None = None,
+    block_reason: str | None = None,
+) -> str:
+    try:
+        from app.models import TaskCard, TaskCardStatus
+        from app.utils.task_lock import update_task_status as _update_task_status
+
+        actor = resolve_hostname(user_id_var.get(None))
+        try:
+            status_enum = TaskCardStatus(new_status)
+        except ValueError:
+            return json.dumps(
+                {
+                    "error": f"status inválido: {new_status}",
+                    "valid": [s.value for s in TaskCardStatus],
+                }
+            )
+        db = SessionLocal()
+        try:
+            tid = uuid.UUID(task_id)
+            if db.query(TaskCard).filter(TaskCard.id == tid).first() is None:
+                return f"Error: task {task_id} não encontrada"
+            result = _update_task_status(
+                db,
+                tid,
+                status_enum,
+                expected_version,
+                actor,
+                is_blocked=is_blocked,
+                block_reason=block_reason,
+            )
+            if result.conflict:
+                return json.dumps(
+                    {
+                        "conflict": True,
+                        "current_version": result.version,
+                        "current_status": result.status,
+                    }
+                )
+            return json.dumps(
+                {"updated": True, "status": result.status, "version": result.version}
+            )
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="Add a comment to a workspace, document or task. target_type must be one of: workspace, document, task; target_id is that object's id. Returns JSON with the comment id.")
+async def add_spec_comment(target_type: str, target_id: str, body: str) -> str:
+    try:
+        from fastapi import HTTPException
+
+        from app.models import CommentTargetType
+        from app.routers.specs import CommentCreate, CommentResponse
+        from app.routers.specs import create_comment as _create_comment_endpoint
+
+        author = resolve_hostname(user_id_var.get(None))
+        db = SessionLocal()
+        try:
+            payload = CommentCreate(
+                target_type=CommentTargetType(target_type),
+                target_id=uuid.UUID(target_id),
+                body=body,
+                author=author,
+            )
+            try:
+                comment = _create_comment_endpoint(
+                    payload, subject_type="user", subject_id=None, db=db
+                )
+            except HTTPException as he:
+                return f"Error: {he.detail}"
+            return json.dumps(
+                CommentResponse.model_validate(comment).model_dump(mode="json"), default=str
+            )
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
 def _warn_invalid_mcp_hostname(raw_uid: str | None) -> None:
     if raw_uid and not is_plausible_hostname(str(raw_uid).strip()):
         logging.warning(
