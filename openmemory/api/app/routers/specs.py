@@ -227,6 +227,63 @@ def _get_document_or_404(
     return doc
 
 
+def get_or_create_workspace(
+    db: Session,
+    *,
+    project_id: str,
+    slug: str,
+    name: str,
+    created_by: Optional[str] = None,
+    status: Optional[SpecWorkspaceStatus] = None,
+) -> tuple[SpecWorkspace, bool]:
+    """Cria ou retorna o workspace de ``(project_id, slug)`` — idempotente.
+
+    Lógica compartilhada entre o endpoint REST e a tool MCP (sem duplicação).
+    Retorna ``(workspace, created)``; garante o Project no catálogo via
+    ``upsert_project``.
+    """
+    upsert_project(project_id, session=db)
+    existing = (
+        db.query(SpecWorkspace)
+        .filter(SpecWorkspace.project_id == project_id, SpecWorkspace.slug == slug)
+        .first()
+    )
+    if existing is not None:
+        return existing, False
+
+    ws = SpecWorkspace(
+        project_id=project_id,
+        slug=slug,
+        name=name,
+        status=status or SpecWorkspaceStatus.planejamento,
+        created_by=created_by,
+    )
+    db.add(ws)
+    db.commit()
+    db.refresh(ws)
+    return ws, True
+
+
+def get_or_create_document(
+    db: Session, workspace_id: UUID, document_type: DocumentType
+) -> SpecDocument:
+    """Retorna o ``SpecDocument`` do tipo dado no workspace, criando-o se ausente."""
+    doc = (
+        db.query(SpecDocument)
+        .filter(
+            SpecDocument.workspace_id == workspace_id,
+            SpecDocument.document_type == document_type,
+        )
+        .first()
+    )
+    if doc is None:
+        doc = SpecDocument(workspace_id=workspace_id, document_type=document_type)
+        db.add(doc)
+        db.commit()
+        db.refresh(doc)
+    return doc
+
+
 def _get_task_or_404(db: Session, task_id: UUID) -> TaskCard:
     task = db.query(TaskCard).filter(TaskCard.id == task_id).first()
     if task is None:
@@ -264,32 +321,15 @@ def create_workspace(
     db: Session = Depends(get_db),
 ) -> WorkspaceResponse:
     """Cria um workspace. Idempotente por ``(project_id, slug)``."""
-    # Garante o Project no catálogo (FK) sem administração manual (ADR-002).
-    upsert_project(payload.project_id, session=db)
-
-    existing = (
-        db.query(SpecWorkspace)
-        .filter(
-            SpecWorkspace.project_id == payload.project_id,
-            SpecWorkspace.slug == payload.slug,
-        )
-        .first()
-    )
-    if existing is not None:
-        response.status_code = 200
-        return existing
-
-    ws = SpecWorkspace(
+    ws, created = get_or_create_workspace(
+        db,
         project_id=payload.project_id,
         slug=payload.slug,
         name=payload.name,
-        status=payload.status or SpecWorkspaceStatus.planejamento,
         created_by=payload.created_by,
+        status=payload.status,
     )
-    db.add(ws)
-    db.commit()
-    db.refresh(ws)
-    response.status_code = 201
+    response.status_code = 201 if created else 200
     return ws
 
 
@@ -385,19 +425,7 @@ def write_workspace_document(
     _get_workspace_or_404(db, workspace_id)
     _assert_access(db, workspace_id, subject_type, subject_id)
 
-    doc = (
-        db.query(SpecDocument)
-        .filter(
-            SpecDocument.workspace_id == workspace_id,
-            SpecDocument.document_type == document_type,
-        )
-        .first()
-    )
-    if doc is None:
-        doc = SpecDocument(workspace_id=workspace_id, document_type=document_type)
-        db.add(doc)
-        db.commit()
-        db.refresh(doc)
+    doc = get_or_create_document(db, workspace_id, document_type)
 
     author = payload.author or (str(subject_id) if subject_id else None)
     result = write_document_version(

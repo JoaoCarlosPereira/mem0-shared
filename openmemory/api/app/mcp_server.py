@@ -596,6 +596,148 @@ async def delete_all_memories() -> str:
         return f"Error deleting memories: {e}"
 
 
+# --------------------------------------------------------------------------- #
+# Tools de specs (Tarefa 7) — wrappers finos sobre os utilitários/router das
+# Tarefas 2/3/6. Cada tool segue o molde de add_memories: resolve hostname via
+# ContextVar, delega a lógica de domínio e NUNCA propaga exceção crua.
+# --------------------------------------------------------------------------- #
+@mcp.tool(description="Create (idempotently) or return a shared spec workspace for a project's task. Call this before writing PRD/TechSpec/Tasks documents. Idempotent by (project_id, slug) — calling twice with the same slug returns the existing workspace. Returns JSON with the workspace id, slug and status.")
+async def create_spec_workspace(project_id: str, slug: str, name: str) -> str:
+    try:
+        from app.routers.specs import WorkspaceResponse, get_or_create_workspace
+
+        hostname = resolve_hostname(user_id_var.get(None))
+        db = SessionLocal()
+        try:
+            ws, created = get_or_create_workspace(
+                db, project_id=project_id, slug=slug, name=name, created_by=hostname
+            )
+            out = WorkspaceResponse.model_validate(ws).model_dump(mode="json")
+            out["created"] = created
+            return json.dumps(out, default=str)
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="List spec workspaces of a project, each with a task-count summary per Kanban column. Use to discover existing workspaces before creating a new one.")
+async def list_spec_workspaces(project_id: str) -> str:
+    try:
+        from app.routers.specs import list_project_workspaces
+
+        db = SessionLocal()
+        try:
+            # Args explícitos: chamada direta (fora do FastAPI) não resolve os
+            # defaults Query(...) dos parâmetros do endpoint.
+            items = list_project_workspaces(
+                project_id, subject_type="user", subject_id=None, db=db
+            )
+            return json.dumps([i.model_dump(mode="json") for i in items], default=str)
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="Write a new version of a spec document (document_type = prd/techspec/tasks) in a workspace, using optimistic concurrency. Pass expected_version = the version you last read (omit/null only for the very first write). On a version conflict this returns JSON {conflict: true, expected_version, current_version, current_content} so you can re-read and retry — it NEVER overwrites silently.")
+async def write_spec_document(
+    workspace_id: str, document_type: str, content: str, expected_version: int | None = None
+) -> str:
+    try:
+        from app.models import DocumentOrigin, DocumentType, SpecWorkspace
+        from app.routers.specs import get_or_create_document
+        from app.utils.spec_versioning import write_document_version
+
+        hostname = resolve_hostname(user_id_var.get(None))
+        db = SessionLocal()
+        try:
+            ws_uuid = uuid.UUID(workspace_id)
+            dtype = DocumentType(document_type)
+            if db.query(SpecWorkspace).filter(SpecWorkspace.id == ws_uuid).first() is None:
+                return f"Error: workspace {workspace_id} não encontrado"
+
+            doc = get_or_create_document(db, ws_uuid, dtype)
+            result = write_document_version(
+                db, doc.id, content, expected_version, hostname, DocumentOrigin.mcp
+            )
+            if result.conflict:
+                return json.dumps(
+                    {
+                        "conflict": True,
+                        "expected_version": expected_version,
+                        "current_version": result.version,
+                        "current_content": result.current_content,
+                    },
+                    default=str,
+                )
+            return json.dumps(
+                {
+                    "conflict": False,
+                    "document_id": str(result.document_id),
+                    "version": result.version,
+                }
+            )
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="Read the current version and content of a spec document (document_type = prd/techspec/tasks) in a workspace. Call this to load the latest content and version BEFORE writing an update (pass that version as write_spec_document's expected_version).")
+async def read_spec_document(workspace_id: str, document_type: str) -> str:
+    try:
+        from app.models import DocumentType, SpecDocument
+
+        db = SessionLocal()
+        try:
+            ws_uuid = uuid.UUID(workspace_id)
+            dtype = DocumentType(document_type)
+            doc = (
+                db.query(SpecDocument)
+                .filter(
+                    SpecDocument.workspace_id == ws_uuid,
+                    SpecDocument.document_type == dtype,
+                )
+                .first()
+            )
+            if doc is None:
+                return json.dumps(
+                    {"found": False, "workspace_id": workspace_id, "document_type": dtype.value}
+                )
+            return json.dumps(
+                {
+                    "found": True,
+                    "document_id": str(doc.id),
+                    "document_type": dtype.value,
+                    "current_version": doc.current_version,
+                    "current_content": doc.current_content,
+                },
+                default=str,
+            )
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="Semantic search over COMPLETED specs (PRD/TechSpec/Tasks) across projects, to reuse prior knowledge when drafting new ones. `project` is an optional filter (soft). Returns a JSON list ranked by relevance; an empty list when nothing matches (never an error).")
+async def search_specs(query: str, project: str | None = None) -> str:
+    try:
+        from app.utils.spec_search import search_specs as _search_specs
+
+        requester_group = requester_group_for_mcp(user_id_var.get(None))
+        results = _search_specs(query, project_id=project, requester_group=requester_group)
+        return json.dumps({"results": results}, default=str)
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
 def _warn_invalid_mcp_hostname(raw_uid: str | None) -> None:
     if raw_uid and not is_plausible_hostname(str(raw_uid).strip()):
         logging.warning(
