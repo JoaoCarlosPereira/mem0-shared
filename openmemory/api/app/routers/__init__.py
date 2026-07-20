@@ -18,6 +18,7 @@ from .metrics import router as metrics_router
 from .mcp_oauth_compat import router as mcp_oauth_compat_router
 from .ops_metrics import router as ops_metrics_router
 from .provision import router as provision_router
+from .specs import router as specs_router
 from .stats import router as stats_router
 
 __all__ = [
@@ -42,4 +43,5 @@ __all__ = [
     "governance_schedule_router",
     "groups_router",
     "user_analytics_router",
+    "specs_router",
 ]
