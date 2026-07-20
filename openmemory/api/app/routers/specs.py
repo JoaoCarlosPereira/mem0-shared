@@ -30,6 +30,7 @@ from app.models import (
 )
 from app.utils.permissions import get_accessible_spec_workspace_ids
 from app.utils.projects import upsert_project
+from app.utils.spec_search import search_specs
 from app.utils.spec_versioning import write_document_version
 from app.utils.task_lock import claim_task, release_task, update_task_status
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -173,6 +174,19 @@ class CommentResponse(BaseModel):
     author: Optional[str] = None
     body: str
     created_at: Optional[datetime] = None
+
+
+class SpecSearchResult(BaseModel):
+    id: Optional[str] = None
+    score: Optional[float] = None
+    content: Optional[str] = None
+    project: Optional[str] = None
+    workspace_id: Optional[str] = None
+    document_type: Optional[str] = None
+    group_id: Optional[str] = None
+    owner: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -568,3 +582,16 @@ def create_comment(
     db.commit()
     db.refresh(comment)
     return comment
+
+
+# --------------------------------------------------------------------------- #
+# Busca semântica
+# --------------------------------------------------------------------------- #
+@router.get("/search", response_model=list[SpecSearchResult])
+def search_specs_endpoint(
+    q: str = Query(..., description="Consulta semântica"),
+    project_id: Optional[str] = Query(None, description="Filtro opcional por projeto"),
+    group: Optional[str] = Query(None, description="Grupo do solicitante (boost)"),
+) -> list[SpecSearchResult]:
+    """Busca semântica em specs concluídas, ordenada por relevância (ADR-006)."""
+    return search_specs(q, project_id=project_id, requester_group=group)
