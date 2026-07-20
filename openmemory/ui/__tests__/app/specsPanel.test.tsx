@@ -1,0 +1,95 @@
+import React from "react";
+import { render, screen } from "@testing-library/react";
+import { configureStore } from "@reduxjs/toolkit";
+import { Provider } from "react-redux";
+
+jest.mock("next/navigation", () => ({
+  useParams: () => ({ project: "mem0-shared" }),
+}));
+
+jest.mock("@/hooks/useSpecsApi", () => ({
+  useSpecsApi: jest.fn(() => ({})),
+}));
+
+import specsReducer, {
+  setProjectWorkspaces,
+  setSpecsLoading,
+  setSpecsError,
+} from "@/store/specsSlice";
+import ProjectSpecsPanel from "@/app/admin/specs/[project]/page";
+import type { WorkspaceSummary } from "@/types/specs";
+
+const wsA: WorkspaceSummary = {
+  id: "ws-aaa",
+  project_id: "mem0-shared",
+  slug: "feature-a",
+  name: "Feature A",
+  status: "ativo",
+  task_counts: { tasks: 2, em_andamento: 1 },
+};
+
+function makeStore() {
+  return configureStore({ reducer: { specs: specsReducer } });
+}
+
+function renderWith(store: ReturnType<typeof makeStore>) {
+  return render(
+    <Provider store={store}>
+      <ProjectSpecsPanel />
+    </Provider>,
+  );
+}
+
+describe("ProjectSpecsPanel", () => {
+  it("renderiza o cabeçalho do projeto", () => {
+    renderWith(makeStore());
+    expect(screen.getByText("Specs — mem0-shared")).toBeInTheDocument();
+  });
+
+  it("lista as Tarefas com progresso resumido por coluna", () => {
+    const store = makeStore();
+    store.dispatch(setProjectWorkspaces([wsA]));
+    renderWith(store);
+    expect(screen.getByText("Feature A")).toBeInTheDocument();
+    expect(screen.getByText("feature-a")).toBeInTheDocument();
+    // contagem por coluna
+    expect(screen.getByText(/Tasks:/)).toBeInTheDocument();
+    expect(screen.getByText(/Em andamento:/)).toBeInTheDocument();
+  });
+
+  it("link da Tarefa aponta para a rota do quadro (integração painel → quadro)", () => {
+    const store = makeStore();
+    store.dispatch(setProjectWorkspaces([wsA]));
+    renderWith(store);
+    const link = screen.getByText("Feature A").closest("a");
+    expect(link).toHaveAttribute(
+      "href",
+      "/admin/specs/mem0-shared/ws-aaa",
+    );
+  });
+
+  it("exibe carregando quando ainda não há dados", () => {
+    const store = makeStore();
+    store.dispatch(setSpecsLoading());
+    renderWith(store);
+    expect(screen.getByText("Carregando…")).toBeInTheDocument();
+  });
+
+  it("exibe estado vazio quando o projeto não tem Tarefas", () => {
+    const store = makeStore();
+    store.dispatch(setProjectWorkspaces([]));
+    renderWith(store);
+    expect(
+      screen.getByText("Nenhuma Tarefa neste projeto"),
+    ).toBeInTheDocument();
+  });
+
+  it("exibe erro quando o slice tem erro", () => {
+    const store = makeStore();
+    store.dispatch(setSpecsError("Falha ao listar workspaces"));
+    renderWith(store);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Falha ao listar workspaces",
+    );
+  });
+});
