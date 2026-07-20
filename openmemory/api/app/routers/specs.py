@@ -17,8 +17,10 @@ from uuid import UUID
 
 from app.database import get_db
 from app.models import (
+    CommentTargetType,
     DocumentOrigin,
     DocumentType,
+    SpecComment,
     SpecDocument,
     SpecDocumentVersion,
     SpecWorkspace,
@@ -29,6 +31,7 @@ from app.models import (
 from app.utils.permissions import get_accessible_spec_workspace_ids
 from app.utils.projects import upsert_project
 from app.utils.spec_versioning import write_document_version
+from app.utils.task_lock import claim_task, release_task, update_task_status
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func
@@ -130,6 +133,48 @@ class VersionResponse(BaseModel):
     created_at: Optional[datetime] = None
 
 
+class TaskCreate(BaseModel):
+    workspace_id: UUID
+    title: str
+    description: Optional[str] = None
+    branch_ref: Optional[str] = None
+
+
+class ClaimRequest(BaseModel):
+    claimant: str
+
+
+class ReleaseRequest(BaseModel):
+    actor: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class StatusPatchRequest(BaseModel):
+    expected_version: int
+    new_status: Optional[TaskCardStatus] = None
+    actor: Optional[str] = None
+    is_blocked: Optional[bool] = None
+    block_reason: Optional[str] = None
+
+
+class CommentCreate(BaseModel):
+    target_type: CommentTargetType
+    target_id: UUID
+    body: str
+    author: Optional[str] = None
+
+
+class CommentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    target_type: CommentTargetType
+    target_id: UUID
+    author: Optional[str] = None
+    body: str
+    created_at: Optional[datetime] = None
+
+
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
@@ -166,6 +211,33 @@ def _get_document_or_404(
     if doc is None:
         raise HTTPException(status_code=404, detail="Documento não encontrado")
     return doc
+
+
+def _get_task_or_404(db: Session, task_id: UUID) -> TaskCard:
+    task = db.query(TaskCard).filter(TaskCard.id == task_id).first()
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task não encontrada")
+    return task
+
+
+def _resolve_comment_target_workspace(
+    db: Session, target_type: CommentTargetType, target_id: UUID
+) -> UUID:
+    """Valida que o alvo existe e devolve o ``workspace_id`` para a checagem de acesso."""
+    if target_type == CommentTargetType.workspace:
+        ws = db.query(SpecWorkspace).filter(SpecWorkspace.id == target_id).first()
+        if ws is None:
+            raise HTTPException(status_code=404, detail="Alvo do comentário não encontrado")
+        return ws.id
+    if target_type == CommentTargetType.document:
+        doc = db.query(SpecDocument).filter(SpecDocument.id == target_id).first()
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Alvo do comentário não encontrado")
+        return doc.workspace_id
+    task = db.query(TaskCard).filter(TaskCard.id == target_id).first()
+    if task is None:
+        raise HTTPException(status_code=404, detail="Alvo do comentário não encontrado")
+    return task.workspace_id
 
 
 # --------------------------------------------------------------------------- #
@@ -362,3 +434,137 @@ def list_document_versions(
         .order_by(SpecDocumentVersion.version.asc())
         .all()
     )
+
+
+# --------------------------------------------------------------------------- #
+# Tasks
+# --------------------------------------------------------------------------- #
+@router.post("/tasks", response_model=TaskResponse, status_code=201)
+def create_task(
+    payload: TaskCreate,
+    subject_type: str = Query("user"),
+    subject_id: Optional[UUID] = Query(None),
+    db: Session = Depends(get_db),
+) -> TaskResponse:
+    """Cria uma task; nasce na coluna ``tasks`` (backlog)."""
+    _get_workspace_or_404(db, payload.workspace_id)
+    _assert_access(db, payload.workspace_id, subject_type, subject_id)
+
+    task = TaskCard(
+        workspace_id=payload.workspace_id,
+        title=payload.title,
+        description=payload.description,
+        branch_ref=payload.branch_ref,
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    return task
+
+
+@router.post("/tasks/{task_id}/claim", response_model=TaskResponse)
+def claim_task_endpoint(
+    task_id: UUID,
+    payload: ClaimRequest,
+    subject_type: str = Query("user"),
+    subject_id: Optional[UUID] = Query(None),
+    db: Session = Depends(get_db),
+) -> TaskResponse:
+    """Assume a task. 409 se já ativa com outro responsável (ADR-003)."""
+    task = _get_task_or_404(db, task_id)
+    _assert_access(db, task.workspace_id, subject_type, subject_id)
+
+    result = claim_task(db, task_id, payload.claimant)
+    if not result.claimed:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "claimed": False,
+                "current_assignee": result.current_assignee,
+                "version": result.version,
+            },
+        )
+    db.refresh(task)
+    return task
+
+
+@router.post("/tasks/{task_id}/release", response_model=TaskResponse)
+def release_task_endpoint(
+    task_id: UUID,
+    payload: ReleaseRequest,
+    subject_type: str = Query("user"),
+    subject_id: Optional[UUID] = Query(None),
+    db: Session = Depends(get_db),
+) -> TaskResponse:
+    """Libera a task manualmente: volta a ``tasks`` e limpa assignee/bloqueio."""
+    task = _get_task_or_404(db, task_id)
+    _assert_access(db, task.workspace_id, subject_type, subject_id)
+
+    release_task(db, task_id, payload.actor, payload.reason)
+    db.refresh(task)
+    return task
+
+
+@router.patch("/tasks/{task_id}/status", response_model=TaskResponse)
+def patch_task_status(
+    task_id: UUID,
+    payload: StatusPatchRequest,
+    subject_type: str = Query("user"),
+    subject_id: Optional[UUID] = Query(None),
+    db: Session = Depends(get_db),
+) -> TaskResponse:
+    """Muda a coluna e/ou o marcador de bloqueio com concorrência otimista.
+
+    ``new_status`` omitido mantém a coluna atual (usado para reportar bloqueio =
+    ``is_blocked=true`` sem mudar de coluna — ADR-007). 409 em conflito de versão.
+    """
+    task = _get_task_or_404(db, task_id)
+    _assert_access(db, task.workspace_id, subject_type, subject_id)
+
+    target_status = payload.new_status or task.status
+    result = update_task_status(
+        db,
+        task_id,
+        target_status,
+        payload.expected_version,
+        payload.actor,
+        is_blocked=payload.is_blocked,
+        block_reason=payload.block_reason,
+    )
+    if result.conflict:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "conflict": True,
+                "current_version": result.version,
+                "current_status": result.status,
+            },
+        )
+    db.refresh(task)
+    return task
+
+
+# --------------------------------------------------------------------------- #
+# Comentários
+# --------------------------------------------------------------------------- #
+@router.post("/comments", response_model=CommentResponse, status_code=201)
+def create_comment(
+    payload: CommentCreate,
+    subject_type: str = Query("user"),
+    subject_id: Optional[UUID] = Query(None),
+    db: Session = Depends(get_db),
+) -> CommentResponse:
+    """Adiciona comentário a workspace/documento/task (valida o alvo antes)."""
+    workspace_id = _resolve_comment_target_workspace(db, payload.target_type, payload.target_id)
+    _assert_access(db, workspace_id, subject_type, subject_id)
+
+    comment = SpecComment(
+        target_type=payload.target_type,
+        target_id=payload.target_id,
+        author=payload.author,
+        body=payload.body,
+    )
+    db.add(comment)
+    db.commit()
+    db.refresh(comment)
+    return comment

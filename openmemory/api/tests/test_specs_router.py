@@ -236,6 +236,185 @@ class TestAccessControl:
         assert r.status_code == 200
 
 
+def _create_task(client, workspace_id, title="Card", **extra):
+    body = {"workspace_id": workspace_id, "title": title, **extra}
+    return client.post("/api/v1/specs/tasks", json=body)
+
+
+class TestTaskLifecycle:
+    def test_cria_task_nasce_em_tasks(self, client):
+        ws = _create_ws(client).json()
+        r = _create_task(client, ws["id"])
+        assert r.status_code == 201
+        assert r.json()["status"] == "tasks"
+        assert r.json()["version"] == 1
+
+    def test_claim_task_disponivel_200(self, client):
+        ws = _create_ws(client).json()
+        task = _create_task(client, ws["id"]).json()
+        r = client.post(
+            f"/api/v1/specs/tasks/{task['id']}/claim", json={"claimant": "A"}
+        )
+        assert r.status_code == 200
+        assert r.json()["assignee"] == "A"
+        assert r.json()["status"] == "em_andamento"
+
+    def test_claim_task_ja_ativa_por_outro_409(self, client):
+        ws = _create_ws(client).json()
+        task = _create_task(client, ws["id"]).json()
+        client.post(f"/api/v1/specs/tasks/{task['id']}/claim", json={"claimant": "A"})
+        r = client.post(
+            f"/api/v1/specs/tasks/{task['id']}/claim", json={"claimant": "B"}
+        )
+        assert r.status_code == 409
+        assert r.json()["detail"]["current_assignee"] == "A"
+
+    def test_patch_status_transicao_invalida_422(self, client):
+        ws = _create_ws(client).json()
+        task = _create_task(client, ws["id"]).json()
+        r = client.patch(
+            f"/api/v1/specs/tasks/{task['id']}/status",
+            json={"new_status": "inexistente", "expected_version": 1},
+        )
+        assert r.status_code == 422
+
+    def test_patch_status_conflito_de_versao_409(self, client):
+        ws = _create_ws(client).json()
+        task = _create_task(client, ws["id"]).json()
+        r = client.patch(
+            f"/api/v1/specs/tasks/{task['id']}/status",
+            json={"new_status": "revisao_codigo", "expected_version": 99},
+        )
+        assert r.status_code == 409
+
+    def test_patch_bloqueio_sem_mudar_coluna(self, client):
+        ws = _create_ws(client).json()
+        task = _create_task(client, ws["id"]).json()
+        claimed = client.post(
+            f"/api/v1/specs/tasks/{task['id']}/claim", json={"claimant": "A"}
+        ).json()
+        # is_blocked=true mantendo a coluna
+        r = client.patch(
+            f"/api/v1/specs/tasks/{task['id']}/status",
+            json={
+                "expected_version": claimed["version"],
+                "is_blocked": True,
+                "block_reason": "dependência",
+            },
+        )
+        assert r.status_code == 200
+        assert r.json()["status"] == "em_andamento"
+        assert r.json()["is_blocked"] is True
+        assert r.json()["block_reason"] == "dependência"
+
+        # is_blocked=false limpa o marcador
+        r2 = client.patch(
+            f"/api/v1/specs/tasks/{task['id']}/status",
+            json={"expected_version": r.json()["version"], "is_blocked": False},
+        )
+        assert r2.status_code == 200
+        assert r2.json()["is_blocked"] is False
+        assert r2.json()["block_reason"] is None
+
+    def test_release_volta_para_tasks(self, client):
+        ws = _create_ws(client).json()
+        task = _create_task(client, ws["id"]).json()
+        client.post(f"/api/v1/specs/tasks/{task['id']}/claim", json={"claimant": "A"})
+        r = client.post(
+            f"/api/v1/specs/tasks/{task['id']}/release", json={"actor": "admin"}
+        )
+        assert r.status_code == 200
+        assert r.json()["status"] == "tasks"
+        assert r.json()["assignee"] is None
+
+
+class TestComments:
+    def test_comment_em_workspace(self, client):
+        ws = _create_ws(client).json()
+        r = client.post(
+            "/api/v1/specs/comments",
+            json={
+                "target_type": "workspace",
+                "target_id": ws["id"],
+                "body": "olá",
+                "author": "joao",
+            },
+        )
+        assert r.status_code == 201
+        assert r.json()["body"] == "olá"
+
+    def test_comment_target_inexistente_404(self, client):
+        r = client.post(
+            "/api/v1/specs/comments",
+            json={
+                "target_type": "task",
+                "target_id": str(uuid.uuid4()),
+                "body": "x",
+            },
+        )
+        assert r.status_code == 404
+
+
+class TestEndToEndLifecycle:
+    def test_ciclo_completo_de_tarefa(self, client, factory):
+        from app.models import SpecAuditLog, TaskStatusHistory
+
+        ws = _create_ws(client).json()
+        # PRD v1
+        client.put(
+            f"/api/v1/specs/workspaces/{ws['id']}/documents/prd",
+            json={"content": "PRD v1", "expected_version": None},
+        )
+        # PRD v2 com expected_version errado -> 409
+        bad = client.put(
+            f"/api/v1/specs/workspaces/{ws['id']}/documents/prd",
+            json={"content": "PRD v2", "expected_version": 0},
+        )
+        assert bad.status_code == 409
+
+        # cria task (nasce em tasks)
+        task = _create_task(client, ws["id"]).json()
+        assert task["status"] == "tasks"
+
+        # claim ator A
+        claimed = client.post(
+            f"/api/v1/specs/tasks/{task['id']}/claim", json={"claimant": "A"}
+        ).json()
+        assert claimed["status"] == "em_andamento"
+
+        # segunda tentativa por B -> 409, assignee continua A
+        conflict = client.post(
+            f"/api/v1/specs/tasks/{task['id']}/claim", json={"claimant": "B"}
+        )
+        assert conflict.status_code == 409
+
+        # PATCH status para concluido (ator A)
+        done = client.patch(
+            f"/api/v1/specs/tasks/{task['id']}/status",
+            json={
+                "new_status": "concluido",
+                "expected_version": claimed["version"],
+                "actor": "A",
+            },
+        )
+        assert done.status_code == 200
+        assert done.json()["status"] == "concluido"
+
+        # verifica histórico (2 entradas) e auditoria
+        s = factory()
+        try:
+            hist = (
+                s.query(TaskStatusHistory)
+                .filter_by(task_id=uuid.UUID(task["id"]))
+                .count()
+            )
+            audit = s.query(SpecAuditLog).count()
+        finally:
+            s.close()
+        assert hist == 2  # tasks->em_andamento, em_andamento->concluido
+        assert audit >= 3  # write_spec_document + claim_task + update_task_status
+
+
 class TestProjectPanel:
     def test_painel_agrega_contagem_por_status(self, client, factory):
         ws1 = _create_ws(client, slug="ws-1").json()
