@@ -9,6 +9,7 @@ import adminReducer from './adminSlice';
 import queuesReducer from './queuesSlice';
 import backupReducer from './backupSlice';
 import metricsReducer from './metricsSlice';
+import specsReducer from './specsSlice';
 
 export const store = configureStore({
   reducer: {
@@ -22,6 +23,7 @@ export const store = configureStore({
     queues: queuesReducer,
     backup: backupReducer,
     metrics: metricsReducer,
+    specs: specsReducer,
   },
 });
 

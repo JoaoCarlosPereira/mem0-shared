@@ -592,6 +592,244 @@ class TokenUsageLog(Base):
     )
 
 
+# ---------------------------------------------------------------------------
+# Espaço compartilhado de especificações (shared-specs / task_01 / ADR-004)
+#
+# Hierarquia ``Project → SpecWorkspace → (SpecDocument, TaskCard)``. As classes
+# abaixo seguem a mesma convenção do restante do arquivo (id ``UUID`` com
+# ``default=lambda: uuid.uuid4()``, par ``created_at``/``updated_at`` com
+# ``get_current_utc_time``) e espelham ``MemoryStatusHistory`` (histórico) e
+# ``LinkAuditLog`` (auditoria). O controle de acesso reaproveita ``AccessControl``
+# com ``object_type="spec_workspace"`` — sem tabela nova (ADR-004).
+# ---------------------------------------------------------------------------
+
+
+class SpecWorkspaceStatus(enum.Enum):
+    """Ciclo de vida de um ``SpecWorkspace`` (a "Tarefa" do PRD)."""
+    planejamento = "planejamento"
+    ativo = "ativo"
+    concluido = "concluido"
+    arquivado = "arquivado"
+
+
+class TaskCardStatus(enum.Enum):
+    """Colunas do quadro Kanban (ADR-001/ADR-007).
+
+    ``tasks`` = disponível/backlog. O estado "bloqueado" NÃO é um status: é
+    representado pelos campos ortogonais ``is_blocked``/``block_reason`` em
+    ``TaskCard``, mantendo a coluna atual do card.
+    """
+    tasks = "tasks"
+    em_andamento = "em_andamento"
+    revisao_codigo = "revisao_codigo"
+    fase_teste = "fase_teste"
+    concluido = "concluido"
+
+
+class DocumentType(enum.Enum):
+    """Tipo de documento de spec dentro de um workspace."""
+    prd = "prd"
+    techspec = "techspec"
+    tasks = "tasks"
+
+
+class DocumentOrigin(enum.Enum):
+    """Origem de uma gravação/ação de spec (MCP, UI ou REST)."""
+    mcp = "mcp"
+    ui = "ui"
+    api = "api"
+
+
+class CommentTargetType(enum.Enum):
+    """Alvo polimórfico de um ``SpecComment``."""
+    workspace = "workspace"
+    document = "document"
+    task = "task"
+
+
+class SpecWorkspace(Base):
+    """Espaço de trabalho de specs de uma Tarefa, filho de ``Project`` (ADR-004).
+
+    Uma Tarefa é sempre filha de um Projeto (1:N). ``project_id`` referencia a
+    PK textual de ``projects`` (``projects.name``) — o catálogo estável já usado
+    para filtrar memórias — sem estender ou substituir ``Project``.
+    """
+    __tablename__ = "spec_workspaces"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    project_id = Column(String, ForeignKey("projects.name"), nullable=False, index=True)
+    slug = Column(String, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    status = Column(
+        Enum(SpecWorkspaceStatus),
+        nullable=False,
+        default=SpecWorkspaceStatus.planejamento,
+        server_default=SpecWorkspaceStatus.planejamento.value,
+        index=True,
+    )
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=get_current_utc_time, index=True)
+    updated_at = Column(DateTime,
+                        default=get_current_utc_time,
+                        onupdate=get_current_utc_time)
+
+    project = relationship("Project")
+    documents = relationship("SpecDocument", back_populates="workspace")
+    tasks = relationship("TaskCard", back_populates="workspace")
+
+    __table_args__ = (
+        sa.UniqueConstraint("project_id", "slug", name="uq_spec_workspace_project_slug"),
+    )
+
+
+class SpecDocument(Base):
+    """Documento de spec (PRD/TechSpec/Tasks) — um por tipo dentro do workspace.
+
+    ``current_version`` é um inteiro monotônico incrementado a cada gravação
+    bem-sucedida (base do controle de concorrência otimista — ADR-005) e
+    ``current_content`` guarda uma cópia da versão vigente para leitura rápida;
+    o histórico completo por snapshot vive em ``SpecDocumentVersion``.
+    """
+    __tablename__ = "spec_documents"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    workspace_id = Column(UUID, ForeignKey("spec_workspaces.id"), nullable=False, index=True)
+    document_type = Column(Enum(DocumentType), nullable=False)
+    # 0 = documento criado mas sem versão gravada ainda; a primeira gravação
+    # (``expected_version=None``) o leva a 1 (ver ``app.utils.spec_versioning``).
+    current_version = Column(Integer, nullable=False, default=0, server_default="0")
+    current_content = Column(Text, nullable=True)
+    updated_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=get_current_utc_time, index=True)
+    updated_at = Column(DateTime,
+                        default=get_current_utc_time,
+                        onupdate=get_current_utc_time)
+
+    workspace = relationship("SpecWorkspace", back_populates="documents")
+    versions = relationship("SpecDocumentVersion", back_populates="document")
+
+    __table_args__ = (
+        sa.UniqueConstraint("workspace_id", "document_type", name="uq_spec_document_workspace_type"),
+    )
+
+
+class SpecDocumentVersion(Base):
+    """Snapshot completo de uma versão de ``SpecDocument`` (ADR-004).
+
+    Cada gravação insere uma nova linha com o conteúdo completo, nunca
+    sobrescrevendo a anterior. ``(document_id, version)`` é único.
+    """
+    __tablename__ = "spec_document_versions"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    document_id = Column(UUID, ForeignKey("spec_documents.id"), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    content = Column(Text, nullable=False)
+    author = Column(String, nullable=True)
+    origin = Column(Enum(DocumentOrigin), nullable=False)
+    created_at = Column(DateTime, default=get_current_utc_time, index=True)
+
+    document = relationship("SpecDocument", back_populates="versions")
+
+    __table_args__ = (
+        sa.UniqueConstraint("document_id", "version", name="uq_spec_version_document_version"),
+    )
+
+
+class TaskCard(Base):
+    """Card de tarefa técnica do quadro Kanban (ADR-001/ADR-007).
+
+    ``status`` é a coluna atual (``tasks``=backlog). ``is_blocked``/``block_reason``
+    são ortogonais à coluna. ``version`` é o inteiro monotônico usado para
+    impedir que uma task em andamento seja reivindicada por outro ator (ADR-005).
+    """
+    __tablename__ = "task_cards"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    workspace_id = Column(UUID, ForeignKey("spec_workspaces.id"), nullable=False, index=True)
+    title = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    status = Column(
+        Enum(TaskCardStatus),
+        nullable=False,
+        default=TaskCardStatus.tasks,
+        server_default=TaskCardStatus.tasks.value,
+        index=True,
+    )
+    is_blocked = Column(Boolean, nullable=False, default=False, server_default=sa.false())
+    block_reason = Column(Text, nullable=True)
+    assignee = Column(String, nullable=True, index=True)
+    version = Column(Integer, nullable=False, default=1, server_default="1")
+    last_activity_at = Column(DateTime, nullable=True, index=True)
+    branch_ref = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=get_current_utc_time, index=True)
+    updated_at = Column(DateTime,
+                        default=get_current_utc_time,
+                        onupdate=get_current_utc_time)
+
+    workspace = relationship("SpecWorkspace", back_populates="tasks")
+
+    __table_args__ = (
+        Index("idx_task_card_workspace_status", "workspace_id", "status"),
+    )
+
+
+class TaskStatusHistory(Base):
+    """Histórico de mudança de coluna de uma ``TaskCard`` (espelha ``MemoryStatusHistory``).
+
+    ``changed_by`` é o identificador textual do ator (hostname do agente ou
+    e-mail do usuário), coerente com o restante do domínio de specs.
+    """
+    __tablename__ = "task_status_history"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    task_id = Column(UUID, ForeignKey("task_cards.id"), nullable=False, index=True)
+    old_status = Column(Enum(TaskCardStatus), nullable=False, index=True)
+    new_status = Column(Enum(TaskCardStatus), nullable=False, index=True)
+    changed_by = Column(String, nullable=True, index=True)
+    changed_at = Column(DateTime, default=get_current_utc_time, index=True)
+
+    task = relationship("TaskCard")
+
+    __table_args__ = (
+        Index("idx_task_history_task_status", "task_id", "new_status"),
+        Index("idx_task_history_actor_time", "changed_by", "changed_at"),
+    )
+
+
+class SpecAuditLog(Base):
+    """Trilha auditável de ações no espaço de specs (espelha ``LinkAuditLog``).
+
+    Uma linha por ação (``action`` livre) com o ator, ``detail`` em JSON e a
+    ``origin`` (MCP/UI/API). Reaproveitável diretamente como fonte de
+    observabilidade.
+    """
+    __tablename__ = "spec_audit_logs"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    workspace_id = Column(UUID, ForeignKey("spec_workspaces.id"), nullable=False, index=True)
+    actor = Column(String, nullable=True, index=True)
+    action = Column(String, nullable=False, index=True)
+    detail = Column(JSON, default=dict)
+    origin = Column(Enum(DocumentOrigin), nullable=True)
+    created_at = Column(DateTime, default=get_current_utc_time, index=True)
+
+    workspace = relationship("SpecWorkspace")
+
+
+class SpecComment(Base):
+    """Comentário em workspace/documento/task (referência polimórfica).
+
+    ``target_id`` referencia a PK do alvo indicado por ``target_type`` sem FK
+    física (polimórfico), à semelhança de ``AccessControl.object_id``.
+    """
+    __tablename__ = "spec_comments"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    target_type = Column(Enum(CommentTargetType), nullable=False, index=True)
+    target_id = Column(UUID, nullable=False, index=True)
+    author = Column(String, nullable=True)
+    body = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=get_current_utc_time, index=True)
+
+    __table_args__ = (
+        Index("idx_spec_comment_target", "target_type", "target_id"),
+    )
+
+
 def categorize_memory(memory: Memory, db: Session) -> None:
     """Categorize a memory using OpenAI and store the categories in the database."""
     try:

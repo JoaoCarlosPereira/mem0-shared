@@ -37,8 +37,10 @@ from app.routers import (
     mcp_oauth_compat_router,
     ops_metrics_router,
     provision_router,
+    specs_router,
     stats_router,
 )
+from app.workers.spec_task_timeout_worker import spec_task_timeout_worker
 from app.workers.write_worker import embedded_worker_enabled, write_worker
 from app.utils.logging_context import install_structured_logging
 from app.utils.tracing import configure_tracing
@@ -135,6 +137,7 @@ app.include_router(governance_router)
 app.include_router(governance_project_merge_router)
 app.include_router(governance_schedule_router)
 app.include_router(groups_router)
+app.include_router(specs_router)
 app.include_router(user_analytics_router)
 app.include_router(memories_router)
 app.include_router(apps_router)
@@ -162,9 +165,13 @@ async def _start_write_worker():
     log_write_guard_startup()
     if embedded_worker_enabled():
         write_worker.start()
+    # Liberação automática de tasks travadas por timeout (task_05 / ADR-007),
+    # iniciada no mesmo startup do write_worker (não como serviço Docker próprio).
+    spec_task_timeout_worker.start()
 
 
 @app.on_event("shutdown")
 async def _stop_write_worker():
     if embedded_worker_enabled():
         await write_worker.stop()
+    await spec_task_timeout_worker.stop()

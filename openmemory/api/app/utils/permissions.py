@@ -1,7 +1,7 @@
-from typing import Optional
+from typing import Optional, Set
 from uuid import UUID
 
-from app.models import App, Memory, MemoryState
+from app.models import AccessControl, App, Memory, MemoryState
 from sqlalchemy.orm import Session
 
 
@@ -51,3 +51,51 @@ def check_memory_access_permissions(
 
     # Check if memory is in the accessible set
     return memory.id in accessible_memory_ids
+
+
+def get_accessible_spec_workspace_ids(
+    db: Session,
+    subject_type: str,
+    subject_id: Optional[UUID],
+) -> Optional[Set[UUID]]:
+    """Conjunto de ``SpecWorkspace`` acessíveis por um sujeito (ADR-004).
+
+    Reaproveita o mesmo padrão de resolução allow/deny de
+    ``get_accessible_memory_ids``, agora sobre ``object_type="spec_workspace"``:
+
+    - Sem nenhuma regra para o sujeito -> ``None`` (todos os workspaces são
+      acessíveis, comportamento aberto por padrão como nas memórias).
+    - Regra ``allow`` sem ``object_id`` -> ``None`` (acesso a todos).
+    - Regra ``deny`` sem ``object_id`` -> ``set()`` (nenhum acessível).
+    - Caso contrário, retorna o conjunto de ``allow`` menos os ``deny``.
+    """
+    rules = (
+        db.query(AccessControl)
+        .filter(
+            AccessControl.subject_type == subject_type,
+            AccessControl.subject_id == subject_id,
+            AccessControl.object_type == "spec_workspace",
+        )
+        .all()
+    )
+
+    if not rules:
+        return None
+
+    allowed_ids: Set[UUID] = set()
+    denied_ids: Set[UUID] = set()
+    for rule in rules:
+        if rule.effect == "allow":
+            if rule.object_id:
+                allowed_ids.add(rule.object_id)
+            else:
+                return None
+        elif rule.effect == "deny":
+            if rule.object_id:
+                denied_ids.add(rule.object_id)
+            else:
+                return set()
+
+    if allowed_ids:
+        allowed_ids -= denied_ids
+    return allowed_ids
