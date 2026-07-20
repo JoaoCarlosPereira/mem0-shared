@@ -100,7 +100,7 @@ def upgrade() -> None:
                 _enum(_DOCUMENT_TYPE_VALUES, "documenttype", is_pg),
                 nullable=False,
             ),
-            sa.Column("current_version", sa.Integer(), nullable=False, server_default="1"),
+            sa.Column("current_version", sa.Integer(), nullable=False, server_default="0"),
             sa.Column("current_content", sa.Text(), nullable=True),
             sa.Column("updated_by", sa.String(), nullable=True),
             sa.Column("created_at", sa.DateTime(), nullable=True),

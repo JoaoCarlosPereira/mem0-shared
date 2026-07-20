@@ -693,7 +693,9 @@ class SpecDocument(Base):
     id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
     workspace_id = Column(UUID, ForeignKey("spec_workspaces.id"), nullable=False, index=True)
     document_type = Column(Enum(DocumentType), nullable=False)
-    current_version = Column(Integer, nullable=False, default=1, server_default="1")
+    # 0 = documento criado mas sem versão gravada ainda; a primeira gravação
+    # (``expected_version=None``) o leva a 1 (ver ``app.utils.spec_versioning``).
+    current_version = Column(Integer, nullable=False, default=0, server_default="0")
     current_content = Column(Text, nullable=True)
     updated_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=get_current_utc_time, index=True)
