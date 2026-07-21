@@ -9,7 +9,11 @@ MODO ÚNICO — produção/escala (docker-compose.scale.yml): PostgreSQL + PgBou
 Pronto para um time. (O antigo modo "local-first" foi removido.)
 
 Faz, ponta a ponta:
-  1. Pré-requisitos (Docker + Docker Compose v2) e arquivos .env.
+  1. Pré-requisitos (Docker + Docker Compose v2) e arquivos .env. Se o Docker ou
+     o plugin compose estiverem ausentes, oferece instalá-los automaticamente
+     (Linux via get.docker.com/gerenciador de pacote; macOS via Homebrew;
+     Windows via winget) — pergunta [s/N] no modo interativo e instala direto
+     com --yes.
   2. Resolve LLM + embedder INDEPENDENTES (Ollama local e/ou API remota), testando
      a conexão das APIs; ajusta MEM0_LOCAL_ONLY conforme o egress.
   3. Coleta segredos (PostgreSQL/Grafana/MinIO/API_KEY/auth de equipe) e o login
@@ -62,6 +66,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -96,6 +101,215 @@ def have_docker_compose():
     r = run(["docker", "compose", "version"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return r.returncode == 0
+
+
+def docker_usable():
+    """True se o daemon Docker responde para o usuário atual (docker info)."""
+    r = run(["docker", "info"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return r.returncode == 0
+
+
+# --------------------------------------------------------------------------- #
+# Instalação automática de dependências (Docker + plugin compose)
+# --------------------------------------------------------------------------- #
+def _confirm_install(prompt, args, interactive):
+    """Consentimento para instalar uma dependência.
+
+    --yes instala automaticamente (sem perguntar). Interativo: pergunta [s/N]
+    (default N). Não-interativo sem --yes: nega (não há como perguntar).
+    """
+    if args.yes:
+        ok(f"{prompt} (instalação automática — modo --yes)")
+        return True
+    if not interactive:
+        return False
+    try:
+        resp = input(f"  {prompt} [s/N]: ").strip().lower()
+    except EOFError:
+        return False
+    return resp in ("s", "sim", "y", "yes")
+
+
+def _maybe_sudo(cmd):
+    """Prefixa 'sudo' em comandos privilegiados fora do Windows quando o usuário
+    não é root e o sudo está disponível."""
+    if os.name == "nt":
+        return cmd
+    is_root = hasattr(os, "geteuid") and os.geteuid() == 0
+    if not is_root and shutil.which("sudo"):
+        return ["sudo", *cmd]
+    return cmd
+
+
+def _install_docker_linux_pkg():
+    """Fallback: instala Docker + plugin compose via gerenciador de pacote."""
+    managers = (
+        ("apt-get", ([["apt-get", "update"],
+                      ["apt-get", "install", "-y", "docker.io", "docker-compose-plugin"]])),
+        ("dnf", ([["dnf", "install", "-y", "docker", "docker-compose-plugin"]])),
+        ("pacman", ([["pacman", "-Sy", "--noconfirm", "docker", "docker-compose"]])),
+        ("zypper", ([["zypper", "install", "-y", "docker", "docker-compose"]])),
+    )
+    for exe, steps in managers:
+        if not shutil.which(exe):
+            continue
+        log(f"Instalando o Docker via {exe}")
+        for step in steps:
+            if run(_maybe_sudo(step)).returncode != 0:
+                return False
+        if shutil.which("systemctl"):
+            run(_maybe_sudo(["systemctl", "enable", "--now", "docker"]))
+        return True
+    warn("Nenhum gerenciador de pacote conhecido (apt/dnf/pacman/zypper) para "
+         "instalar o Docker.")
+    return False
+
+
+def _install_docker_linux():
+    """Instala o Docker no Linux via script oficial get.docker.com (com fallback
+    para o gerenciador de pacote). Habilita o serviço e adiciona o usuário ao
+    grupo 'docker' (efetivo após novo login)."""
+    script = Path(tempfile.gettempdir()) / "get-docker.sh"
+    if shutil.which("curl"):
+        dl = ["curl", "-fsSL", "https://get.docker.com", "-o", str(script)]
+    elif shutil.which("wget"):
+        dl = ["wget", "-qO", str(script), "https://get.docker.com"]
+    else:
+        warn("Nem curl nem wget disponíveis para baixar get.docker.com — "
+             "tentando o gerenciador de pacote.")
+        return _install_docker_linux_pkg()
+
+    log("Baixando o script oficial de instalação (get.docker.com)")
+    if run(dl).returncode != 0:
+        warn("Falha ao baixar o script get.docker.com — tentando o gerenciador "
+             "de pacote.")
+        return _install_docker_linux_pkg()
+
+    log("Executando o script de instalação do Docker (pode pedir a senha do sudo)")
+    # O script detecta root/sudo sozinho para os passos privilegiados.
+    if run(["sh", str(script)]).returncode != 0:
+        warn("O script get.docker.com falhou — tentando o gerenciador de pacote.")
+        return _install_docker_linux_pkg()
+
+    if shutil.which("systemctl"):
+        run(_maybe_sudo(["systemctl", "enable", "--now", "docker"]))
+    user = os.environ.get("USER") or ""
+    if user and user != "root" and shutil.which("usermod"):
+        run(_maybe_sudo(["usermod", "-aG", "docker", user]))
+        warn(f"Usuário '{user}' adicionado ao grupo 'docker' — faça logout/login "
+             "(ou 'newgrp docker') para usar o Docker sem sudo.")
+    return True
+
+
+def _install_docker_macos():
+    """Instala o Docker Desktop no macOS via Homebrew (cask)."""
+    if not shutil.which("brew"):
+        warn("Homebrew não encontrado. Instale o Docker Desktop manualmente: "
+             "https://www.docker.com/products/docker-desktop/ (ou instale o "
+             "Homebrew antes: https://brew.sh).")
+        return False
+    log("Instalando o Docker Desktop no macOS (brew install --cask docker)")
+    if run(["brew", "install", "--cask", "docker"]).returncode != 0:
+        return False
+    run(["open", "-a", "Docker"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    warn("Docker Desktop instalado. Abra o app Docker uma vez para iniciar o "
+         "daemon e rode o instalador novamente.")
+    return True
+
+
+def _install_docker_windows():
+    """Instala o Docker Desktop no Windows via winget."""
+    if not shutil.which("winget"):
+        warn("winget não encontrado. Instale o Docker Desktop manualmente: "
+             "https://www.docker.com/products/docker-desktop/")
+        return False
+    log("Instalando o Docker Desktop no Windows (winget)")
+    cmd = ["winget", "install", "-e", "--id", "Docker.DockerDesktop",
+           "--accept-package-agreements", "--accept-source-agreements"]
+    if run(cmd).returncode != 0:
+        return False
+    warn("Docker Desktop instalado. Pode ser necessário reiniciar o Windows e "
+         "iniciar o Docker Desktop; depois rode o instalador novamente.")
+    return True
+
+
+def install_docker():
+    """Tenta instalar o Docker na plataforma atual. Retorna True se o comando de
+    instalação concluiu (o daemon ainda pode exigir login/reboot/start)."""
+    plat = sys.platform
+    if plat.startswith("linux"):
+        return _install_docker_linux()
+    if plat == "darwin":
+        return _install_docker_macos()
+    if plat in ("win32", "cygwin"):
+        return _install_docker_windows()
+    warn(f"Plataforma '{plat}' não suportada para instalação automática do Docker.")
+    return False
+
+
+def install_compose_plugin():
+    """Instala o plugin 'docker compose' v2. No Linux, via gerenciador de pacote;
+    no macOS/Windows ele já vem no Docker Desktop."""
+    if not sys.platform.startswith("linux"):
+        warn("No macOS/Windows o Docker Compose vem junto do Docker Desktop — "
+             "instale/atualize o Docker Desktop.")
+        return False
+    managers = (
+        ("apt-get", ["apt-get", "install", "-y", "docker-compose-plugin"]),
+        ("dnf", ["dnf", "install", "-y", "docker-compose-plugin"]),
+        ("pacman", ["pacman", "-Sy", "--noconfirm", "docker-compose"]),
+        ("zypper", ["zypper", "install", "-y", "docker-compose"]),
+    )
+    for exe, step in managers:
+        if not shutil.which(exe):
+            continue
+        log(f"Instalando o plugin docker compose via {exe}")
+        if exe == "apt-get":
+            run(_maybe_sudo(["apt-get", "update"]))
+        return run(_maybe_sudo(step)).returncode == 0
+    warn("Nenhum gerenciador de pacote conhecido para instalar o plugin compose.")
+    return False
+
+
+def ensure_docker(args, interactive):
+    """Garante o Docker instalado e o daemon acessível; instala se ausente
+    (com consentimento). Aborta com mensagem clara se não conseguir."""
+    if not shutil.which("docker"):
+        warn("Docker não encontrado nesta máquina.")
+        if not _confirm_install("Instalar o Docker automaticamente agora?",
+                                 args, interactive):
+            die("Docker não encontrado. Instale o Docker e rode novamente "
+                "(ou use --yes para instalar automaticamente).")
+        if not install_docker():
+            die("Falha ao instalar o Docker automaticamente. Instale manualmente "
+                "e rode novamente.")
+        if not shutil.which("docker"):
+            die("Docker instalado, mas o comando 'docker' ainda não está no PATH. "
+                "Reabra o terminal (ou reinicie / inicie o Docker Desktop) e rode "
+                "o instalador de novo.")
+        ok("Docker instalado.")
+        if not docker_usable():
+            die("Docker instalado, mas o daemon ainda não está acessível para este "
+                "usuário. No Linux, faça logout/login para aplicar o grupo 'docker' "
+                "(ou rode com sudo); no macOS/Windows, inicie o Docker Desktop e "
+                "aguarde o daemon subir. Depois rode o instalador novamente.")
+
+
+def ensure_docker_compose_installed(args, interactive):
+    """Garante o plugin 'docker compose' v2; instala se ausente (com consentimento)."""
+    if have_docker_compose():
+        return
+    warn("Plugin 'docker compose' v2 não encontrado.")
+    if not _confirm_install("Instalar o plugin docker compose agora?",
+                            args, interactive):
+        die("Docker Compose v2 não encontrado (use 'docker compose').")
+    if not install_compose_plugin() or not have_docker_compose():
+        die("Não foi possível instalar/detectar o plugin docker compose "
+            "automaticamente. Instale o 'docker-compose-plugin' (ou o Docker "
+            "Desktop) manualmente e rode novamente.")
+    ok("Plugin docker compose instalado.")
 
 
 def detect_lan_ip():
@@ -849,10 +1063,9 @@ def run_update(args):
 def run_update_entry(args):
     """Valida pré-requisitos e dispara a atualização (produção — único modo)."""
     log("Verificando pré-requisitos (atualização)")
-    if not shutil.which("docker"):
-        die("Docker não encontrado. Instale o Docker.")
-    if not have_docker_compose():
-        die("Docker Compose v2 não encontrado (use 'docker compose').")
+    prereq_interactive = sys.stdin.isatty()
+    ensure_docker(args, prereq_interactive)
+    ensure_docker_compose_installed(args, prereq_interactive)
 
     api_env = COMPOSE_DIR / "api" / ".env"
     compose_env = COMPOSE_DIR / ".env"
@@ -1385,10 +1598,9 @@ def main(argv=None):
 
     # 1. Pré-requisitos -------------------------------------------------------
     log("Verificando pré-requisitos")
-    if not shutil.which("docker"):
-        die("Docker não encontrado. Instale o Docker.")
-    if not have_docker_compose():
-        die("Docker Compose v2 não encontrado (use 'docker compose').")
+    prereq_interactive = sys.stdin.isatty()
+    ensure_docker(args, prereq_interactive)
+    ensure_docker_compose_installed(args, prereq_interactive)
     if not COMPOSE_DIR.is_dir() or not (COMPOSE_DIR / SCALE_COMPOSE).is_file():
         die(f"{SCALE_COMPOSE} não encontrado em {COMPOSE_DIR}.")
     ok("Docker e Docker Compose v2 disponíveis (modo: produção — único).")
