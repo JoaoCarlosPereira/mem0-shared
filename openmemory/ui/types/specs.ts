@@ -46,6 +46,8 @@ export interface SpecDocument {
   current_version: number;
   current_content?: string | null;
   updated_by?: string | null;
+  updated_by_display_name?: string | null;
+  updated_by_avatar_url?: string | null;
   updated_at?: string | null;
 }
 
@@ -58,6 +60,8 @@ export interface TaskCard {
   is_blocked: boolean;
   block_reason?: string | null;
   assignee?: string | null;
+  assignee_display_name?: string | null;
+  assignee_avatar_url?: string | null;
   version: number;
   last_activity_at?: string | null;
   branch_ref?: string | null;

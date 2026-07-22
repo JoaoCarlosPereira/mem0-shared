@@ -161,3 +161,124 @@ def enrich_actor_items(
             display_name_key=display_name_key,
             avatar_url_key=avatar_url_key,
         )
+
+
+def _identity_lookup_key(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    key = str(raw).strip()
+    return key or None
+
+
+def resolve_actor_identities_with_db(
+    db: Session,
+    actors: Iterable[Optional[str]],
+) -> dict[str, CreatorIdentity]:
+    """Resolve assignee/author keys to linked person display info.
+
+    Accepts machine hostnames (preferred), e-mails, ``User.user_id``, or
+    ``User.id`` (UUID string). Map keys include the original actor string and
+    normalized hostname/e-mail variants so callers can look up either form.
+    Best-effort: never raises.
+    """
+    from uuid import UUID
+
+    from app.models import User
+
+    raw_keys = []
+    seen: set[str] = set()
+    for raw in actors:
+        key = _identity_lookup_key(raw)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        raw_keys.append(key)
+    if not raw_keys:
+        return {}
+
+    result: dict[str, CreatorIdentity] = {}
+
+    try:
+        host_map = resolve_creator_identities_with_db(db, raw_keys)
+        for raw in raw_keys:
+            identity = identity_for_hostname(raw, host_map)
+            if identity is None:
+                continue
+            result[raw] = identity
+            result[resolve_hostname(raw)] = identity
+
+        remaining = [k for k in raw_keys if k not in result]
+        if not remaining:
+            return result
+
+        emails: list[str] = []
+        user_ids: list[str] = []
+        uuids: list[UUID] = []
+        for key in remaining:
+            try:
+                uuids.append(UUID(key))
+                continue
+            except ValueError:
+                pass
+            if "@" in key:
+                emails.append(key.lower())
+            else:
+                user_ids.append(key)
+
+        from sqlalchemy import func as sa_func
+        from sqlalchemy import or_
+
+        clauses = []
+        if emails:
+            clauses.append(sa_func.lower(User.email).in_(emails))
+        if user_ids:
+            clauses.append(User.user_id.in_(user_ids))
+        if uuids:
+            clauses.append(User.id.in_(uuids))
+
+        users: list[User] = []
+        if clauses:
+            users = db.query(User).filter(or_(*clauses)).all()
+
+        # Deduplicate by id while registering all lookup aliases.
+        seen_user_ids: set[Any] = set()
+        for user in users:
+            if user.id in seen_user_ids:
+                continue
+            seen_user_ids.add(user.id)
+            identity = CreatorIdentity(
+                display_name=user.display_name or user.name,
+                avatar_url=user.avatar_url,
+            )
+            result[str(user.id)] = identity
+            if user.user_id:
+                result[user.user_id] = identity
+            if user.email:
+                result[user.email] = identity
+                result[user.email.lower()] = identity
+
+        for raw in remaining:
+            if raw in result:
+                continue
+            lowered = raw.lower()
+            if lowered in result:
+                result[raw] = result[lowered]
+    except Exception:  # noqa: BLE001 - enrichment is best-effort on read paths
+        return result
+
+    return result
+
+
+def identity_for_actor(
+    actor: Optional[str],
+    identities: dict[str, CreatorIdentity],
+) -> Optional[CreatorIdentity]:
+    key = _identity_lookup_key(actor)
+    if not key:
+        return None
+    if key in identities:
+        return identities[key]
+    lowered = key.lower()
+    if lowered in identities:
+        return identities[lowered]
+    return identity_for_hostname(key, identities)

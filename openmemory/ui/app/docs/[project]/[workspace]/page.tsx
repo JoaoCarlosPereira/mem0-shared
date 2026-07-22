@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/select";
 import { BOARD_COLUMNS, TASK_COLUMN_KEYS, handleCardDrop } from "@/lib/specsBoard";
 import { MarkdownViewer } from "@/components/shared/MarkdownViewer";
+import { ActorLabel } from "@/components/shared/attribution-badge";
 import type {
   SpecDocument,
   TaskCard,
@@ -92,8 +93,12 @@ function SortableTaskCard({
         )}
       </div>
       {task.assignee && (
-        <div className="mt-1 text-xs text-zinc-400">
-          Responsável: <span className="text-zinc-200">{task.assignee}</span>
+        <div className="mt-2" data-testid={`task-assignee-${task.id}`}>
+          <ActorLabel
+            hostname={task.assignee}
+            displayName={task.assignee_display_name}
+            avatarUrl={task.assignee_avatar_url}
+          />
         </div>
       )}
       {task.block_reason && (
@@ -125,6 +130,15 @@ function DocumentCard({
     >
       <div className="font-medium uppercase text-zinc-100">{doc.document_type}</div>
       <div className="mt-1 text-xs text-zinc-400">versão v{doc.current_version}</div>
+      {doc.updated_by && (
+        <div className="mt-2" data-testid={`doc-author-${doc.document_type}`}>
+          <ActorLabel
+            hostname={doc.updated_by}
+            displayName={doc.updated_by_display_name}
+            avatarUrl={doc.updated_by_avatar_url}
+          />
+        </div>
+      )}
     </button>
   );
 }
@@ -587,9 +601,13 @@ export default function SpecsBoardPage() {
               )}
             </div>
             {openTask?.assignee && (
-              <p className="text-xs text-zinc-400">
-                Responsável: {openTask.assignee}
-              </p>
+              <div data-testid="task-detail-assignee">
+                <ActorLabel
+                  hostname={openTask.assignee}
+                  displayName={openTask.assignee_display_name}
+                  avatarUrl={openTask.assignee_avatar_url}
+                />
+              </div>
             )}
           </div>
           <DialogFooter className="flex-wrap gap-2 sm:justify-between">
@@ -657,6 +675,15 @@ export default function SpecsBoardPage() {
             <DialogDescription className="text-zinc-400">
               Documento SDD — visualizar, editar ou excluir.
             </DialogDescription>
+            {openDoc?.updated_by && (
+              <div data-testid="doc-detail-author">
+                <ActorLabel
+                  hostname={openDoc.updated_by}
+                  displayName={openDoc.updated_by_display_name}
+                  avatarUrl={openDoc.updated_by_avatar_url}
+                />
+              </div>
+            )}
           </DialogHeader>
           {dialogError && (
             <p className="text-sm text-red-400" role="alert">

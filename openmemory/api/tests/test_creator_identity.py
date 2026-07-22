@@ -87,3 +87,49 @@ def test_enrich_actor_items_uses_custom_keys(linked_machine_setup):
     )
     assert items[0]["user_display_name"] == "João Silva"
     assert items[0]["user_avatar_url"] == "https://example.com/avatar.png"
+
+
+def test_resolve_actor_identities_by_email(db_session):
+    from app.utils.creator_identity import resolve_actor_identities_with_db
+
+    person = User(
+        user_id="google-sub-email",
+        google_sub="google-sub-email",
+        email="ana@sysmo.com.br",
+        display_name="Ana Silva",
+        avatar_url="https://example.com/ana.png",
+        user_type=USER_TYPE_PERSON,
+    )
+    db_session.add(person)
+    db_session.commit()
+
+    identities = resolve_actor_identities_with_db(
+        db_session, ["ana@sysmo.com.br", "outro@x.com"]
+    )
+    assert identities["ana@sysmo.com.br"].display_name == "Ana Silva"
+    assert identities["ana@sysmo.com.br"].avatar_url == "https://example.com/ana.png"
+    assert "outro@x.com" not in identities
+
+
+def test_resolve_actor_identities_by_hostname_and_email(linked_machine_setup, db_session):
+    from app.utils.creator_identity import (
+        identity_for_actor,
+        resolve_actor_identities_with_db,
+    )
+
+    person = User(
+        user_id="google-sub-2",
+        google_sub="google-sub-2",
+        email="bia@sysmo.com.br",
+        display_name="Bia Costa",
+        avatar_url="https://example.com/bia.png",
+        user_type=USER_TYPE_PERSON,
+    )
+    db_session.add(person)
+    db_session.commit()
+
+    identities = resolve_actor_identities_with_db(
+        db_session, ["S0293", "bia@sysmo.com.br"]
+    )
+    assert identity_for_actor("S0293", identities).display_name == "João Silva"
+    assert identity_for_actor("bia@sysmo.com.br", identities).display_name == "Bia Costa"

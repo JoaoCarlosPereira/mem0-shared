@@ -95,6 +95,8 @@ const board: WorkspaceBoard = {
       status: "em_andamento",
       is_blocked: false,
       assignee: "host-a",
+      assignee_display_name: "Ana Silva",
+      assignee_avatar_url: "https://example.com/ana.png",
       version: 4,
     },
     {
@@ -158,7 +160,9 @@ describe("SpecsBoardPage", () => {
     store.dispatch(setCurrentBoard(board));
     renderWith(store);
     const card = screen.getByTestId("task-card-t1");
-    expect(within(card).getByText("host-a")).toBeInTheDocument();
+    expect(within(card).getByText("Ana Silva")).toBeInTheDocument();
+    const avatar = within(card).getByTestId("task-assignee-t1").querySelector("img");
+    expect(avatar).toHaveAttribute("src", "https://example.com/ana.png");
   });
 
   it("card bloqueado exibe o badge de bloqueio", () => {

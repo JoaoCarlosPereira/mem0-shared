@@ -29,6 +29,11 @@ from app.models import (
     TaskCardStatus,
     TaskStatusHistory,
 )
+from app.utils.creator_identity import (
+    CreatorIdentity,
+    identity_for_actor,
+    resolve_actor_identities_with_db,
+)
 from app.utils.permissions import get_accessible_spec_workspace_ids
 from app.utils.projects import upsert_project
 from app.utils.spec_search import search_specs
@@ -85,6 +90,8 @@ class DocumentResponse(BaseModel):
     current_version: int
     current_content: Optional[str] = None
     updated_by: Optional[str] = None
+    updated_by_display_name: Optional[str] = None
+    updated_by_avatar_url: Optional[str] = None
     updated_at: Optional[datetime] = None
 
 
@@ -99,6 +106,8 @@ class TaskResponse(BaseModel):
     is_blocked: bool
     block_reason: Optional[str] = None
     assignee: Optional[str] = None
+    assignee_display_name: Optional[str] = None
+    assignee_avatar_url: Optional[str] = None
     version: int
     last_activity_at: Optional[datetime] = None
     branch_ref: Optional[str] = None
@@ -234,6 +243,35 @@ def _get_document_or_404(
     if doc is None:
         raise HTTPException(status_code=404, detail="Documento não encontrado")
     return doc
+
+
+def _document_response(
+    doc: SpecDocument,
+    identities: Optional[dict[str, CreatorIdentity]] = None,
+) -> DocumentResponse:
+    data = DocumentResponse.model_validate(doc)
+    identity = identity_for_actor(doc.updated_by, identities or {})
+    if identity is not None:
+        data.updated_by_display_name = identity.display_name
+        data.updated_by_avatar_url = identity.avatar_url
+    return data
+
+
+def _task_response(
+    task: TaskCard,
+    identities: Optional[dict[str, CreatorIdentity]] = None,
+) -> TaskResponse:
+    data = TaskResponse.model_validate(task)
+    identity = identity_for_actor(task.assignee, identities or {})
+    if identity is not None:
+        data.assignee_display_name = identity.display_name
+        data.assignee_avatar_url = identity.avatar_url
+    return data
+
+
+def _enrich_task(db: Session, task: TaskCard) -> TaskResponse:
+    identities = resolve_actor_identities_with_db(db, [task.assignee])
+    return _task_response(task, identities)
 
 
 def get_or_create_workspace(
@@ -447,7 +485,15 @@ def get_workspace_board(
         .filter(TaskCard.workspace_id == workspace_id)
         .all()
     )
-    return WorkspaceBoardResponse(workspace=ws, documents=documents, tasks=tasks)
+    identities = resolve_actor_identities_with_db(
+        db,
+        [t.assignee for t in tasks] + [d.updated_by for d in documents],
+    )
+    return WorkspaceBoardResponse(
+        workspace=ws,
+        documents=[_document_response(d, identities) for d in documents],
+        tasks=[_task_response(t, identities) for t in tasks],
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -573,7 +619,7 @@ def create_task(
     db.add(task)
     db.commit()
     db.refresh(task)
-    return task
+    return _enrich_task(db, task)
 
 
 @router.patch("/tasks/{task_id}", response_model=TaskResponse)
@@ -608,7 +654,7 @@ def update_task(
     task.version = task.version + 1
     db.commit()
     db.refresh(task)
-    return task
+    return _enrich_task(db, task)
 
 
 @router.delete("/tasks/{task_id}", status_code=204)
@@ -655,7 +701,7 @@ def claim_task_endpoint(
             },
         )
     db.refresh(task)
-    return task
+    return _enrich_task(db, task)
 
 
 @router.post("/tasks/{task_id}/release", response_model=TaskResponse)
@@ -672,7 +718,7 @@ def release_task_endpoint(
 
     release_task(db, task_id, payload.actor, payload.reason)
     db.refresh(task)
-    return task
+    return _enrich_task(db, task)
 
 
 @router.patch("/tasks/{task_id}/status", response_model=TaskResponse)
@@ -711,7 +757,7 @@ def patch_task_status(
             },
         )
     db.refresh(task)
-    return task
+    return _enrich_task(db, task)
 
 
 # --------------------------------------------------------------------------- #

@@ -259,6 +259,43 @@ class TestTaskLifecycle:
         assert r.json()["assignee"] == "A"
         assert r.json()["status"] == "em_andamento"
 
+    def test_board_enriquece_assignee_com_avatar(self, client, factory):
+        from app.models import Machine, MachineStatus, User, USER_TYPE_PERSON
+
+        s = factory()
+        try:
+            person = User(
+                user_id="google-ana",
+                google_sub="google-ana",
+                display_name="Ana Silva",
+                avatar_url="https://example.com/ana.png",
+                user_type=USER_TYPE_PERSON,
+            )
+            s.add(person)
+            s.flush()
+            s.add(
+                Machine(
+                    hostname="host-a",
+                    linked_user_id=person.id,
+                    status=MachineStatus.linked,
+                )
+            )
+            s.commit()
+        finally:
+            s.close()
+
+        ws = _create_ws(client).json()
+        task = _create_task(client, ws["id"]).json()
+        client.post(
+            f"/api/v1/specs/tasks/{task['id']}/claim",
+            json={"claimant": "host-a"},
+        )
+        board = client.get(f"/api/v1/specs/workspaces/{ws['id']}").json()
+        claimed = next(t for t in board["tasks"] if t["id"] == task["id"])
+        assert claimed["assignee"] == "host-a"
+        assert claimed["assignee_display_name"] == "Ana Silva"
+        assert claimed["assignee_avatar_url"] == "https://example.com/ana.png"
+
     def test_claim_task_ja_ativa_por_outro_409(self, client):
         ws = _create_ws(client).json()
         task = _create_task(client, ws["id"]).json()
