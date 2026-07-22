@@ -3,6 +3,7 @@ import axios from "axios";
 import { useDispatch, useSelector } from "react-redux";
 import { AppDispatch, RootState } from "@/store/store";
 import {
+  setAllWorkspaces,
   setProjectWorkspaces,
   setCurrentBoard,
   setSpecsLoading,
@@ -29,6 +30,8 @@ import {
 } from "@/types/specs";
 
 interface UseSpecsApiOptions {
+  // Quando true, o índice global (todos os workspaces) é auto-atualizado.
+  all?: boolean;
   // Quando informado, o painel do projeto é auto-atualizado (polling).
   projectId?: string;
   // Quando informado, o quadro do workspace é auto-atualizado (polling).
@@ -46,12 +49,24 @@ const base = () => `${getApiUrl()}/api/v1/specs`;
  */
 export const useSpecsApi = (options?: UseSpecsApiOptions) => {
   const poll = options?.poll ?? true;
+  const all = options?.all ?? false;
   const projectId = options?.projectId;
   const workspaceId = options?.workspaceId;
   const dispatch = useDispatch<AppDispatch>();
   const intervalMs = useSelector(
     (state: RootState) => state.specs.pollingIntervalMs,
   );
+
+  // --- Índice global (todos os workspaces) ---
+  const fetchAllWorkspaces = useCallback(async (): Promise<void> => {
+    dispatch(setSpecsLoading());
+    try {
+      const res = await axios.get<WorkspaceSummary[]>(`${base()}/workspaces`);
+      dispatch(setAllWorkspaces(res.data));
+    } catch (err: any) {
+      dispatch(setSpecsError(err?.message || "Falha ao listar specs"));
+    }
+  }, [dispatch]);
 
   // --- Painel de Projeto ---
   const fetchProjectWorkspaces = useCallback(
@@ -230,10 +245,12 @@ export const useSpecsApi = (options?: UseSpecsApiOptions) => {
     [],
   );
 
+  usePolling(fetchAllWorkspaces, intervalMs, poll && all);
   usePolling(fetchProjectWorkspaces, intervalMs, poll && !!projectId);
   usePolling(fetchWorkspaceBoard, intervalMs, poll && !!workspaceId);
 
   return {
+    fetchAllWorkspaces,
     fetchProjectWorkspaces,
     fetchWorkspaceBoard,
     createWorkspace,

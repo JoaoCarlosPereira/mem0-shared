@@ -67,6 +67,21 @@ describe("useSpecsApi", () => {
     expect(store.getState().specs.projectWorkspaces).toEqual([summary]);
   });
 
+  it("fetchAllWorkspaces faz GET no índice global e despacha para o slice", async () => {
+    mockedAxios.get.mockResolvedValue({ data: [summary] });
+    const store = makeStore();
+    const { result } = renderHook(() => useSpecsApi({ poll: false }), {
+      wrapper: wrapperFor(store),
+    });
+    await act(async () => {
+      await result.current.fetchAllWorkspaces();
+    });
+    expect(mockedAxios.get).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/specs/workspaces"),
+    );
+    expect(store.getState().specs.allWorkspaces).toEqual([summary]);
+  });
+
   it("fetchWorkspaceBoard faz GET no quadro e despacha para o slice", async () => {
     mockedAxios.get.mockResolvedValue({ data: board });
     const store = makeStore();

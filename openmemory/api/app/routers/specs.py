@@ -333,30 +333,14 @@ def create_workspace(
     return ws
 
 
-@router.get(
-    "/projects/{project_id}/workspaces",
-    response_model=list[WorkspaceSummaryResponse],
-)
-def list_project_workspaces(
-    project_id: str,
-    subject_type: str = Query("user"),
-    subject_id: Optional[UUID] = Query(None),
-    db: Session = Depends(get_db),
+def _build_summaries(
+    db: Session, workspaces: list[SpecWorkspace]
 ) -> list[WorkspaceSummaryResponse]:
-    """Painel de Projeto: workspaces + contagem de tasks por status.
+    """Monta os resumos (workspace + contagem de tasks por status).
 
-    Progresso resumido computado em uma única query agregada
-    (``GROUP BY workspace_id, status``) — sem N+1.
+    Contagem computada em uma única query agregada (``GROUP BY workspace_id,
+    status``) — sem N+1, independentemente de quantos workspaces.
     """
-    workspaces = (
-        db.query(SpecWorkspace)
-        .filter(SpecWorkspace.project_id == project_id)
-        .all()
-    )
-    accessible = get_accessible_spec_workspace_ids(db, subject_type, subject_id)
-    if accessible is not None:
-        workspaces = [w for w in workspaces if w.id in accessible]
-
     ws_ids = [w.id for w in workspaces]
     counts: dict[UUID, dict[str, int]] = {}
     if ws_ids:
@@ -380,6 +364,57 @@ def list_project_workspaces(
         )
         for w in workspaces
     ]
+
+
+def _filter_accessible(
+    db: Session,
+    workspaces: list[SpecWorkspace],
+    subject_type: str,
+    subject_id: Optional[UUID],
+) -> list[SpecWorkspace]:
+    accessible = get_accessible_spec_workspace_ids(db, subject_type, subject_id)
+    if accessible is None:
+        return workspaces
+    return [w for w in workspaces if w.id in accessible]
+
+
+@router.get("/workspaces", response_model=list[WorkspaceSummaryResponse])
+def list_all_workspaces(
+    subject_type: str = Query("user"),
+    subject_id: Optional[UUID] = Query(None),
+    db: Session = Depends(get_db),
+) -> list[WorkspaceSummaryResponse]:
+    """Índice global: todos os workspaces acessíveis (de todos os projetos).
+
+    Alimenta a tela inicial de Specs (lista os quadros agrupados por projeto).
+    """
+    workspaces = db.query(SpecWorkspace).order_by(SpecWorkspace.project_id).all()
+    workspaces = _filter_accessible(db, workspaces, subject_type, subject_id)
+    return _build_summaries(db, workspaces)
+
+
+@router.get(
+    "/projects/{project_id}/workspaces",
+    response_model=list[WorkspaceSummaryResponse],
+)
+def list_project_workspaces(
+    project_id: str,
+    subject_type: str = Query("user"),
+    subject_id: Optional[UUID] = Query(None),
+    db: Session = Depends(get_db),
+) -> list[WorkspaceSummaryResponse]:
+    """Painel de Projeto: workspaces + contagem de tasks por status.
+
+    Progresso resumido computado em uma única query agregada
+    (``GROUP BY workspace_id, status``) — sem N+1.
+    """
+    workspaces = (
+        db.query(SpecWorkspace)
+        .filter(SpecWorkspace.project_id == project_id)
+        .all()
+    )
+    workspaces = _filter_accessible(db, workspaces, subject_type, subject_id)
+    return _build_summaries(db, workspaces)
 
 
 @router.get("/workspaces/{workspace_id}", response_model=WorkspaceBoardResponse)

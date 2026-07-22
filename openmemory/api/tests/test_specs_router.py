@@ -415,6 +415,42 @@ class TestEndToEndLifecycle:
         assert audit >= 3  # write_spec_document + claim_task + update_task_status
 
 
+class TestAllWorkspacesIndex:
+    def test_lista_todos_workspaces_de_todos_projetos(self, client):
+        _create_ws(client, project_id="proj-a", slug="ws-a", name="A")
+        _create_ws(client, project_id="proj-b", slug="ws-b", name="B")
+        r = client.get("/api/v1/specs/workspaces")
+        assert r.status_code == 200
+        projs = {w["project_id"] for w in r.json()}
+        assert projs == {"proj-a", "proj-b"}
+
+    def test_indice_respeita_access_control(self, client, factory):
+        ws = _create_ws(client, project_id="proj-a", slug="ws-a", name="A").json()
+        _create_ws(client, project_id="proj-b", slug="ws-b", name="B")
+        subject = uuid.uuid4()
+        s = factory()
+        try:
+            # allow apenas para ws de proj-a -> índice só deve trazer esse.
+            s.add(
+                AccessControl(
+                    subject_type="user",
+                    subject_id=subject,
+                    object_type="spec_workspace",
+                    object_id=uuid.UUID(ws["id"]),
+                    effect="allow",
+                )
+            )
+            s.commit()
+        finally:
+            s.close()
+        r = client.get(
+            "/api/v1/specs/workspaces",
+            params={"subject_type": "user", "subject_id": str(subject)},
+        )
+        assert r.status_code == 200
+        assert [w["id"] for w in r.json()] == [ws["id"]]
+
+
 class TestProjectPanel:
     def test_painel_agrega_contagem_por_status(self, client, factory):
         ws1 = _create_ws(client, slug="ws-1").json()

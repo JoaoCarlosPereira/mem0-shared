@@ -1,4 +1,5 @@
 import specsReducer, {
+  setAllWorkspaces,
   setProjectWorkspaces,
   setCurrentBoard,
   setSpecsLoading,
@@ -44,6 +45,12 @@ describe("specsSlice", () => {
     );
     expect(state.loading).toBe(true);
     expect(state.error).toBeNull();
+  });
+
+  it("setAllWorkspaces preenche o índice global e desliga loading", () => {
+    const state = specsReducer(undefined, setAllWorkspaces([summary]));
+    expect(state.allWorkspaces).toEqual([summary]);
+    expect(state.loading).toBe(false);
   });
 
   it("setProjectWorkspaces preenche o painel e desliga loading", () => {
