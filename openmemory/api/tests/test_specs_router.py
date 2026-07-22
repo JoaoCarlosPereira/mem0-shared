@@ -486,3 +486,50 @@ class TestProjectPanel:
         panel = {w["id"]: w["task_counts"] for w in r.json()}
         assert panel[ws1["id"]] == {"tasks": 1, "em_andamento": 1}
         assert panel[ws2["id"]] == {"concluido": 1}
+
+
+class TestTaskAndDocumentMutation:
+    def test_patch_task_metadata(self, client):
+        ws = _create_ws(client).json()
+        task = _create_task(client, ws["id"], title="Old").json()
+        r = client.patch(
+            f"/api/v1/specs/tasks/{task['id']}",
+            json={
+                "expected_version": task["version"],
+                "title": "New",
+                "description": "Desc",
+            },
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["title"] == "New"
+        assert body["description"] == "Desc"
+        assert body["version"] == task["version"] + 1
+
+    def test_patch_task_conflict_409(self, client):
+        ws = _create_ws(client).json()
+        task = _create_task(client, ws["id"]).json()
+        r = client.patch(
+            f"/api/v1/specs/tasks/{task['id']}",
+            json={"expected_version": 999, "title": "X"},
+        )
+        assert r.status_code == 409
+
+    def test_delete_task(self, client):
+        ws = _create_ws(client).json()
+        task = _create_task(client, ws["id"]).json()
+        r = client.delete(f"/api/v1/specs/tasks/{task['id']}")
+        assert r.status_code == 204
+        board = client.get(f"/api/v1/specs/workspaces/{ws['id']}").json()
+        assert board["tasks"] == []
+
+    def test_delete_document(self, client):
+        ws = _create_ws(client).json()
+        client.put(
+            f"/api/v1/specs/workspaces/{ws['id']}/documents/prd",
+            json={"content": "# PRD", "author": "t"},
+        )
+        r = client.delete(f"/api/v1/specs/workspaces/{ws['id']}/documents/prd")
+        assert r.status_code == 204
+        board = client.get(f"/api/v1/specs/workspaces/{ws['id']}").json()
+        assert board["documents"] == []

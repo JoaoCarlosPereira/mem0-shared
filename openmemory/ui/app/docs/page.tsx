@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import Link from "next/link";
 import { useSelector } from "react-redux";
-import { ClipboardList } from "lucide-react";
+import { BookOpen } from "lucide-react";
 import { RootState } from "@/store/store";
 import { useSpecsApi } from "@/hooks/useSpecsApi";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -64,8 +64,8 @@ export default function SpecsIndexPage() {
     <div>
       <PageHeader
         className="mb-4"
-        icon={ClipboardList}
-        title="Specs"
+        icon={BookOpen}
+        title="Documentações"
         description="Quadros de especificações (PRD/TechSpec/Tasks) por Tarefa, agrupados por projeto. Clique num quadro para abrir o Kanban."
       />
 
@@ -91,7 +91,7 @@ export default function SpecsIndexPage() {
                   {project}
                 </h2>
                 <Link
-                  href={`/admin/specs/${encodeURIComponent(project)}`}
+                  href={`/docs/${encodeURIComponent(project)}`}
                   className="text-xs text-blue-400 hover:text-blue-300 hover:underline"
                 >
                   ver painel
@@ -101,7 +101,7 @@ export default function SpecsIndexPage() {
                 {wss.map((ws) => (
                   <Link
                     key={ws.id}
-                    href={`/admin/specs/${encodeURIComponent(project)}/${ws.id}`}
+                    href={`/docs/${encodeURIComponent(project)}/${ws.id}`}
                     className="block rounded-lg border border-zinc-800 bg-zinc-900 p-4 transition-colors hover:border-blue-600"
                     data-testid={`spec-card-${ws.id}`}
                   >

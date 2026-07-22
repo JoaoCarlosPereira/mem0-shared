@@ -43,7 +43,7 @@ beforeEach(() => {
 });
 
 describe("AdminSidebar", () => {
-  it("renderiza os itens de menu, incluindo Grupos e Métricas", () => {
+  it("renderiza os itens de menu, incluindo Grupos, Métricas e Configurações", () => {
     renderSidebar();
     [
       "Visão Geral",
@@ -53,9 +53,20 @@ describe("AdminSidebar", () => {
       "Governança",
       "Métricas",
       "Log de Auditoria",
+      "Configurações",
     ].forEach((label) => {
       expect(screen.getByText(label)).toBeInTheDocument();
     });
+    expect(screen.queryByText("Specs")).not.toBeInTheDocument();
+    expect(screen.queryByText("Documentações")).not.toBeInTheDocument();
+  });
+
+  it("link de Configurações aponta para /admin/settings", () => {
+    mockUsePathname.mockReturnValue("/admin/settings");
+    renderSidebar();
+    const link = screen.getByText("Configurações").closest("a");
+    expect(link).toHaveAttribute("href", "/admin/settings");
+    expect(link).toHaveAttribute("aria-current", "page");
   });
 
   it("link de Métricas aponta para /admin/metrics e ativa pelo pathname", () => {

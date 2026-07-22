@@ -30,6 +30,7 @@ describe("decideAuthRedirect", () => {
 
   it("sessão normal navega livremente", () => {
     expect(decideAuthRedirect("/", true, false)).toBeNull();
-    expect(decideAuthRedirect("/settings", true, false)).toBeNull();
+    expect(decideAuthRedirect("/docs", true, false)).toBeNull();
+    expect(decideAuthRedirect("/admin/settings", true, false)).toBeNull();
   });
 });

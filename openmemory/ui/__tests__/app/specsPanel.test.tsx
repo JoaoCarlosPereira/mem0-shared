@@ -16,7 +16,7 @@ import specsReducer, {
   setSpecsLoading,
   setSpecsError,
 } from "@/store/specsSlice";
-import ProjectSpecsPanel from "@/app/admin/specs/[project]/page";
+import ProjectSpecsPanel from "@/app/docs/[project]/page";
 import type { WorkspaceSummary } from "@/types/specs";
 
 const wsA: WorkspaceSummary = {
@@ -43,7 +43,7 @@ function renderWith(store: ReturnType<typeof makeStore>) {
 describe("ProjectSpecsPanel", () => {
   it("renderiza o cabeçalho do projeto", () => {
     renderWith(makeStore());
-    expect(screen.getByText("Specs — mem0-shared")).toBeInTheDocument();
+    expect(screen.getByText("Documentações — mem0-shared")).toBeInTheDocument();
   });
 
   it("lista as Tarefas com progresso resumido por coluna", () => {
@@ -64,7 +64,7 @@ describe("ProjectSpecsPanel", () => {
     const link = screen.getByText("Feature A").closest("a");
     expect(link).toHaveAttribute(
       "href",
-      "/admin/specs/mem0-shared/ws-aaa",
+      "/docs/mem0-shared/ws-aaa",
     );
   });
 

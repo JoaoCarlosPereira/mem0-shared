@@ -59,8 +59,12 @@ export function MainHeader({ sidebarOpen, onToggleSidebar }: MainHeaderProps) {
       getFetchers: () => [statsApi.fetchStats, memoriesApi.fetchMemories],
     },
     {
-      match: /^\/settings$/,
+      match: /^\/admin\/settings$/,
       getFetchers: () => [configApi.fetchConfig],
+    },
+    {
+      match: /^\/docs/,
+      getFetchers: () => [],
     },
   ];
 

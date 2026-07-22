@@ -115,6 +115,13 @@ export interface TaskCreate {
   branch_ref?: string | null;
 }
 
+export interface TaskUpdate {
+  expected_version: number;
+  title?: string | null;
+  description?: string | null;
+  branch_ref?: string | null;
+}
+
 export interface StatusPatchRequest {
   expected_version: number;
   new_status?: TaskCardStatus;

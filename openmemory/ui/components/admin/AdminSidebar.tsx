@@ -15,7 +15,7 @@ import {
   HardDrive,
   Users,
   UserCircle2,
-  ClipboardList,
+  Settings,
 } from "lucide-react";
 import { selectSidebarFailedCount } from "@/store/queuesSlice";
 import { useQueueFailedAlerts } from "@/hooks/useQueueFailedAlerts";
@@ -32,13 +32,13 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Visão Geral", href: "/admin/overview", icon: LayoutDashboard },
   { label: "Filas", href: "/admin/queues", icon: ListOrdered },
   { label: "Projetos", href: "/admin/projects", icon: Database },
-  { label: "Specs", href: "/admin/specs", icon: ClipboardList },
   { label: "Grupos", href: "/admin/groups", icon: Users },
   { label: "Usuários", href: "/admin/users", icon: UserCircle2 },
   { label: "Governança", href: "/admin/governance", icon: Shield },
   { label: "Métricas", href: "/admin/metrics", icon: BarChart3 },
   { label: "Backup", href: "/admin/backup", icon: HardDrive },
   { label: "Log de Auditoria", href: "/admin/audit", icon: ScrollText },
+  { label: "Configurações", href: "/admin/settings", icon: Settings },
 ];
 
 interface AdminSidebarProps {

@@ -27,6 +27,7 @@ from app.models import (
     SpecWorkspaceStatus,
     TaskCard,
     TaskCardStatus,
+    TaskStatusHistory,
 )
 from app.utils.permissions import get_accessible_spec_workspace_ids
 from app.utils.projects import upsert_project
@@ -139,6 +140,14 @@ class TaskCreate(BaseModel):
     title: str
     description: Optional[str] = None
     branch_ref: Optional[str] = None
+
+
+class TaskUpdate(BaseModel):
+    """Atualização parcial de metadados da task (título/descrição/branch)."""
+    title: Optional[str] = None
+    description: Optional[str] = None
+    branch_ref: Optional[str] = None
+    expected_version: int
 
 
 class ClaimRequest(BaseModel):
@@ -513,6 +522,34 @@ def list_document_versions(
     )
 
 
+@router.delete(
+    "/workspaces/{workspace_id}/documents/{document_type}",
+    status_code=204,
+)
+def delete_workspace_document(
+    workspace_id: UUID,
+    document_type: DocumentType,
+    subject_type: str = Query("user"),
+    subject_id: Optional[UUID] = Query(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Remove o documento do tipo dado e todo o histórico de versões."""
+    _get_workspace_or_404(db, workspace_id)
+    _assert_access(db, workspace_id, subject_type, subject_id)
+    doc = _get_document_or_404(db, workspace_id, document_type)
+
+    db.query(SpecComment).filter(
+        SpecComment.target_type == CommentTargetType.document,
+        SpecComment.target_id == doc.id,
+    ).delete()
+    db.query(SpecDocumentVersion).filter(
+        SpecDocumentVersion.document_id == doc.id
+    ).delete()
+    db.delete(doc)
+    db.commit()
+    return Response(status_code=204)
+
+
 # --------------------------------------------------------------------------- #
 # Tasks
 # --------------------------------------------------------------------------- #
@@ -537,6 +574,62 @@ def create_task(
     db.commit()
     db.refresh(task)
     return task
+
+
+@router.patch("/tasks/{task_id}", response_model=TaskResponse)
+def update_task(
+    task_id: UUID,
+    payload: TaskUpdate,
+    subject_type: str = Query("user"),
+    subject_id: Optional[UUID] = Query(None),
+    db: Session = Depends(get_db),
+) -> TaskResponse:
+    """Atualiza título/descrição/branch com concorrência otimista (ADR-005)."""
+    task = _get_task_or_404(db, task_id)
+    _assert_access(db, task.workspace_id, subject_type, subject_id)
+
+    if task.version != payload.expected_version:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "conflict": True,
+                "current_version": task.version,
+                "title": task.title,
+                "description": task.description,
+            },
+        )
+
+    if payload.title is not None:
+        task.title = payload.title
+    if payload.description is not None:
+        task.description = payload.description
+    if payload.branch_ref is not None:
+        task.branch_ref = payload.branch_ref
+    task.version = task.version + 1
+    db.commit()
+    db.refresh(task)
+    return task
+
+
+@router.delete("/tasks/{task_id}", status_code=204)
+def delete_task(
+    task_id: UUID,
+    subject_type: str = Query("user"),
+    subject_id: Optional[UUID] = Query(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Remove a task e o histórico de status associado."""
+    task = _get_task_or_404(db, task_id)
+    _assert_access(db, task.workspace_id, subject_type, subject_id)
+
+    db.query(TaskStatusHistory).filter(TaskStatusHistory.task_id == task_id).delete()
+    db.query(SpecComment).filter(
+        SpecComment.target_type == CommentTargetType.task,
+        SpecComment.target_id == task_id,
+    ).delete()
+    db.delete(task)
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.post("/tasks/{task_id}/claim", response_model=TaskResponse)

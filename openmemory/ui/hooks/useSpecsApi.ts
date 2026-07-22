@@ -22,6 +22,7 @@ import {
   StatusPatchRequest,
   TaskCard,
   TaskCreate,
+  TaskUpdate,
   UpdateStatusResult,
   Workspace,
   WorkspaceBoard,
@@ -163,6 +164,44 @@ export const useSpecsApi = (options?: UseSpecsApiOptions) => {
     [],
   );
 
+  const updateTask = useCallback(
+    async (
+      taskId: string,
+      payload: TaskUpdate,
+    ): Promise<{ conflict: boolean; task?: TaskCard; current_version?: number }> => {
+      try {
+        const res = await axios.patch<TaskCard>(
+          `${base()}/tasks/${taskId}`,
+          payload,
+        );
+        return { conflict: false, task: res.data };
+      } catch (err: any) {
+        if (err?.response?.status === 409) {
+          const detail = err.response.data?.detail ?? {};
+          return {
+            conflict: true,
+            current_version: detail.current_version,
+          };
+        }
+        throw err;
+      }
+    },
+    [],
+  );
+
+  const deleteTask = useCallback(async (taskId: string): Promise<void> => {
+    await axios.delete(`${base()}/tasks/${taskId}`);
+  }, []);
+
+  const deleteDocument = useCallback(
+    async (wsId: string, documentType: DocumentType): Promise<void> => {
+      await axios.delete(
+        `${base()}/workspaces/${wsId}/documents/${documentType}`,
+      );
+    },
+    [],
+  );
+
   const claimTask = useCallback(
     async (taskId: string, claimant: string): Promise<ClaimResult> => {
       try {
@@ -257,6 +296,9 @@ export const useSpecsApi = (options?: UseSpecsApiOptions) => {
     writeDocument,
     fetchDocumentVersions,
     createTask,
+    updateTask,
+    deleteTask,
+    deleteDocument,
     claimTask,
     releaseTask,
     updateTaskStatus,

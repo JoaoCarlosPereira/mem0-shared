@@ -1,4 +1,4 @@
-import axios from "axios";
+import axios, { type AxiosInstance } from "axios";
 
 import { notifySessionExpired } from "@/lib/session-expiry";
 
@@ -72,7 +72,7 @@ createdInstance?.interceptors?.request?.use(proxyGuardRequest);
 // Existing hooks import bare `axios` — tag those requests too.
 axios.interceptors?.request?.use(proxyGuardRequest);
 
-function attachUnauthorizedInterceptor(instance: typeof axios) {
+function attachUnauthorizedInterceptor(instance: AxiosInstance) {
   instance.interceptors?.response?.use(
     (response) => response,
     (error) => {

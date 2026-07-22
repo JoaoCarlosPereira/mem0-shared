@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 
+import { useAgentTokenApi, type AgentToken } from "@/hooks/useAgentTokenApi";
 import { useApiSessionReady } from "@/hooks/useApiSessionReady";
 import { getApiAccessToken } from "@/lib/api-client";
 

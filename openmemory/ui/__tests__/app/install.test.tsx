@@ -19,7 +19,7 @@ jest.mock("next-auth/react", () => ({
   useSession: () => ({ data: mockSession, status: mockStatus }),
 }));
 
-import AgentTokenPage from "@/app/settings/install/page";
+import AgentTokenPage from "@/app/admin/settings/install/page";
 
 const TOKEN = {
   token: "omtk_valorfixo123",

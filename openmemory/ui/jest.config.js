@@ -14,6 +14,9 @@ const customJestConfig = {
   testEnvironment: "jest-environment-jsdom",
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/$1",
+    // ESM puro — mockado nos testes (renderização real no browser/build).
+    "^react-markdown$": "<rootDir>/__mocks__/react-markdown.tsx",
+    "^remark-gfm$": "<rootDir>/__mocks__/remark-gfm.ts",
   },
   testPathIgnorePatterns: ["<rootDir>/node_modules/", "<rootDir>/.next/"],
   collectCoverageFrom: [
@@ -29,6 +32,7 @@ const customJestConfig = {
     "lib/specsBoard.ts",
     "components/admin/**/*.{ts,tsx}",
     "components/metrics/**/*.{ts,tsx}",
+    "components/shared/MarkdownViewer.tsx",
     "app/admin/**/*.{ts,tsx}",
   ],
 };

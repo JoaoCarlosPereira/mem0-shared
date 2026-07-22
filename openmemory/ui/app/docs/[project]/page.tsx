@@ -70,7 +70,7 @@ export default function ProjectSpecsPanel() {
       <PageHeader
         className="mb-4"
         icon={RollerCoaster}
-        title={`Specs — ${project}`}
+        title={`Documentações — ${project}`}
         description="Tarefas do projeto (SpecWorkspaces) com progresso resumido por coluna do quadro."
       />
 
@@ -107,7 +107,7 @@ export default function ProjectSpecsPanel() {
                 <TableRow key={ws.id}>
                   <TableCell className="text-zinc-200">
                     <Link
-                      href={`/admin/specs/${encodeURIComponent(project)}/${ws.id}`}
+                      href={`/docs/${encodeURIComponent(project)}/${ws.id}`}
                       className="font-medium text-blue-400 hover:text-blue-300 hover:underline"
                     >
                       {ws.name}

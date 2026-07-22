@@ -8,7 +8,7 @@ jest.mock("@/hooks/useSpecsApi", () => ({
 }));
 
 import specsReducer, { setAllWorkspaces, setSpecsLoading } from "@/store/specsSlice";
-import SpecsIndexPage from "@/app/admin/specs/page";
+import SpecsIndexPage from "@/app/docs/page";
 import type { WorkspaceSummary } from "@/types/specs";
 
 const wsA: WorkspaceSummary = {
@@ -41,9 +41,9 @@ function renderWith(store: ReturnType<typeof makeStore>) {
 }
 
 describe("SpecsIndexPage", () => {
-  it("renderiza o cabeçalho de Specs", () => {
+  it("renderiza o cabeçalho de Documentações", () => {
     renderWith(makeStore());
-    expect(screen.getByText("Specs")).toBeInTheDocument();
+    expect(screen.getByText("Documentações")).toBeInTheDocument();
   });
 
   it("agrupa os quadros por projeto", () => {
@@ -61,7 +61,7 @@ describe("SpecsIndexPage", () => {
     store.dispatch(setAllWorkspaces([wsA]));
     renderWith(store);
     const card = screen.getByTestId("spec-card-ws-a");
-    expect(card).toHaveAttribute("href", "/admin/specs/proj-a/ws-a");
+    expect(card).toHaveAttribute("href", "/docs/proj-a/ws-a");
   });
 
   it("link 'ver painel' aponta para o painel do projeto", () => {
@@ -69,7 +69,7 @@ describe("SpecsIndexPage", () => {
     store.dispatch(setAllWorkspaces([wsA]));
     renderWith(store);
     const painel = screen.getByRole("link", { name: "ver painel" });
-    expect(painel).toHaveAttribute("href", "/admin/specs/proj-a");
+    expect(painel).toHaveAttribute("href", "/docs/proj-a");
   });
 
   it("estado vazio orienta a criar specs pelas skills", () => {

@@ -8,21 +8,84 @@ jest.mock("next/navigation", () => ({
   useParams: () => ({ project: "mem0-shared", workspace: "ws-1" }),
 }));
 
+jest.mock(
+  "@dnd-kit/core",
+  () => ({
+    DndContext: ({ children }: any) => <div data-testid="dnd">{children}</div>,
+    DragEndEvent: {},
+    PointerSensor: jest.fn(),
+    closestCorners: jest.fn(),
+    useDroppable: () => ({ setNodeRef: jest.fn(), isOver: false }),
+    useSensor: jest.fn(),
+    useSensors: jest.fn(() => []),
+  }),
+  { virtual: true },
+);
+
+jest.mock(
+  "@dnd-kit/sortable",
+  () => ({
+    SortableContext: ({ children }: any) => <>{children}</>,
+    useSortable: () => ({
+      attributes: {},
+      listeners: {},
+      setNodeRef: jest.fn(),
+      transform: null,
+      transition: null,
+      isDragging: false,
+    }),
+    verticalListSortingStrategy: jest.fn(),
+  }),
+  { virtual: true },
+);
+
+jest.mock(
+  "@dnd-kit/utilities",
+  () => ({
+    CSS: { Transform: { toString: () => undefined } },
+  }),
+  { virtual: true },
+);
+
 const updateTaskStatus = jest.fn();
+const updateTask = jest.fn();
+const deleteTask = jest.fn();
+const deleteDocument = jest.fn();
+const writeDocument = jest.fn();
 const claimTask = jest.fn();
 const fetchWorkspaceBoard = jest.fn();
 jest.mock("@/hooks/useSpecsApi", () => ({
-  useSpecsApi: jest.fn(() => ({ updateTaskStatus, claimTask, fetchWorkspaceBoard })),
+  useSpecsApi: jest.fn(() => ({
+    updateTaskStatus,
+    updateTask,
+    deleteTask,
+    deleteDocument,
+    writeDocument,
+    claimTask,
+    fetchWorkspaceBoard,
+  })),
 }));
 
 import specsReducer, { setCurrentBoard } from "@/store/specsSlice";
-import SpecsBoardPage from "@/app/admin/specs/[project]/[workspace]/page";
+import SpecsBoardPage from "@/app/docs/[project]/[workspace]/page";
 import type { WorkspaceBoard } from "@/types/specs";
 
 const board: WorkspaceBoard = {
-  workspace: { id: "ws-1", project_id: "mem0-shared", slug: "ws-1", name: "Feature A", status: "ativo" },
+  workspace: {
+    id: "ws-1",
+    project_id: "mem0-shared",
+    slug: "ws-1",
+    name: "Feature A",
+    status: "ativo",
+  },
   documents: [
-    { id: "d1", workspace_id: "ws-1", document_type: "prd", current_version: 2 },
+    {
+      id: "d1",
+      workspace_id: "ws-1",
+      document_type: "prd",
+      current_version: 2,
+      current_content: "# Hello PRD",
+    },
   ],
   tasks: [
     {
@@ -60,6 +123,10 @@ function renderWith(store: ReturnType<typeof makeStore>) {
 
 beforeEach(() => {
   updateTaskStatus.mockReset();
+  updateTask.mockReset();
+  deleteTask.mockReset();
+  deleteDocument.mockReset();
+  writeDocument.mockReset();
   claimTask.mockReset();
   fetchWorkspaceBoard.mockReset();
 });
@@ -67,9 +134,14 @@ beforeEach(() => {
 describe("SpecsBoardPage", () => {
   it("renderiza as colunas fixas do sistema", () => {
     renderWith(makeStore());
-    ["SDD", "Tasks", "Em andamento", "Revisão de código", "Fase de teste", "Concluído"].forEach(
-      (label) => expect(screen.getByText(label)).toBeInTheDocument(),
-    );
+    [
+      "SDD",
+      "Tasks",
+      "Em andamento",
+      "Revisão de código",
+      "Fase de teste",
+      "Concluído",
+    ].forEach((label) => expect(screen.getByText(label)).toBeInTheDocument());
   });
 
   it("documento aparece na coluna SDD com a versão atual", () => {
@@ -97,38 +169,49 @@ describe("SpecsBoardPage", () => {
     expect(within(card).getByLabelText("bloqueado")).toBeInTheDocument();
   });
 
-  it("claim que retorna 409 exibe quem já assumiu e desabilita o botão", async () => {
+  it("abrir documento mostra o conteúdo formatado", async () => {
+    const store = makeStore();
+    store.dispatch(setCurrentBoard(board));
+    renderWith(store);
+    await userEvent.click(screen.getByTestId("doc-card-prd"));
+    expect(await screen.findByTestId("markdown-viewer")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Hello PRD" })).toBeInTheDocument();
+  });
+
+  it("abrir task e assumir com 409 exibe quem já assumiu", async () => {
     claimTask.mockResolvedValue({ claimed: false, current_assignee: "host-x" });
     const store = makeStore();
     store.dispatch(setCurrentBoard(board));
     renderWith(store);
 
-    const card = screen.getByTestId("task-card-t2");
-    await userEvent.click(within(card).getByRole("button", { name: "Assumir" }));
+    await userEvent.click(screen.getByTestId("task-card-t2"));
+    await userEvent.click(await screen.findByRole("button", { name: "Assumir" }));
 
     expect(claimTask).toHaveBeenCalledWith("t2", expect.any(String));
-    expect(await screen.findByText(/Já assumida por host-x/)).toBeInTheDocument();
-    expect(within(card).getByRole("button", { name: "Assumir" })).toBeDisabled();
+    expect(
+      await screen.findByRole("alert", {}, { timeout: 3000 }),
+    ).toHaveTextContent(/Já assumida por host-x/);
   });
 
-  it("claim bem-sucedido ressincroniza o quadro", async () => {
+  it("abrir task e assumir com sucesso ressincroniza o quadro", async () => {
     claimTask.mockResolvedValue({ claimed: true, version: 2 });
     const store = makeStore();
     store.dispatch(setCurrentBoard(board));
     renderWith(store);
-    const card = screen.getByTestId("task-card-t2");
-    await userEvent.click(within(card).getByRole("button", { name: "Assumir" }));
-    await waitFor(() => expect(fetchWorkspaceBoard).toHaveBeenCalledWith("ws-1"));
-    expect(screen.queryByText(/Já assumida por/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("task-card-t2"));
+    await userEvent.click(await screen.findByRole("button", { name: "Assumir" }));
+    await waitFor(() =>
+      expect(fetchWorkspaceBoard).toHaveBeenCalledWith("ws-1"),
+    );
   });
 
-  it("alternar bloqueio chama update_task_status com is_blocked", async () => {
+  it("abrir task e bloquear chama update_task_status", async () => {
     updateTaskStatus.mockResolvedValue({ conflict: false });
     const store = makeStore();
     store.dispatch(setCurrentBoard(board));
     renderWith(store);
-    const card = screen.getByTestId("task-card-t1"); // não bloqueado
-    await userEvent.click(within(card).getByRole("button", { name: "Bloquear" }));
+    await userEvent.click(screen.getByTestId("task-card-t1"));
+    await userEvent.click(await screen.findByRole("button", { name: "Bloquear" }));
     await waitFor(() =>
       expect(updateTaskStatus).toHaveBeenCalledWith(
         "t1",
@@ -142,11 +225,10 @@ describe("SpecsBoardPage", () => {
     expect(fetchWorkspaceBoard).toHaveBeenCalledWith("ws-1");
   });
 
-  it("polling reflete mudança de status feita por outro ator (re-render do slice)", async () => {
+  it("polling reflete mudança de status feita por outro ator", async () => {
     const store = makeStore();
     store.dispatch(setCurrentBoard(board));
     renderWith(store);
-    // t2 estava em "tasks"; outro ator moveu para "revisao_codigo".
     store.dispatch(
       setCurrentBoard({
         ...board,

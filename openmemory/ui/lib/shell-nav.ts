@@ -1,9 +1,9 @@
 import type { LucideIcon } from "lucide-react";
 import {
+  BookOpen,
   Home,
   Layers,
   LayoutGrid,
-  Settings,
   ShieldCheck,
 } from "lucide-react";
 
@@ -34,10 +34,10 @@ export const MAIN_NAV_ITEMS: ShellNavItem[] = [
     match: (pathname) => pathname.startsWith("/apps"),
   },
   {
-    label: "Configurações",
-    href: "/settings",
-    icon: Settings,
-    match: (pathname) => pathname.startsWith("/settings"),
+    label: "Documentações",
+    href: "/docs",
+    icon: BookOpen,
+    match: (pathname) => pathname.startsWith("/docs"),
   },
 ];
 
@@ -58,7 +58,7 @@ export function getPageTitle(pathname: string): string {
   if (pathname === "/") return "Painel";
   if (pathname.startsWith("/memories") || pathname.startsWith("/memory/")) return "Memórias";
   if (pathname.startsWith("/apps")) return "Projetos";
-  if (pathname.startsWith("/settings")) return "Configurações";
+  if (pathname.startsWith("/docs")) return "Documentações";
   return "Mem0-Shared";
 }
 
@@ -68,4 +68,11 @@ export function isBareRoute(pathname: string): boolean {
 
 export function isAdminRoute(pathname: string): boolean {
   return pathname.startsWith("/admin");
+}
+
+/** Quadro Kanban: `/docs/:project/:workspace` */
+export function isDocsBoardPath(pathname: string | null): boolean {
+  if (!pathname) return false;
+  const parts = pathname.split("/").filter(Boolean);
+  return parts[0] === "docs" && parts.length >= 3;
 }
