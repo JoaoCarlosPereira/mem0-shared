@@ -1,5 +1,6 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { configureStore } from "@reduxjs/toolkit";
 import { Provider } from "react-redux";
 
@@ -7,8 +8,10 @@ jest.mock("next/navigation", () => ({
   useParams: () => ({ project: "mem0-shared" }),
 }));
 
+const deleteWorkspace = jest.fn();
+const fetchProjectWorkspaces = jest.fn();
 jest.mock("@/hooks/useSpecsApi", () => ({
-  useSpecsApi: jest.fn(() => ({})),
+  useSpecsApi: jest.fn(() => ({ deleteWorkspace, fetchProjectWorkspaces })),
 }));
 
 import specsReducer, {
@@ -91,5 +94,24 @@ describe("ProjectSpecsPanel", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Falha ao listar workspaces",
     );
+  });
+
+  it("botão excluir abre confirmação e chama deleteWorkspace + refetch", async () => {
+    deleteWorkspace.mockReset().mockResolvedValue(undefined);
+    fetchProjectWorkspaces.mockReset().mockResolvedValue(undefined);
+    const store = makeStore();
+    store.dispatch(setProjectWorkspaces([wsA]));
+    renderWith(store);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Excluir Feature A" }),
+    );
+    expect(
+      await screen.findByText("Excluir Tarefa permanentemente?"),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Excluir Tarefa" }));
+    await waitFor(() => expect(deleteWorkspace).toHaveBeenCalledWith("ws-aaa"));
+    expect(fetchProjectWorkspaces).toHaveBeenCalledWith("mem0-shared");
   });
 });

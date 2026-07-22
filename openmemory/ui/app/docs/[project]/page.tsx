@@ -1,12 +1,15 @@
 "use client";
 
+import { useCallback, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useSelector } from "react-redux";
-import { RollerCoaster } from "lucide-react";
+import { RollerCoaster, Trash2 } from "lucide-react";
 import { RootState } from "@/store/store";
 import { useSpecsApi } from "@/hooks/useSpecsApi";
 import { PageHeader } from "@/components/shared/PageHeader";
+import { Button } from "@/components/ui/button";
+import { ConfirmDeleteDialog } from "@/components/shared/ConfirmDeleteDialog";
 import {
   Table,
   TableBody,
@@ -57,13 +60,31 @@ export default function ProjectSpecsPanel() {
   const project = decodeURIComponent(params.project);
 
   // Auto-atualiza o painel via polling (ADR-007) e despacha para o specsSlice.
-  useSpecsApi({ projectId: project, poll: true });
+  const { fetchProjectWorkspaces, deleteWorkspace } = useSpecsApi({
+    projectId: project,
+    poll: true,
+  });
 
   const workspaces = useSelector(
     (s: RootState) => s.specs.projectWorkspaces,
   );
   const loading = useSelector((s: RootState) => s.specs.loading);
   const error = useSelector((s: RootState) => s.specs.error);
+
+  const [toDelete, setToDelete] = useState<WorkspaceSummary | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const confirmDelete = useCallback(async () => {
+    if (!toDelete) return;
+    setDeleting(true);
+    try {
+      await deleteWorkspace(toDelete.id);
+      setToDelete(null);
+      await fetchProjectWorkspaces(project);
+    } finally {
+      setDeleting(false);
+    }
+  }, [toDelete, deleteWorkspace, fetchProjectWorkspaces, project]);
 
   return (
     <div>
@@ -87,18 +108,19 @@ export default function ProjectSpecsPanel() {
               <TableHead>Tarefa</TableHead>
               <TableHead className="w-32">Status</TableHead>
               <TableHead>Progresso</TableHead>
+              <TableHead className="w-20 text-right">Ações</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {workspaces === null && loading ? (
               <TableRow>
-                <TableCell colSpan={3} className="py-8 text-center text-zinc-500">
+                <TableCell colSpan={4} className="py-8 text-center text-zinc-500">
                   Carregando…
                 </TableCell>
               </TableRow>
             ) : !workspaces || workspaces.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={3} className="py-8 text-center text-zinc-500">
+                <TableCell colSpan={4} className="py-8 text-center text-zinc-500">
                   Nenhuma Tarefa neste projeto
                 </TableCell>
               </TableRow>
@@ -120,6 +142,17 @@ export default function ProjectSpecsPanel() {
                   <TableCell>
                     <TaskCounts counts={ws.task_counts} />
                   </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      aria-label={`Excluir ${ws.name}`}
+                      className="text-zinc-500 hover:text-red-400"
+                      onClick={() => setToDelete(ws)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </TableCell>
                 </TableRow>
               ))
             )}
@@ -132,6 +165,20 @@ export default function ProjectSpecsPanel() {
           {workspaces.length} Tarefa(s).
         </p>
       )}
+
+      <ConfirmDeleteDialog
+        open={toDelete !== null}
+        onOpenChange={(o) => !o && setToDelete(null)}
+        title="Excluir Tarefa permanentemente?"
+        description={
+          toDelete
+            ? `Remove "${toDelete.name}" e TODO o seu conteúdo (PRD/TechSpec/Tasks, cards, histórico e comentários). Esta ação não pode ser desfeita.`
+            : ""
+        }
+        confirmLabel="Excluir Tarefa"
+        loading={deleting}
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 }

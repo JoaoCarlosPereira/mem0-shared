@@ -570,3 +570,56 @@ class TestTaskAndDocumentMutation:
         assert r.status_code == 204
         board = client.get(f"/api/v1/specs/workspaces/{ws['id']}").json()
         assert board["documents"] == []
+
+    def test_delete_workspace_remove_tudo_em_cascata(self, client, factory):
+        from app.models import (
+            SpecDocument,
+            SpecDocumentVersion,
+            SpecWorkspace,
+            TaskCard,
+        )
+
+        ws = _create_ws(client).json()
+        client.put(
+            f"/api/v1/specs/workspaces/{ws['id']}/documents/prd",
+            json={"content": "v1", "expected_version": None},
+        )
+        client.put(
+            f"/api/v1/specs/workspaces/{ws['id']}/documents/prd",
+            json={"content": "v2", "expected_version": 1},
+        )
+        task = _create_task(client, ws["id"]).json()
+        client.post(f"/api/v1/specs/tasks/{task['id']}/claim", json={"claimant": "A"})
+
+        r = client.delete(f"/api/v1/specs/workspaces/{ws['id']}")
+        assert r.status_code == 204
+
+        s = factory()
+        try:
+            wsid = uuid.UUID(ws["id"])
+            assert s.query(SpecWorkspace).filter_by(id=wsid).count() == 0
+            assert s.query(SpecDocument).filter_by(workspace_id=wsid).count() == 0
+            assert s.query(SpecDocumentVersion).count() == 0
+            assert s.query(TaskCard).filter_by(workspace_id=wsid).count() == 0
+        finally:
+            s.close()
+
+    def test_delete_workspace_inexistente_404(self, client):
+        assert (
+            client.delete(f"/api/v1/specs/workspaces/{uuid.uuid4()}").status_code == 404
+        )
+
+    def test_delete_workspace_nao_afeta_outra(self, client, factory):
+        from app.models import SpecWorkspace
+
+        keep = _create_ws(client, slug="fica", name="Fica").json()
+        drop = _create_ws(client, slug="sai", name="Sai").json()
+        _create_task(client, keep["id"])
+
+        assert client.delete(f"/api/v1/specs/workspaces/{drop['id']}").status_code == 204
+        s = factory()
+        try:
+            assert s.query(SpecWorkspace).filter_by(id=uuid.UUID(keep["id"])).count() == 1
+            assert s.query(SpecWorkspace).filter_by(id=uuid.UUID(drop["id"])).count() == 0
+        finally:
+            s.close()

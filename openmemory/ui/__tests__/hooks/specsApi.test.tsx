@@ -47,9 +47,24 @@ beforeEach(() => {
   mockedAxios.post.mockReset();
   mockedAxios.put.mockReset();
   mockedAxios.patch.mockReset();
+  mockedAxios.delete.mockReset();
 });
 
 describe("useSpecsApi", () => {
+  it("deleteWorkspace faz DELETE em /workspaces/{id}", async () => {
+    mockedAxios.delete.mockResolvedValue({ status: 204 });
+    const store = makeStore();
+    const { result } = renderHook(() => useSpecsApi({ poll: false }), {
+      wrapper: wrapperFor(store),
+    });
+    await act(async () => {
+      await result.current.deleteWorkspace("w1");
+    });
+    expect(mockedAxios.delete).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/specs/workspaces/w1"),
+    );
+  });
+
   it("fetchProjectWorkspaces faz GET no painel e despacha para o slice", async () => {
     mockedAxios.get.mockResolvedValue({ data: [summary] });
     const store = makeStore();

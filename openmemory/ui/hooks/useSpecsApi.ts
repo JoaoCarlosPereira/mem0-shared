@@ -202,6 +202,13 @@ export const useSpecsApi = (options?: UseSpecsApiOptions) => {
     [],
   );
 
+  const deleteWorkspace = useCallback(
+    async (workspaceId: string): Promise<void> => {
+      await axios.delete(`${base()}/workspaces/${workspaceId}`);
+    },
+    [],
+  );
+
   const claimTask = useCallback(
     async (taskId: string, claimant: string): Promise<ClaimResult> => {
       try {
@@ -299,6 +306,7 @@ export const useSpecsApi = (options?: UseSpecsApiOptions) => {
     updateTask,
     deleteTask,
     deleteDocument,
+    deleteWorkspace,
     claimTask,
     releaseTask,
     updateTaskStatus,

@@ -20,6 +20,7 @@ from app.models import (
     CommentTargetType,
     DocumentOrigin,
     DocumentType,
+    SpecAuditLog,
     SpecComment,
     SpecDocument,
     SpecDocumentVersion,
@@ -674,6 +675,63 @@ def delete_task(
         SpecComment.target_id == task_id,
     ).delete()
     db.delete(task)
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.delete("/workspaces/{workspace_id}", status_code=204)
+def delete_workspace(
+    workspace_id: UUID,
+    subject_type: str = Query("user"),
+    subject_id: Optional[UUID] = Query(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Exclui definitivamente uma Tarefa (workspace) e TODOS os seus filhos:
+    documentos, versões, cards de task, histórico, auditoria e comentários.
+
+    Irreversível. Atinge SOMENTE as tabelas de specs — memórias/Qdrant intactas.
+    """
+    ws = _get_workspace_or_404(db, workspace_id)
+    _assert_access(db, workspace_id, subject_type, subject_id)
+
+    doc_ids = [
+        d.id
+        for d in db.query(SpecDocument.id)
+        .filter(SpecDocument.workspace_id == workspace_id)
+        .all()
+    ]
+    task_ids = [
+        t.id
+        for t in db.query(TaskCard.id)
+        .filter(TaskCard.workspace_id == workspace_id)
+        .all()
+    ]
+
+    # Ordem FK-safe: filhos antes dos pais.
+    if doc_ids:
+        db.query(SpecDocumentVersion).filter(
+            SpecDocumentVersion.document_id.in_(doc_ids)
+        ).delete(synchronize_session=False)
+    db.query(SpecDocument).filter(
+        SpecDocument.workspace_id == workspace_id
+    ).delete(synchronize_session=False)
+
+    if task_ids:
+        db.query(TaskStatusHistory).filter(
+            TaskStatusHistory.task_id.in_(task_ids)
+        ).delete(synchronize_session=False)
+    db.query(TaskCard).filter(
+        TaskCard.workspace_id == workspace_id
+    ).delete(synchronize_session=False)
+
+    db.query(SpecAuditLog).filter(
+        SpecAuditLog.workspace_id == workspace_id
+    ).delete(synchronize_session=False)
+    db.query(SpecComment).filter(
+        SpecComment.target_id.in_([workspace_id, *doc_ids, *task_ids])
+    ).delete(synchronize_session=False)
+
+    db.delete(ws)
     db.commit()
     return Response(status_code=204)
 
