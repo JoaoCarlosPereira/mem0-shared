@@ -666,3 +666,32 @@ N/A
 - Mix up linter configs: root Python SDK uses line-length 120, Python CLI uses 100, Node CLI uses Biome (not ESLint/Ruff).
 - Modify `openmemory/` database migrations without understanding the Alembic migration chain.
 - Change public APIs without updating documentation in `docs/`.
+
+## Cursor Cloud specific instructions
+
+These notes cover the non-obvious parts of running/testing this fork in the Cursor Cloud VM. Standard commands live in the sections above; only the caveats are captured here.
+
+### What is present in this checkout
+
+This is a **trimmed fork**. Only `mem0/` (Python SDK), `openmemory/` (api + ui), `integrations/mem0-plugin/`, and `skills/` exist here. `mem0-ts/`, `cli/`, `server/`, `docs/`, and the root `tests/` directory referenced elsewhere in this file are **absent**. The only CI-gated product is `openmemory/api` (see `.github/workflows/openmemory-api-ci.yml`).
+
+### Python environment
+
+- Python deps are installed into a virtualenv at `/workspace/.venv` (created by the startup update script). Run tools via `/workspace/.venv/bin/<tool>` or `source .venv/bin/activate` — `~/.local/bin` is **not** on `PATH`, and there is no Hatch here. `hatch`-based commands in the sections above will not work as-is; use the venv directly.
+- **Pin `ruff==0.6.9`** (already pinned in the update script). The repo's ruff configs assume ruff's classic `E`/`F` defaults; newer ruff (0.16+) enables a much broader default rule set and reports 1000+ false failures. `ruff 0.6.9` is what `poetry.lock` and the root Makefile pin.
+- System lib `libgeos-dev` is required for the API test dependencies and is baked into the VM snapshot (not in the update script).
+
+### OpenMemory API (`openmemory/api`) — primary product
+
+- Lint: from `openmemory/api`, `ruff check app tests` (uses local `ruff.toml`, must be ruff 0.6.9).
+- Tests: run from `openmemory/api` with `PYTHONPATH=/workspace` (repo root) so `import mem0` resolves to the in-repo package, and `OPENAI_API_KEY=test-key` (a placeholder is enough — tests are mocked). Full command: `PYTHONPATH=/workspace OPENAI_API_KEY=test-key /workspace/.venv/bin/pytest tests`. ~946 tests pass with no Docker/network (SQLite + mocks). This suite is the reliable end-to-end signal for API logic.
+- Run the server (no Docker): `cd openmemory/api && PYTHONPATH=/workspace OPENAI_API_KEY=test-key /workspace/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8765`. It uses SQLite `./openmemory.db` (auto-created, gitignored) and creates a default user/app on startup. The memory client is lazy-initialized.
+- **Expected offline behavior:** `GET /health` returns `503` because Qdrant (`mem0_store`) is unreachable, and memory add/search need Qdrant + an LLM/embedder. The cloud VM has **no Docker and no external network**, so the full memory pipeline (Qdrant + Ollama/OpenAI) cannot run here. Metadata endpoints backed by SQLite work fully (e.g. `/api/v1/apps/`, `/api/v1/stats/`, `GET`/`PUT /api/v1/config/...`, `/admin/*`).
+
+### OpenMemory UI (`openmemory/ui`)
+
+- Next.js 15 (pnpm). Dev: `pnpm --dir openmemory/ui dev` (or `make ui-dev` from `openmemory/`). Point it at the local API with `NEXT_PUBLIC_API_URL=http://localhost:8765`. Dashboard/Admin/Settings render live data from the API without Docker.
+
+### mem0 SDK (`mem0/`)
+
+- Lint with `/workspace/.venv/bin/ruff check mem0`. Note: `mem0/memory/main.py` and `mem0/utils/logger.py` currently have 4 pre-existing `F`-rule findings; `mem0/` is not CI-gated in this fork.
