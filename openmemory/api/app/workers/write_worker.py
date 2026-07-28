@@ -227,7 +227,9 @@ class WriteWorker:
 
                     result = await self._run_add_with_extraction_policy(client, job)
                     if _persisted_result_count(result) == 0:
-                        raise RuntimeError(EXTRACTION_FAILED_MSG)
+                        self._queue.mark_skipped(job.id, SKIPPED_NO_MEMORIES_REASON)
+                        WRITE_WORKER_SUCCESS.inc()
+                        return
                     self._maybe_dual_write(client, result)
                     self._catalog_project(job)
                     read_cache.invalidate_search(job.project)
@@ -404,6 +406,7 @@ class WriteWorker:
                 processed = 0
             if processed == 0:
                 self._recover_failed_jobs()
+                self._recover_stale_processing()
                 # Idle: wait for the poll interval or an early stop signal.
                 try:
                     await asyncio.wait_for(
@@ -412,6 +415,24 @@ class WriteWorker:
                 except asyncio.TimeoutError:
                     pass
         logger.info("write worker stopped")
+
+    def _recover_stale_processing(self) -> None:
+        minutes = _env_int("WRITE_WORKER_STALE_PROCESSING_MINUTES", 15)
+        if minutes <= 0:
+            return
+        try:
+            recovered = self._queue.recover_stale_processing(
+                older_than_minutes=minutes
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("stale-processing recovery pass errored; continuing")
+            return
+        if recovered:
+            logger.info(
+                "recovered %s stale processing jobs -> queued (age>=%sm)",
+                recovered,
+                minutes,
+            )
 
     async def _run_add_with_extraction_policy(self, client, job: WriteJob):
         """Run infer=True; retry once after client reset on infra errors.

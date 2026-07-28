@@ -113,6 +113,19 @@ export const useSpecsApi = (options?: UseSpecsApiOptions) => {
     [],
   );
 
+  const updateWorkspaceStatus = useCallback(
+    async (
+      wsId: string,
+      status: Workspace["status"],
+    ): Promise<Workspace> => {
+      const res = await axios.patch<Workspace>(`${base()}/workspaces/${wsId}`, {
+        status,
+      });
+      return res.data;
+    },
+    [],
+  );
+
   // --- Documentos ---
   const writeDocument = useCallback(
     async (
@@ -300,6 +313,7 @@ export const useSpecsApi = (options?: UseSpecsApiOptions) => {
     fetchProjectWorkspaces,
     fetchWorkspaceBoard,
     createWorkspace,
+    updateWorkspaceStatus,
     writeDocument,
     fetchDocumentVersions,
     createTask,

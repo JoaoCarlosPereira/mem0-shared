@@ -52,6 +52,7 @@ class TestConfigureGoogleAuthFlags:
         assert install.read_env(compose_env, "GOOGLE_CLIENT_ID") == "cid.apps.googleusercontent.com"
         assert install.read_env(compose_env, "GOOGLE_CLIENT_SECRET") == "csec"
         assert install.read_env(compose_env, "NEXTAUTH_URL") == "http://192.168.0.10:3000"
+        assert install.read_env(compose_env, "AUTH_UI_REQUIRED") == "1"
         # Segredos gerados automaticamente com tamanho seguro (>= 32 bytes).
         for key in ("AUTH_JWT_SECRET", "NEXTAUTH_SECRET"):
             value = install.read_env(compose_env, key)
@@ -78,6 +79,7 @@ class TestConfigureGoogleAuthFlags:
         result = install.configure_google_auth(_args(), compose_env, interactive=False)
         assert result is True
         assert install.read_env(compose_env, "AUTH_JWT_SECRET")
+        assert install.read_env(compose_env, "AUTH_UI_REQUIRED") == "1"
 
     def test_sem_config_nao_interativo_fail_closed(self, compose_env):
         result = install.configure_google_auth(_args(), compose_env, interactive=False)
@@ -85,6 +87,7 @@ class TestConfigureGoogleAuthFlags:
         # Nada de login gravado — fluxo legado segue.
         assert install.read_env(compose_env, "AUTH_ALLOWED_DOMAIN") is None
         assert install.read_env(compose_env, "AUTH_JWT_SECRET") is None
+        assert install.read_env(compose_env, "AUTH_UI_REQUIRED") == "0"
 
 
 class TestConfigureGoogleAuthInterativo:
@@ -109,6 +112,7 @@ class TestConfigureGoogleAuthInterativo:
         result = install.configure_google_auth(_args(), compose_env, interactive=True)
         assert result is False
         assert install.read_env(compose_env, "AUTH_ALLOWED_DOMAIN") is None
+        assert install.read_env(compose_env, "AUTH_UI_REQUIRED") == "0"
 
     def test_flag_skip_google_auth_nao_pergunta(self, compose_env, monkeypatch):
         def _boom(prompt=""):
@@ -119,6 +123,7 @@ class TestConfigureGoogleAuthInterativo:
             _args(skip_google_auth=True), compose_env, interactive=True
         )
         assert result is False
+        assert install.read_env(compose_env, "AUTH_UI_REQUIRED") == "0"
 
 
 @pytest.fixture(scope="module")
@@ -145,3 +150,8 @@ class TestInstallerWiring:
             "--skip-google-auth",
         ):
             assert flag in source, f"flag {flag} ausente no parser"
+
+    def test_hardening_hooks_presentes(self, source):
+        assert "ensure_docker_access(" in source
+        assert "ensure_ollama_reachable_from_docker(" in source
+        assert "wait_for_ui(" in source

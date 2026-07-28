@@ -21,6 +21,8 @@ def _no_categorize(monkeypatch):
     # O listener after_insert/after_update de Memory chama OpenAI (categorização);
     # neutraliza nos testes para isolar a lógica e evitar chamadas de rede.
     monkeypatch.setattr("app.models.categorize_memory", lambda *a, **k: None)
+    # Cold-tier deletes Qdrant points — allow in unit tests only.
+    monkeypatch.setenv("MEM0_ALLOW_GOVERNANCE_PURGE", "1")
 
 
 @pytest.fixture

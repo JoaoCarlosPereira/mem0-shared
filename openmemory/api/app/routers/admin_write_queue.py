@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.utils.admin_auth import require_admin
 from app.utils.read_cache import read_cache
 from app.utils.write_queue_requeue import requeue_done_write_jobs, requeue_failed_write_jobs
 
@@ -24,6 +25,7 @@ def retry_failed_write_queue_jobs(
     project: Optional[str] = Query(
         None, description="Requeue only failed jobs for this project"
     ),
+    _: None = Depends(require_admin),
 ) -> RetryFailedWriteQueueResponse:
     """Re-queue all failed or skipped write jobs (optionally scoped to one project)."""
     count, projects = requeue_failed_write_jobs(db, project=project)
@@ -38,6 +40,7 @@ def requeue_done_write_queue_jobs(
     project: Optional[str] = Query(
         None, description="Requeue only done jobs for this project"
     ),
+    _: None = Depends(require_admin),
 ) -> RetryFailedWriteQueueResponse:
     """Re-queue completed write jobs after vector-store data loss."""
     count, projects = requeue_done_write_jobs(db, project=project)

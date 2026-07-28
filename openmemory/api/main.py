@@ -58,9 +58,36 @@ app = FastAPI(title="OpenMemory API")
 configure_tracing(service_name="openmemory-api", app=app, engine=engine)
 
 app.add_middleware(RequestIdMiddleware)
+
+
+def _cors_allow_origins() -> list[str]:
+    """Explicit origins from CORS_ORIGINS (comma-separated). Never '*' with credentials."""
+    raw = (os.getenv("CORS_ORIGINS") or "").strip()
+    if raw:
+        origins = [o.strip() for o in raw.split(",") if o.strip() and o.strip() != "*"]
+        if origins:
+            return origins
+    # Safe defaults for local UI + common LAN UI ports.
+    defaults = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+    ui_url = (os.getenv("NEXTAUTH_URL") or os.getenv("OPENMEMORY_UI_URL") or "").strip()
+    if ui_url:
+        defaults.append(ui_url.rstrip("/"))
+    # Dedupe while preserving order.
+    seen: set[str] = set()
+    out: list[str] = []
+    for o in defaults:
+        if o not in seen:
+            seen.add(o)
+            out.append(o)
+    return out
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_allow_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

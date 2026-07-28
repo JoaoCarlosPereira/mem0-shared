@@ -9,12 +9,43 @@ A API valida um token por equipe na borda. Modos (env `AUTH_MODE`):
 | Modo | Comportamento |
 |------|---------------|
 | `off` | Não valida (compatibilidade total com trust-on-LAN). |
-| `warn` | **Default.** Valida e contabiliza/loga ausência/invalidez, mas **não bloqueia**. Use durante a transição. |
+| `warn` | **Default.** Valida e contabiliza/loga ausência/invalidez, mas **não bloqueia** GETs legados. Credencial Bearer **inválida** ⇒ 401. `Bearer local` (shim OAuth) ⇒ legado. |
 | `enforce` | Rejeita `401` quando o token é ausente/inválido. |
 
 O cliente envia o token em `X-API-Key: <token>` ou `Authorization: Bearer <token>`.
 A equipe resolvida é registrada para auditoria (`team_var`); a atribuição por
 hostname (ADR-003) permanece.
+
+### Mutações destrutivas `/admin/*`
+
+Mesmo em `AUTH_MODE=warn`, restore/purge/requeue-done/migration/promote exigem
+admin autenticado:
+
+| Credencial | Env |
+|------------|-----|
+| `X-Admin-Token: …` ou `Authorization: Bearer …` | `ADMIN_TOKEN` |
+| Sessão JWT da UI (email opcionalmente allowlisted) | `AUTH_ADMIN_EMAILS` (vírgula; vazio = qualquer sessão válida) |
+
+Recomendado em LAN de produção: `AUTH_MODE=enforce` + `ADMIN_TOKEN` forte.
+
+### UI legado (sem Google)
+
+| Env | Efeito |
+|-----|--------|
+| `AUTH_UI_REQUIRED=0` | Middleware não força `/login`; login oferece “Continuar sem login”. |
+| (vazio) + sem `GOOGLE_CLIENT_ID` | Mesmo comportamento legado (auto-detect). |
+| `AUTH_UI_REQUIRED=1` ou Google configurado | UI exige sessão Google. |
+
+### CORS
+
+`CORS_ORIGINS` — lista separada por vírgula (ex.: `http://localhost:3000,http://192.168.2.184:3000`).
+Sem a variável, a API usa `localhost:3000` / `127.0.0.1:3000` e `NEXTAUTH_URL` se setado.
+**Não** use `*` com credentials.
+
+### Governance purge
+
+`MEM0_ALLOW_GOVERNANCE_PURGE=0` (default). Purge/cold-tier no Qdrant só rodam com
+esta flag ou com o par `MEM0_ALLOW_MEMORY_DELETE` + `MEM0_ALLOW_BULK_DELETE`.
 
 ### Rollout recomendado (sem quebrar clientes)
 
@@ -53,7 +84,8 @@ O default de `AUTH_TOKENS_FILE` já aponta para `/run/secrets/team_tokens`.
 - Nenhum valor sensível (tokens, `S3_SECRET_KEY`, senha do PostgreSQL, `API_KEY`)
   deve permanecer em `.env` versionado. Use Docker secrets ou um `.env` local
   não rastreado (já em `.gitignore`).
-- `S3_ACCESS_KEY`/`S3_SECRET_KEY` do MinIO: trocar os defaults `minioadmin`.
+- `S3_ACCESS_KEY`/`S3_SECRET_KEY` do MinIO: **obrigatórios** no `.env` (compose
+  scale/backup não embutem mais o default `minioadmin`).
 
 ## Rate limit (contexto)
 

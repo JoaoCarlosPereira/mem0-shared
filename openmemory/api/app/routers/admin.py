@@ -44,6 +44,7 @@ from app.schemas import (
     WriteAuditLogResponse,
     WriteQueueJobResponse,
 )
+from app.utils.admin_auth import require_admin
 from app.utils.backup import BackupService
 from app.utils.backup_archive import BackupArchive
 from app.utils.backup_policy import get_backup_policy, get_backup_policy_runtime, save_backup_policy
@@ -189,7 +190,11 @@ class StartMigrationRequest(BaseModel):
 
 
 @router.post("/migration/start")
-def migration_start(req: StartMigrationRequest, control: MigrationControl = Depends(_control)) -> dict:
+def migration_start(
+    req: StartMigrationRequest,
+    control: MigrationControl = Depends(_control),
+    _: None = Depends(require_admin),
+) -> dict:
     try:
         return control.start(req.source_collection, req.target_collection)
     except MigrationError as e:
@@ -197,7 +202,10 @@ def migration_start(req: StartMigrationRequest, control: MigrationControl = Depe
 
 
 @router.post("/migration/validate")
-def migration_validate(control: MigrationControl = Depends(_control)) -> dict:
+def migration_validate(
+    control: MigrationControl = Depends(_control),
+    _: None = Depends(require_admin),
+) -> dict:
     try:
         return control.validate()
     except MigrationError as e:
@@ -205,7 +213,10 @@ def migration_validate(control: MigrationControl = Depends(_control)) -> dict:
 
 
 @router.post("/migration/flip")
-def migration_flip(control: MigrationControl = Depends(_control)) -> dict:
+def migration_flip(
+    control: MigrationControl = Depends(_control),
+    _: None = Depends(require_admin),
+) -> dict:
     try:
         return control.flip()
     except MigrationError as e:
@@ -213,7 +224,10 @@ def migration_flip(control: MigrationControl = Depends(_control)) -> dict:
 
 
 @router.post("/migration/rollback")
-def migration_rollback(control: MigrationControl = Depends(_control)) -> dict:
+def migration_rollback(
+    control: MigrationControl = Depends(_control),
+    _: None = Depends(require_admin),
+) -> dict:
     try:
         return control.rollback()
     except MigrationError as e:
@@ -228,6 +242,7 @@ def promote_project(
     name: str,
     background: BackgroundTasks,
     service: PromotionService = Depends(_promotion),
+    _: None = Depends(require_admin),
 ) -> dict:
     """Enqueue promotion of a project to a dedicated shard key (non-blocking)."""
     background.add_task(service.promote, name)
@@ -260,6 +275,7 @@ def _ensure_writable(path: str) -> None:
 def backup_run(
     background: BackgroundTasks,
     archive: BackupArchive = Depends(_backup_archive),
+    _: None = Depends(require_admin),
 ) -> dict:
     """Dispara um backup completo (Qdrant + PostgreSQL) em background."""
     background.add_task(archive.create)
@@ -285,7 +301,11 @@ def backup_policy_get(db: Session = Depends(get_db)) -> BackupPolicySchema:
 
 
 @router.put("/backup/policy", response_model=BackupPolicySchema)
-def backup_policy_put(payload: dict, db: Session = Depends(get_db)) -> BackupPolicySchema:
+def backup_policy_put(
+    payload: dict,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin),
+) -> BackupPolicySchema:
     """Valida (schema + local_dir gravável) e persiste a política de backup."""
     try:
         policy = BackupPolicySchema(**payload)
@@ -301,6 +321,7 @@ def backup_restore(
     req: BackupRestoreRequest,
     background: BackgroundTasks,
     archive: BackupArchive = Depends(_backup_archive),
+    _: None = Depends(require_admin),
 ) -> dict:
     """Restore guiado: 404 se o arquivo não existe; 400 se a confirmação não bater."""
     if not archive.has(req.archive):

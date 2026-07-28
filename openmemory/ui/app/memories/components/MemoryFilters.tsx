@@ -86,7 +86,7 @@ export function MemoryFilters() {
     }
     params.set("page", "1");
     if (!params.has("size")) {
-      params.set("size", "10");
+      params.set("size", "20");
     }
     router.push(`/memories?${params.toString()}`);
   }, 300);
@@ -111,13 +111,13 @@ export function MemoryFilters() {
     activeFilters.selectedCategories.length > 0;
 
   return (
-    <div className="glass mb-4 flex flex-col gap-3 rounded-2xl border border-slate-800 p-4 md:flex-row md:items-center">
-      <div className="relative flex-1">
+    <div className="glass mb-3 flex flex-col gap-3 rounded-2xl border border-slate-800 p-3 sm:p-4 md:flex-row md:items-center">
+      <div className="relative min-w-0 flex-1">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
         <Input
           ref={inputRef}
           placeholder="Buscar memórias..."
-          className="max-w-[500px] rounded-xl border-slate-800 bg-slate-950 pl-9 text-slate-200"
+          className="w-full rounded-xl border-slate-800 bg-slate-950 pl-9 text-slate-200"
           onChange={(e) => handleSearch(e.target.value)}
         />
       </div>

@@ -37,12 +37,20 @@ from app.utils.creator_identity import (
 )
 from app.utils.permissions import get_accessible_spec_workspace_ids
 from app.utils.projects import upsert_project
-from app.utils.spec_search import search_specs
+from app.utils.spec_auth import resolve_spec_actor, resolve_spec_subject
+from app.utils.spec_search import index_completed_workspace, search_specs
 from app.utils.spec_versioning import write_document_version
-from app.utils.task_lock import claim_task, release_task, update_task_status
+from app.utils.task_lock import (
+    TaskStatusPolicyError,
+    claim_task,
+    release_task,
+    update_task_metadata,
+    update_task_status,
+)
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/api/v1/specs", tags=["specs"])
@@ -57,6 +65,10 @@ class WorkspaceCreate(BaseModel):
     name: str
     status: Optional[SpecWorkspaceStatus] = None
     created_by: Optional[str] = None
+
+
+class WorkspaceStatusUpdate(BaseModel):
+    status: SpecWorkspaceStatus
 
 
 class WorkspaceResponse(BaseModel):
@@ -218,16 +230,22 @@ def _get_workspace_or_404(db: Session, workspace_id: UUID) -> SpecWorkspace:
     return ws
 
 
-def _assert_access(
-    db: Session,
-    workspace_id: UUID,
-    subject_type: str,
-    subject_id: Optional[UUID],
-) -> None:
-    """Nega (403) se o sujeito tem regras de acesso mas nenhuma inclui este workspace."""
+def _assert_access(db: Session, workspace_id: UUID) -> None:
+    """Nega (403) se o sujeito autenticado tem regras mas nenhuma inclui este workspace.
+
+    O sujeito vem do contexto de auth (``auth_user_var``), nunca de query params.
+    """
+    subject_type, subject_id = resolve_spec_subject()
     accessible = get_accessible_spec_workspace_ids(db, subject_type, subject_id)
     if accessible is not None and workspace_id not in accessible:
         raise HTTPException(status_code=403, detail="Sem permissão para este workspace")
+
+
+def _policy_http(exc: TaskStatusPolicyError) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={"policy": True, "code": exc.code, "message": exc.message},
+    )
 
 
 def _get_document_or_404(
@@ -288,7 +306,7 @@ def get_or_create_workspace(
 
     Lógica compartilhada entre o endpoint REST e a tool MCP (sem duplicação).
     Retorna ``(workspace, created)``; garante o Project no catálogo via
-    ``upsert_project``.
+    ``upsert_project``. Em corrida, o perdedor do UNIQUE re-consulta o vencedor.
     """
     upsert_project(project_id, session=db)
     existing = (
@@ -307,7 +325,18 @@ def get_or_create_workspace(
         created_by=created_by,
     )
     db.add(ws)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = (
+            db.query(SpecWorkspace)
+            .filter(SpecWorkspace.project_id == project_id, SpecWorkspace.slug == slug)
+            .first()
+        )
+        if existing is not None:
+            return existing, False
+        raise
     db.refresh(ws)
     return ws, True
 
@@ -324,11 +353,27 @@ def get_or_create_document(
         )
         .first()
     )
-    if doc is None:
-        doc = SpecDocument(workspace_id=workspace_id, document_type=document_type)
-        db.add(doc)
+    if doc is not None:
+        return doc
+
+    doc = SpecDocument(workspace_id=workspace_id, document_type=document_type)
+    db.add(doc)
+    try:
         db.commit()
-        db.refresh(doc)
+    except IntegrityError:
+        db.rollback()
+        doc = (
+            db.query(SpecDocument)
+            .filter(
+                SpecDocument.workspace_id == workspace_id,
+                SpecDocument.document_type == document_type,
+            )
+            .first()
+        )
+        if doc is None:
+            raise
+        return doc
+    db.refresh(doc)
     return doc
 
 
@@ -374,10 +419,41 @@ def create_workspace(
         project_id=payload.project_id,
         slug=payload.slug,
         name=payload.name,
-        created_by=payload.created_by,
+        created_by=resolve_spec_actor(body_actor=payload.created_by),
         status=payload.status,
     )
     response.status_code = 201 if created else 200
+    return ws
+
+
+@router.patch("/workspaces/{workspace_id}", response_model=WorkspaceResponse)
+def update_workspace_status(
+    workspace_id: UUID,
+    payload: WorkspaceStatusUpdate,
+    db: Session = Depends(get_db),
+) -> WorkspaceResponse:
+    """Atualiza o status do workspace. Em transição para ``concluido``, indexa docs."""
+    ws = _get_workspace_or_404(db, workspace_id)
+    _assert_access(db, workspace_id)
+
+    previous = ws.status
+    ws.status = payload.status
+    db.commit()
+    db.refresh(ws)
+
+    if (
+        payload.status == SpecWorkspaceStatus.concluido
+        and previous != SpecWorkspaceStatus.concluido
+    ):
+        try:
+            index_completed_workspace(db, ws)
+        except Exception:  # noqa: BLE001 — indexação não deve falhar o PATCH
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "falha ao indexar workspace concluído %s", workspace_id
+            )
+
     return ws
 
 
@@ -417,9 +493,8 @@ def _build_summaries(
 def _filter_accessible(
     db: Session,
     workspaces: list[SpecWorkspace],
-    subject_type: str,
-    subject_id: Optional[UUID],
 ) -> list[SpecWorkspace]:
+    subject_type, subject_id = resolve_spec_subject()
     accessible = get_accessible_spec_workspace_ids(db, subject_type, subject_id)
     if accessible is None:
         return workspaces
@@ -428,8 +503,6 @@ def _filter_accessible(
 
 @router.get("/workspaces", response_model=list[WorkspaceSummaryResponse])
 def list_all_workspaces(
-    subject_type: str = Query("user"),
-    subject_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db),
 ) -> list[WorkspaceSummaryResponse]:
     """Índice global: todos os workspaces acessíveis (de todos os projetos).
@@ -437,7 +510,7 @@ def list_all_workspaces(
     Alimenta a tela inicial de Specs (lista os quadros agrupados por projeto).
     """
     workspaces = db.query(SpecWorkspace).order_by(SpecWorkspace.project_id).all()
-    workspaces = _filter_accessible(db, workspaces, subject_type, subject_id)
+    workspaces = _filter_accessible(db, workspaces)
     return _build_summaries(db, workspaces)
 
 
@@ -447,8 +520,6 @@ def list_all_workspaces(
 )
 def list_project_workspaces(
     project_id: str,
-    subject_type: str = Query("user"),
-    subject_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db),
 ) -> list[WorkspaceSummaryResponse]:
     """Painel de Projeto: workspaces + contagem de tasks por status.
@@ -461,20 +532,18 @@ def list_project_workspaces(
         .filter(SpecWorkspace.project_id == project_id)
         .all()
     )
-    workspaces = _filter_accessible(db, workspaces, subject_type, subject_id)
+    workspaces = _filter_accessible(db, workspaces)
     return _build_summaries(db, workspaces)
 
 
 @router.get("/workspaces/{workspace_id}", response_model=WorkspaceBoardResponse)
 def get_workspace_board(
     workspace_id: UUID,
-    subject_type: str = Query("user"),
-    subject_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db),
 ) -> WorkspaceBoardResponse:
     """Quadro completo do workspace: documentos + tasks."""
     ws = _get_workspace_or_404(db, workspace_id)
-    _assert_access(db, workspace_id, subject_type, subject_id)
+    _assert_access(db, workspace_id)
 
     documents = (
         db.query(SpecDocument)
@@ -508,17 +577,15 @@ def write_workspace_document(
     workspace_id: UUID,
     document_type: DocumentType,
     payload: DocumentWriteRequest,
-    subject_type: str = Query("user"),
-    subject_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db),
 ) -> DocumentWriteResponse:
     """Grava uma nova versão do documento. 409 em conflito de versão (ADR-005)."""
     _get_workspace_or_404(db, workspace_id)
-    _assert_access(db, workspace_id, subject_type, subject_id)
+    _assert_access(db, workspace_id)
 
     doc = get_or_create_document(db, workspace_id, document_type)
 
-    author = payload.author or (str(subject_id) if subject_id else None)
+    author = resolve_spec_actor(body_actor=payload.author)
     result = write_document_version(
         db,
         doc.id,
@@ -552,13 +619,11 @@ def write_workspace_document(
 def list_document_versions(
     workspace_id: UUID,
     document_type: DocumentType,
-    subject_type: str = Query("user"),
-    subject_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db),
 ) -> list[VersionResponse]:
     """Histórico de versões (snapshots) de um documento, em ordem crescente."""
     _get_workspace_or_404(db, workspace_id)
-    _assert_access(db, workspace_id, subject_type, subject_id)
+    _assert_access(db, workspace_id)
     doc = _get_document_or_404(db, workspace_id, document_type)
 
     return (
@@ -576,13 +641,11 @@ def list_document_versions(
 def delete_workspace_document(
     workspace_id: UUID,
     document_type: DocumentType,
-    subject_type: str = Query("user"),
-    subject_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db),
 ) -> Response:
     """Remove o documento do tipo dado e todo o histórico de versões."""
     _get_workspace_or_404(db, workspace_id)
-    _assert_access(db, workspace_id, subject_type, subject_id)
+    _assert_access(db, workspace_id)
     doc = _get_document_or_404(db, workspace_id, document_type)
 
     db.query(SpecComment).filter(
@@ -603,13 +666,11 @@ def delete_workspace_document(
 @router.post("/tasks", response_model=TaskResponse, status_code=201)
 def create_task(
     payload: TaskCreate,
-    subject_type: str = Query("user"),
-    subject_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db),
 ) -> TaskResponse:
     """Cria uma task; nasce na coluna ``tasks`` (backlog)."""
     _get_workspace_or_404(db, payload.workspace_id)
-    _assert_access(db, payload.workspace_id, subject_type, subject_id)
+    _assert_access(db, payload.workspace_id)
 
     task = TaskCard(
         workspace_id=payload.workspace_id,
@@ -627,33 +688,30 @@ def create_task(
 def update_task(
     task_id: UUID,
     payload: TaskUpdate,
-    subject_type: str = Query("user"),
-    subject_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db),
 ) -> TaskResponse:
-    """Atualiza título/descrição/branch com concorrência otimista (ADR-005)."""
+    """Atualiza título/descrição/branch com concorrência otimista atômica (ADR-005)."""
     task = _get_task_or_404(db, task_id)
-    _assert_access(db, task.workspace_id, subject_type, subject_id)
+    _assert_access(db, task.workspace_id)
 
-    if task.version != payload.expected_version:
+    result = update_task_metadata(
+        db,
+        task_id,
+        payload.expected_version,
+        title=payload.title,
+        description=payload.description,
+        branch_ref=payload.branch_ref,
+    )
+    if result.conflict:
         raise HTTPException(
             status_code=409,
             detail={
                 "conflict": True,
-                "current_version": task.version,
-                "title": task.title,
-                "description": task.description,
+                "current_version": result.version,
+                "title": result.title,
+                "description": result.description,
             },
         )
-
-    if payload.title is not None:
-        task.title = payload.title
-    if payload.description is not None:
-        task.description = payload.description
-    if payload.branch_ref is not None:
-        task.branch_ref = payload.branch_ref
-    task.version = task.version + 1
-    db.commit()
     db.refresh(task)
     return _enrich_task(db, task)
 
@@ -661,13 +719,11 @@ def update_task(
 @router.delete("/tasks/{task_id}", status_code=204)
 def delete_task(
     task_id: UUID,
-    subject_type: str = Query("user"),
-    subject_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db),
 ) -> Response:
     """Remove a task e o histórico de status associado."""
     task = _get_task_or_404(db, task_id)
-    _assert_access(db, task.workspace_id, subject_type, subject_id)
+    _assert_access(db, task.workspace_id)
 
     db.query(TaskStatusHistory).filter(TaskStatusHistory.task_id == task_id).delete()
     db.query(SpecComment).filter(
@@ -682,8 +738,6 @@ def delete_task(
 @router.delete("/workspaces/{workspace_id}", status_code=204)
 def delete_workspace(
     workspace_id: UUID,
-    subject_type: str = Query("user"),
-    subject_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db),
 ) -> Response:
     """Exclui definitivamente uma Tarefa (workspace) e TODOS os seus filhos:
@@ -692,7 +746,7 @@ def delete_workspace(
     Irreversível. Atinge SOMENTE as tabelas de specs — memórias/Qdrant intactas.
     """
     ws = _get_workspace_or_404(db, workspace_id)
-    _assert_access(db, workspace_id, subject_type, subject_id)
+    _assert_access(db, workspace_id)
 
     doc_ids = [
         d.id
@@ -740,15 +794,16 @@ def delete_workspace(
 def claim_task_endpoint(
     task_id: UUID,
     payload: ClaimRequest,
-    subject_type: str = Query("user"),
-    subject_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db),
 ) -> TaskResponse:
     """Assume a task. 409 se já ativa com outro responsável (ADR-003)."""
     task = _get_task_or_404(db, task_id)
-    _assert_access(db, task.workspace_id, subject_type, subject_id)
+    _assert_access(db, task.workspace_id)
 
-    result = claim_task(db, task_id, payload.claimant)
+    claimant = resolve_spec_actor(body_actor=payload.claimant)
+    if not claimant:
+        raise HTTPException(status_code=400, detail="claimant obrigatório")
+    result = claim_task(db, task_id, claimant)
     if not result.claimed:
         raise HTTPException(
             status_code=409,
@@ -766,15 +821,14 @@ def claim_task_endpoint(
 def release_task_endpoint(
     task_id: UUID,
     payload: ReleaseRequest,
-    subject_type: str = Query("user"),
-    subject_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db),
 ) -> TaskResponse:
     """Libera a task manualmente: volta a ``tasks`` e limpa assignee/bloqueio."""
     task = _get_task_or_404(db, task_id)
-    _assert_access(db, task.workspace_id, subject_type, subject_id)
+    _assert_access(db, task.workspace_id)
 
-    release_task(db, task_id, payload.actor, payload.reason)
+    actor = resolve_spec_actor(body_actor=payload.actor)
+    release_task(db, task_id, actor, payload.reason)
     db.refresh(task)
     return _enrich_task(db, task)
 
@@ -783,28 +837,31 @@ def release_task_endpoint(
 def patch_task_status(
     task_id: UUID,
     payload: StatusPatchRequest,
-    subject_type: str = Query("user"),
-    subject_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db),
 ) -> TaskResponse:
     """Muda a coluna e/ou o marcador de bloqueio com concorrência otimista.
 
     ``new_status`` omitido mantém a coluna atual (usado para reportar bloqueio =
-    ``is_blocked=true`` sem mudar de coluna — ADR-007). 409 em conflito de versão.
+    ``is_blocked=true`` sem mudar de coluna — ADR-007). 409 em conflito de versão
+    ou violação de política (use claim/release para entrar/sair de em_andamento).
     """
     task = _get_task_or_404(db, task_id)
-    _assert_access(db, task.workspace_id, subject_type, subject_id)
+    _assert_access(db, task.workspace_id)
 
     target_status = payload.new_status or task.status
-    result = update_task_status(
-        db,
-        task_id,
-        target_status,
-        payload.expected_version,
-        payload.actor,
-        is_blocked=payload.is_blocked,
-        block_reason=payload.block_reason,
-    )
+    actor = resolve_spec_actor(body_actor=payload.actor)
+    try:
+        result = update_task_status(
+            db,
+            task_id,
+            target_status,
+            payload.expected_version,
+            actor,
+            is_blocked=payload.is_blocked,
+            block_reason=payload.block_reason,
+        )
+    except TaskStatusPolicyError as exc:
+        raise _policy_http(exc) from exc
     if result.conflict:
         raise HTTPException(
             status_code=409,
@@ -824,18 +881,16 @@ def patch_task_status(
 @router.post("/comments", response_model=CommentResponse, status_code=201)
 def create_comment(
     payload: CommentCreate,
-    subject_type: str = Query("user"),
-    subject_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db),
 ) -> CommentResponse:
     """Adiciona comentário a workspace/documento/task (valida o alvo antes)."""
     workspace_id = _resolve_comment_target_workspace(db, payload.target_type, payload.target_id)
-    _assert_access(db, workspace_id, subject_type, subject_id)
+    _assert_access(db, workspace_id)
 
     comment = SpecComment(
         target_type=payload.target_type,
         target_id=payload.target_id,
-        author=payload.author,
+        author=resolve_spec_actor(body_actor=payload.author),
         body=payload.body,
     )
     db.add(comment)
@@ -852,6 +907,14 @@ def search_specs_endpoint(
     q: str = Query(..., description="Consulta semântica"),
     project_id: Optional[str] = Query(None, description="Filtro opcional por projeto"),
     group: Optional[str] = Query(None, description="Grupo do solicitante (boost)"),
+    db: Session = Depends(get_db),
 ) -> list[SpecSearchResult]:
     """Busca semântica em specs concluídas, ordenada por relevância (ADR-006)."""
-    return search_specs(q, project_id=project_id, requester_group=group)
+    subject_type, subject_id = resolve_spec_subject()
+    accessible = get_accessible_spec_workspace_ids(db, subject_type, subject_id)
+    return search_specs(
+        q,
+        project_id=project_id,
+        requester_group=group,
+        accessible_workspace_ids=accessible,
+    )

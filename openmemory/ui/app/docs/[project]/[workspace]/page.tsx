@@ -7,19 +7,21 @@ import { useSelector } from "react-redux";
 import {
   DndContext,
   DragEndEvent,
+  DragOverEvent,
+  DragOverlay,
+  DragStartEvent,
   PointerSensor,
+  TouchSensor,
   closestCorners,
+  pointerWithin,
+  rectIntersection,
+  useDraggable,
   useDroppable,
   useSensor,
   useSensors,
+  type CollisionDetection,
 } from "@dnd-kit/core";
-import {
-  SortableContext,
-  useSortable,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import { ArrowLeft, RollerCoaster } from "lucide-react";
+import { ArrowLeft, GripVertical, Plus, RollerCoaster } from "lucide-react";
 import { RootState } from "@/store/store";
 import { useSpecsApi } from "@/hooks/useSpecsApi";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -43,7 +45,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { BOARD_COLUMNS, TASK_COLUMN_KEYS, handleCardDrop } from "@/lib/specsBoard";
+import {
+  BOARD_COLUMNS,
+  TASK_COLUMN_KEYS,
+  handleCardDrop,
+  pickBoardDropTarget,
+  resolveDropColumn,
+} from "@/lib/specsBoard";
 import { MarkdownViewer } from "@/components/shared/MarkdownViewer";
 import { ActorLabel } from "@/components/shared/attribution-badge";
 import type {
@@ -51,65 +59,185 @@ import type {
   TaskCard,
   TaskCardStatus,
 } from "@/types/specs";
+import { cn } from "@/lib/utils";
+
+/** Prefer pointer-within (empty columns + cards), then intersection, then corners. */
+const boardCollisionDetection: CollisionDetection = (args) => {
+  const pointerHits = pointerWithin(args);
+  const rectHits = pointerHits.length > 0 ? pointerHits : rectIntersection(args);
+  const raw = rectHits.length > 0 ? rectHits : closestCorners(args);
+
+  const enriched = raw.map((hit) => {
+    const container = args.droppableContainers.find((c) => c.id === hit.id);
+    return {
+      id: hit.id,
+      data: (container?.data.current ?? null) as {
+        type?: string;
+        status?: string;
+      } | null,
+    };
+  });
+  const preferred = pickBoardDropTarget(enriched);
+  if (!preferred) return raw;
+  const match = raw.find((h) => String(h.id) === preferred);
+  return match ? [match] : raw;
+};
 
 const COLUMN_LABEL: Record<string, string> = Object.fromEntries(
   BOARD_COLUMNS.map((c) => [c.key, c.label]),
 );
 
-// ---- Card de task (arrastável; clique abre detalhe) ------------------------
-function SortableTaskCard({
+// ---- Conteúdo visual do card (reutilizado no overlay) ---------------------
+function TaskCardBody({
+  task,
+  claimTakenBy,
+  claimBusy,
+  onOpen,
+  onClaim,
+  dragHandle,
+}: {
+  task: TaskCard;
+  claimTakenBy?: string | null;
+  claimBusy?: boolean;
+  onOpen?: (task: TaskCard) => void;
+  onClaim?: (task: TaskCard) => void;
+  dragHandle?: React.ReactNode;
+}) {
+  const canClaim = task.status === "tasks" && !task.assignee && !!onClaim;
+
+  return (
+    <>
+      <div className="flex items-start gap-1.5">
+        {dragHandle}
+        <div className="min-w-0 flex-1">
+          {onOpen ? (
+            <button
+              type="button"
+              onClick={() => onOpen(task)}
+              className="w-full text-left"
+              data-testid={`task-card-open-${task.id}`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <span className="font-medium text-zinc-100">{task.title}</span>
+                {task.is_blocked && (
+                  <Badge variant="destructive" aria-label="bloqueado">
+                    Bloqueado
+                  </Badge>
+                )}
+              </div>
+            </button>
+          ) : (
+            <div className="flex items-start justify-between gap-2">
+              <span className="font-medium text-zinc-100">{task.title}</span>
+              {task.is_blocked && (
+                <Badge variant="destructive" aria-label="bloqueado">
+                  Bloqueado
+                </Badge>
+              )}
+            </div>
+          )}
+          {task.assignee && (
+            <div className="mt-2" data-testid={`task-assignee-${task.id}`}>
+              <ActorLabel
+                hostname={task.assignee}
+                displayName={task.assignee_display_name}
+                avatarUrl={task.assignee_avatar_url}
+              />
+            </div>
+          )}
+          {task.block_reason && (
+            <div className="mt-1 text-xs text-amber-400">{task.block_reason}</div>
+          )}
+          {claimTakenBy && (
+            <div className="mt-1 text-xs text-red-400" role="alert">
+              Já assumida por {claimTakenBy}. Aguarde a atualização do quadro.
+            </div>
+          )}
+        </div>
+      </div>
+      {canClaim && (
+        <div className="mt-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 w-full border-zinc-700 text-xs"
+            disabled={claimBusy || !!claimTakenBy}
+            data-testid={`claim-card-${task.id}`}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClaim?.(task);
+            }}
+          >
+            Assumir
+          </Button>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ---- Card de task (arrastável; clique no título abre detalhe) --------------
+function DraggableTaskCard({
   task,
   onOpen,
+  onClaim,
   claimTakenBy,
+  claimBusy,
 }: {
   task: TaskCard;
   onOpen: (task: TaskCard) => void;
+  onClaim?: (task: TaskCard) => void;
   claimTakenBy?: string | null;
+  claimBusy?: boolean;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: task.id });
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-  };
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: task.id,
+    data: { type: "task", status: task.status },
+  });
+  // Também droppable: soltar sobre outro card resolve a coluna via resolveDropColumn
+  const { setNodeRef: setDropRef, isOver } = useDroppable({
+    id: task.id,
+    data: { type: "task", status: task.status },
+  });
+  const setRefs = useCallback(
+    (node: HTMLElement | null) => {
+      setNodeRef(node);
+      setDropRef(node);
+    },
+    [setNodeRef, setDropRef],
+  );
+
   return (
-    <button
-      type="button"
-      ref={setNodeRef}
-      style={style}
-      {...attributes}
+    <div
+      ref={setRefs}
       {...listeners}
+      {...attributes}
       data-testid={`task-card-${task.id}`}
-      onClick={() => onOpen(task)}
-      className="w-full rounded-md border border-zinc-800 bg-zinc-900 p-3 text-left text-sm transition-colors hover:border-zinc-600 hover:bg-zinc-900/80"
+      className={cn(
+        "w-full touch-none rounded-md border border-zinc-800 bg-zinc-900 p-3 text-left text-sm transition-colors hover:border-zinc-600 hover:bg-zinc-900/80",
+        isDragging ? "cursor-grabbing opacity-40" : "cursor-grab",
+        isOver && !isDragging && "ring-2 ring-blue-500/60",
+      )}
     >
-      <div className="flex items-start justify-between gap-2">
-        <span className="font-medium text-zinc-100">{task.title}</span>
-        {task.is_blocked && (
-          <Badge variant="destructive" aria-label="bloqueado">
-            Bloqueado
-          </Badge>
-        )}
-      </div>
-      {task.assignee && (
-        <div className="mt-2" data-testid={`task-assignee-${task.id}`}>
-          <ActorLabel
-            hostname={task.assignee}
-            displayName={task.assignee_display_name}
-            avatarUrl={task.assignee_avatar_url}
-          />
-        </div>
-      )}
-      {task.block_reason && (
-        <div className="mt-1 text-xs text-amber-400">{task.block_reason}</div>
-      )}
-      {claimTakenBy && (
-        <div className="mt-1 text-xs text-red-400" role="alert">
-          Já assumida por {claimTakenBy}. Aguarde a atualização do quadro.
-        </div>
-      )}
-    </button>
+      <TaskCardBody
+        task={task}
+        claimTakenBy={claimTakenBy}
+        claimBusy={claimBusy}
+        onOpen={onOpen}
+        onClaim={onClaim}
+        dragHandle={
+          <span
+            aria-hidden
+            className="mt-0.5 shrink-0 text-zinc-600"
+            data-testid={`task-drag-handle-${task.id}`}
+          >
+            <GripVertical className="h-4 w-4" />
+          </span>
+        }
+      />
+    </div>
   );
 }
 
@@ -148,25 +276,39 @@ function Column({
   columnKey,
   label,
   children,
+  headerAction,
+  isDropTarget,
+  acceptsDrops,
 }: {
   columnKey: string;
   label: string;
   children: React.ReactNode;
+  headerAction?: React.ReactNode;
+  isDropTarget?: boolean;
+  acceptsDrops?: boolean;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: columnKey });
+  const { setNodeRef, isOver } = useDroppable({
+    id: columnKey,
+    data: { type: "column", status: columnKey },
+    disabled: acceptsDrops === false,
+  });
+  const highlight = acceptsDrops !== false && (isDropTarget || isOver);
   return (
     <div
       ref={setNodeRef}
       data-testid={`column-${columnKey}`}
-      className={
-        "flex min-h-0 min-w-0 flex-1 flex-col gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 p-2" +
-        (isOver ? " ring-2 ring-blue-500" : "")
-      }
+      className={cn(
+        "flex min-h-0 min-w-0 flex-1 flex-col gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 p-2 transition-[box-shadow,border-color]",
+        highlight && "border-blue-500/60 ring-2 ring-blue-500",
+      )}
     >
-      <h3 className="shrink-0 px-1 text-xs font-black uppercase tracking-widest text-zinc-400">
-        {label}
-      </h3>
-      <div className="custom-scroll flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+      <div className="flex shrink-0 items-center justify-between gap-1 px-1">
+        <h3 className="text-xs font-black uppercase tracking-widest text-zinc-400">
+          {label}
+        </h3>
+        {headerAction}
+      </div>
+      <div className="custom-scroll flex min-h-[120px] min-w-0 flex-1 flex-col gap-2 overflow-y-auto">
         {children}
       </div>
     </div>
@@ -185,6 +327,8 @@ export default function SpecsBoardPage() {
     deleteDocument,
     writeDocument,
     claimTask,
+    releaseTask,
+    createTask,
     fetchWorkspaceBoard,
   } = useSpecsApi({
     workspaceId,
@@ -212,10 +356,17 @@ export default function SpecsBoardPage() {
   const [taskDescription, setTaskDescription] = useState("");
   const [taskStatus, setTaskStatus] = useState<TaskCardStatus>("tasks");
 
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createTitle, setCreateTitle] = useState("");
+  const [createDescription, setCreateDescription] = useState("");
+  const [createError, setCreateError] = useState<string | null>(null);
+
   const [openDoc, setOpenDoc] = useState<SpecDocument | null>(null);
   const [docContent, setDocContent] = useState("");
   const [docEditing, setDocEditing] = useState(false);
   const [taskDescEditing, setTaskDescEditing] = useState(false);
+  const [activeDragTask, setActiveDragTask] = useState<TaskCard | null>(null);
+  const [overColumnKey, setOverColumnKey] = useState<TaskCardStatus | null>(null);
 
   useEffect(() => {
     if (board) setTasks(board.tasks);
@@ -228,7 +379,40 @@ export default function SpecsBoardPage() {
   }, [tasks, openTask?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 180, tolerance: 8 },
+    }),
+  );
+
+  const clearDragState = useCallback(() => {
+    setActiveDragTask(null);
+    setOverColumnKey(null);
+  }, []);
+
+  const syncOverColumn = useCallback(
+    (overId: string | null) => {
+      setOverColumnKey(resolveDropColumn(overId, tasks));
+    },
+    [tasks],
+  );
+
+  const onDragStart = useCallback(
+    (event: DragStartEvent) => {
+      const id = String(event.active.id);
+      const task = tasks.find((t) => t.id === id) ?? null;
+      setActiveDragTask(task);
+      setOverColumnKey(task?.status ?? null);
+    },
+    [tasks],
+  );
+
+  const onDragOver = useCallback(
+    (event: DragOverEvent) => {
+      const overId = event.over ? String(event.over.id) : null;
+      syncOverColumn(overId);
+    },
+    [syncOverColumn],
   );
 
   const openTaskDialog = useCallback((task: TaskCard) => {
@@ -251,6 +435,7 @@ export default function SpecsBoardPage() {
     async (event: DragEndEvent) => {
       const activeId = String(event.active.id);
       const overColumn = event.over ? String(event.over.id) : null;
+      clearDragState();
 
       const outcome = await handleCardDrop({
         activeId,
@@ -258,10 +443,21 @@ export default function SpecsBoardPage() {
         tasks,
         actor,
         updateTaskStatus,
+        claimTask,
+        releaseTask,
       });
       if (!outcome.moved) return;
 
-      if (outcome.conflict) {
+      if (outcome.claimedDenied) {
+        setClaimTaken((prev) => ({
+          ...prev,
+          [outcome.task!.id]: outcome.currentAssignee || "outro responsável",
+        }));
+        setConflictMsg(
+          `Não foi possível assumir "${outcome.task?.title}": já está com ${outcome.currentAssignee || "outro responsável"}.`,
+        );
+        await fetchWorkspaceBoard(workspaceId);
+      } else if (outcome.conflict) {
         setConflictMsg(
           `Conflito ao mover "${outcome.task?.title}": o card mudou no servidor (versão ${outcome.result?.current_version}). O quadro foi atualizado.`,
         );
@@ -278,13 +474,27 @@ export default function SpecsBoardPage() {
         await fetchWorkspaceBoard(workspaceId);
       }
     },
-    [tasks, actor, updateTaskStatus, fetchWorkspaceBoard, workspaceId],
+    [
+      tasks,
+      actor,
+      updateTaskStatus,
+      claimTask,
+      releaseTask,
+      fetchWorkspaceBoard,
+      workspaceId,
+      clearDragState,
+    ],
   );
+
+  const onDragCancel = useCallback(() => {
+    clearDragState();
+  }, [clearDragState]);
 
   const onClaim = useCallback(
     async (task: TaskCard) => {
       setBusy(true);
       setDialogError(null);
+      setConflictMsg(null);
       try {
         const res = await claimTask(task.id, actor);
         if (!res.claimed) {
@@ -292,9 +502,9 @@ export default function SpecsBoardPage() {
             ...prev,
             [task.id]: res.current_assignee || "outro responsável",
           }));
-          setDialogError(
-            `Já assumida por ${res.current_assignee || "outro responsável"}.`,
-          );
+          const msg = `Já assumida por ${res.current_assignee || "outro responsável"}.`;
+          setDialogError(msg);
+          setConflictMsg(`Não foi possível assumir "${task.title}": ${msg}`);
         } else {
           setClaimTaken((prev) => {
             const next = { ...prev };
@@ -309,6 +519,36 @@ export default function SpecsBoardPage() {
     },
     [claimTask, actor, fetchWorkspaceBoard, workspaceId],
   );
+
+  const openCreateDialog = useCallback(() => {
+    setCreateError(null);
+    setCreateTitle("");
+    setCreateDescription("");
+    setCreateOpen(true);
+  }, []);
+
+  const onCreateTask = useCallback(async () => {
+    const title = createTitle.trim();
+    if (!title) {
+      setCreateError("Informe um título.");
+      return;
+    }
+    setBusy(true);
+    setCreateError(null);
+    try {
+      await createTask({
+        workspace_id: workspaceId,
+        title,
+        description: createDescription.trim() || null,
+      });
+      setCreateOpen(false);
+      await fetchWorkspaceBoard(workspaceId);
+    } catch (err: any) {
+      setCreateError(err?.message || "Falha ao criar a task");
+    } finally {
+      setBusy(false);
+    }
+  }, [createTitle, createDescription, createTask, workspaceId, fetchWorkspaceBoard]);
 
   const onToggleBlock = useCallback(
     async (task: TaskCard) => {
@@ -356,15 +596,35 @@ export default function SpecsBoardPage() {
         version = res.task?.version ?? version + 1;
       }
       if (taskStatus !== openTask.status) {
-        const res = await updateTaskStatus(openTask.id, {
-          expected_version: version,
-          new_status: taskStatus,
-          actor,
-        });
-        if (res.conflict) {
-          setDialogError("Conflito ao mover a coluna. Recarregue o quadro.");
-          await fetchWorkspaceBoard(workspaceId);
-          return;
+        if (taskStatus === "em_andamento" && openTask.status === "tasks") {
+          const res = await claimTask(openTask.id, actor);
+          if (!res.claimed) {
+            setDialogError(
+              `Já assumida por ${res.current_assignee || "outro responsável"}.`,
+            );
+            await fetchWorkspaceBoard(workspaceId);
+            return;
+          }
+        } else if (taskStatus === "tasks") {
+          await releaseTask(openTask.id, {
+            actor,
+            reason: "move via dialog",
+          });
+        } else {
+          const res = await updateTaskStatus(openTask.id, {
+            expected_version: version,
+            new_status: taskStatus,
+            actor,
+          });
+          if (res.conflict) {
+            setDialogError(
+              res.current_status
+                ? "Conflito ao mover a coluna. Recarregue o quadro."
+                : "Transição inválida (use claim/release para em_andamento/backlog).",
+            );
+            await fetchWorkspaceBoard(workspaceId);
+            return;
+          }
         }
       }
       setOpenTask(null);
@@ -379,6 +639,8 @@ export default function SpecsBoardPage() {
     taskStatus,
     updateTask,
     updateTaskStatus,
+    claimTask,
+    releaseTask,
     actor,
     fetchWorkspaceBoard,
     workspaceId,
@@ -481,6 +743,18 @@ export default function SpecsBoardPage() {
           title={board ? `Quadro — ${board.workspace.name}` : "Quadro"}
           description="Clique para abrir. Arraste tasks entre colunas. Documentos ficam em SDD."
         />
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            onClick={openCreateDialog}
+            data-testid="create-task-btn"
+            className="gap-1"
+          >
+            <Plus className="h-4 w-4" />
+            Nova task
+          </Button>
+        </div>
         {error && (
           <p className="text-sm text-red-400" role="alert">
             {error}
@@ -495,35 +769,124 @@ export default function SpecsBoardPage() {
 
       <DndContext
         sensors={sensors}
-        collisionDetection={closestCorners}
+        collisionDetection={boardCollisionDetection}
+        onDragStart={onDragStart}
+        onDragOver={onDragOver}
         onDragEnd={onDragEnd}
+        onDragCancel={onDragCancel}
       >
         <div className="flex min-h-0 flex-1 gap-2 overflow-hidden">
           {BOARD_COLUMNS.map((col) => (
-            <Column key={col.key} columnKey={col.key} label={col.label}>
+            <Column
+              key={col.key}
+              columnKey={col.key}
+              label={col.label}
+              acceptsDrops={!col.isDocuments}
+              isDropTarget={
+                !col.isDocuments && overColumnKey === col.key && !!activeDragTask
+              }
+              headerAction={
+                col.key === "tasks" ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-1.5 text-zinc-400 hover:text-zinc-100"
+                    onClick={openCreateDialog}
+                    aria-label="Nova task"
+                    data-testid="create-task-column-btn"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                ) : null
+              }
+            >
               {col.isDocuments ? (
                 (board?.documents ?? []).map((doc) => (
                   <DocumentCard key={doc.id} doc={doc} onOpen={openDocDialog} />
                 ))
               ) : (
-                <SortableContext
-                  items={(tasksByColumn[col.key] ?? []).map((t) => t.id)}
-                  strategy={verticalListSortingStrategy}
-                >
-                  {(tasksByColumn[col.key] ?? []).map((t) => (
-                    <SortableTaskCard
-                      key={t.id}
-                      task={t}
-                      onOpen={openTaskDialog}
-                      claimTakenBy={claimTaken[t.id]}
-                    />
-                  ))}
-                </SortableContext>
+                (tasksByColumn[col.key] ?? []).map((t) => (
+                  <DraggableTaskCard
+                    key={t.id}
+                    task={t}
+                    onOpen={openTaskDialog}
+                    onClaim={onClaim}
+                    claimTakenBy={claimTaken[t.id]}
+                    claimBusy={busy}
+                  />
+                ))
               )}
             </Column>
           ))}
         </div>
+        <DragOverlay dropAnimation={null}>
+          {activeDragTask ? (
+            <div
+              data-testid="task-drag-overlay"
+              className="w-[220px] cursor-grabbing rounded-md border border-blue-500/50 bg-zinc-900 p-3 text-left text-sm shadow-xl shadow-black/50 ring-2 ring-blue-500/40"
+            >
+              <TaskCardBody task={activeDragTask} />
+            </div>
+          ) : null}
+        </DragOverlay>
       </DndContext>
+
+      {/* Modal criar Task */}
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="max-w-lg border-zinc-800 bg-zinc-950 text-zinc-100">
+          <DialogHeader>
+            <DialogTitle>Nova task</DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              Cria um card na coluna Tasks.
+            </DialogDescription>
+          </DialogHeader>
+          {createError && (
+            <p className="text-sm text-red-400" role="alert">
+              {createError}
+            </p>
+          )}
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor="create-task-title">Título</Label>
+              <Input
+                id="create-task-title"
+                value={createTitle}
+                onChange={(e) => setCreateTitle(e.target.value)}
+                placeholder="Ex.: Implementar endpoint X"
+                className="border-zinc-700 bg-zinc-900"
+                autoFocus
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="create-task-desc">Descrição (opcional)</Label>
+              <Textarea
+                id="create-task-desc"
+                value={createDescription}
+                onChange={(e) => setCreateDescription(e.target.value)}
+                rows={6}
+                className="border-zinc-700 bg-zinc-900 font-mono text-xs"
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="ghost"
+              disabled={busy}
+              onClick={() => setCreateOpen(false)}
+            >
+              Cancelar
+            </Button>
+            <Button
+              disabled={busy || !createTitle.trim()}
+              onClick={onCreateTask}
+              data-testid="create-task-submit"
+            >
+              Criar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Modal Task */}
       <Dialog

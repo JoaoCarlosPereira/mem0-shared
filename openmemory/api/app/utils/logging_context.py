@@ -23,6 +23,9 @@ auth_method_var: contextvars.ContextVar[str] = contextvars.ContextVar(
 auth_user_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "auth_user", default=""
 )
+auth_email_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "auth_email", default=""
+)
 machine_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "machine", default=""
 )

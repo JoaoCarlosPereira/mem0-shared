@@ -147,6 +147,29 @@ def test_classify_presence_offline_without_history():
     assert days is None
 
 
+def test_classify_presence_offline_with_naive_db_timestamps():
+    """Audit columns are timestamp without time zone; wall clock is aware UTC.
+
+    Mixing them in offline-day arithmetic used to raise TypeError → HTTP 500 on
+    GET /admin/analytics/groups/{id} when any member was offline.
+    """
+    from datetime import timezone
+
+    from app.utils.user_analytics import classify_presence
+
+    now = datetime.now(timezone.utc)
+    last_naive = (now - timedelta(days=5)).replace(tzinfo=None)
+    level, days = classify_presence(
+        writes_24h=0,
+        reads_24h=0,
+        last_write_at=last_naive,
+        last_read_at=None,
+        now=now,
+    )
+    assert level == "offline"
+    assert days == 5
+
+
 def test_list_groups_analytics_empty(client):
     r = client.get("/admin/analytics/groups")
     assert r.status_code == 200
@@ -167,6 +190,34 @@ def test_group_analytics_with_member_stats(factory, client):
     assert body["members"][0]["user_id"] == hostname
     assert body["members"][0]["usage_level"] == "online"
     assert body["members"][0]["offline_days"] is None
+
+
+def test_group_analytics_offline_member_does_not_500(factory, client):
+    """Regression: group detail must return 200 when a member is offline."""
+    from datetime import timezone
+
+    group_id, hostname = _seed_group_and_user(factory, hostname="offline-pc")
+    s = factory()
+    try:
+        s.add(
+            WriteAuditLog(
+                project="proj-a",
+                hostname=hostname,
+                client_name="cursor",
+                action="enqueue",
+                created_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=4),
+            )
+        )
+        s.commit()
+    finally:
+        s.close()
+
+    r = client.get(f"/admin/analytics/groups/{group_id}")
+    assert r.status_code == 200
+    member = r.json()["members"][0]
+    assert member["user_id"] == hostname
+    assert member["usage_level"] == "offline"
+    assert member["offline_days"] >= 4
 
 
 def test_group_analytics_shows_google_display_name_for_linked_machine(factory, client):

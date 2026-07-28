@@ -1,28 +1,26 @@
 "use client";
 
-import { useEffect } from "react";
-import { useSelector } from "react-redux";
-import { useApiSessionReady } from "@/hooks/useApiSessionReady";
 import { Install } from "@/components/dashboard/Install";
 import { MemoryFilters } from "@/app/memories/components/MemoryFilters";
 import { MemoriesSection } from "@/app/memories/components/MemoriesSection";
-import { KpiCard } from "@/components/shared/KpiCard";
+import { OverviewMetrics } from "@/components/admin/OverviewMetrics";
 import { APP_TAGLINE } from "@/lib/branding";
-import { Layers, LayoutGrid } from "lucide-react";
-import { useStats } from "@/hooks/useStats";
-import { RootState } from "@/store/store";
+import { useAdminApi } from "@/hooks/useAdminApi";
+import { useAcknowledgeQueueFailuresOnMount } from "@/hooks/useAcknowledgeQueueFailuresOnMount";
+import { useApiSessionReady } from "@/hooks/useApiSessionReady";
+import { useEffect } from "react";
 import "@/styles/animation.css";
 
 export default function DashboardPage() {
   const apiSessionReady = useApiSessionReady();
-  const { fetchStats } = useStats();
-  const totalMemories = useSelector((state: RootState) => state.profile.totalMemories);
-  const totalApps = useSelector((state: RootState) => state.profile.totalApps);
+  // Home: one-shot fetch (no polling). Admin overview keeps poll=true.
+  const { fetchAdminOverview } = useAdminApi({ poll: false });
+  useAcknowledgeQueueFailuresOnMount();
 
   useEffect(() => {
     if (!apiSessionReady) return;
-    void fetchStats();
-  }, [apiSessionReady, fetchStats]);
+    void fetchAdminOverview();
+  }, [apiSessionReady, fetchAdminOverview]);
 
   return (
     <div className="space-y-6">
@@ -30,16 +28,10 @@ export default function DashboardPage() {
         {APP_TAGLINE}
       </p>
 
-      <div
-        id="metrics-panel"
-        className="grid grid-cols-1 gap-4 border-b border-slate-800/30 pb-6 sm:grid-cols-2"
-      >
-        <KpiCard label="Total de Memórias" value={totalMemories} icon={Layers} accent="blue" />
-        <KpiCard
-          label="Projetos Conectados"
-          value={totalApps}
-          icon={LayoutGrid}
-          accent="emerald"
+      <div className="border-b border-slate-800/30 pb-6 animate-fade-slide-down">
+        <OverviewMetrics
+          className="grid grid-cols-2 gap-4 md:grid-cols-3"
+          onRetry={() => void fetchAdminOverview()}
         />
       </div>
 

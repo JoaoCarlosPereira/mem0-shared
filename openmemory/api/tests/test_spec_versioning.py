@@ -253,3 +253,16 @@ class TestUpdateTaskStatus:
         assert task.status == TaskCardStatus.em_andamento
         assert task.is_blocked is True
         assert task.block_reason == "dependência externa"
+
+    def test_entrar_em_andamento_sem_claim_falha(self, db_session):
+        from app.utils.task_lock import TaskStatusPolicyError
+
+        ws = _mk_workspace(db_session)
+        task = _mk_task(db_session, ws)
+        try:
+            update_task_status(
+                db_session, task.id, TaskCardStatus.em_andamento, 1, "DESKTOP-01"
+            )
+            assert False, "deveria ter levantado TaskStatusPolicyError"
+        except TaskStatusPolicyError as exc:
+            assert exc.code == "use_claim"

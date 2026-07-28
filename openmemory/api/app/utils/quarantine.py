@@ -135,8 +135,12 @@ class QuarantineEngine:
             db.close()
 
     def purge_expired(self, *, older_than_days: int, limit: int = 500) -> int:
+        from app.utils.datetime_utc import as_utc_naive, utc_now_naive
+        from app.utils.deletion_guard import assert_governance_purge_allowed
+
+        assert_governance_purge_allowed("governance_purge")
         db = self._session_factory()
-        cutoff = datetime.now(UTC) - timedelta(days=older_than_days)
+        cutoff = utc_now_naive() - timedelta(days=older_than_days)
         purged = 0
         try:
             rows = (
@@ -144,12 +148,17 @@ class QuarantineEngine:
                 .filter(
                     Memory.state == MemoryState.quarantined,
                     Memory.quarantined_at.isnot(None),
-                    Memory.quarantined_at <= cutoff,
                 )
-                .order_by(Memory.quarantined_at.asc())
-                .limit(limit)
                 .all()
             )
+            # Compare in Python after naive-UTC normalize (DB may store naive).
+            rows = [
+                m
+                for m in rows
+                if m.quarantined_at is not None
+                and as_utc_naive(m.quarantined_at) <= cutoff
+            ]
+            rows = sorted(rows, key=lambda m: as_utc_naive(m.quarantined_at))[:limit]
             vs = self._vector_store()
             for memory in rows:
                 point_id = str(memory.id)

@@ -10,10 +10,16 @@ import axios from "axios";
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 let mockSession: any = null;
+let mockStatus: "loading" | "authenticated" | "unauthenticated" = "unauthenticated";
 const mockSignOut = jest.fn();
 jest.mock("next-auth/react", () => ({
-  useSession: () => ({ data: mockSession, status: mockSession ? "authenticated" : "unauthenticated" }),
+  useSession: () => ({ data: mockSession, status: mockStatus }),
   signOut: (...args: unknown[]) => mockSignOut(...args),
+}));
+
+jest.mock("@/lib/auth-ui-mode", () => ({
+  isLegacyAuthUi: () => true,
+  isAuthUiRequired: () => false,
 }));
 
 import { AuthBridge } from "@/components/AuthBridge";
@@ -26,10 +32,12 @@ describe("AuthBridge", () => {
     mockSignOut.mockReset();
     setApiAccessToken(null);
     mockSession = null;
+    mockStatus = "unauthenticated";
     store.dispatch({ type: "profile/clearPersonProfile" });
   });
 
   it("com sessão: registra o Bearer e popula o perfil via /auth/me", async () => {
+    mockStatus = "authenticated";
     mockSession = { apiAccessToken: "jwt-abc", user: { name: "João" } };
     mockedAxios.get.mockResolvedValue({
       data: {
@@ -65,9 +73,27 @@ describe("AuthBridge", () => {
     });
   });
 
-  it("sem sessão: limpa o Bearer e o perfil", async () => {
+  it("status loading: não libera apiSessionReady", async () => {
+    mockStatus = "loading";
+    mockSession = null;
+    store.dispatch({ type: "profile/setApiSessionStatus", payload: "idle" });
+
+    render(
+      <Provider store={store}>
+        <AuthBridge />
+      </Provider>,
+    );
+
+    await waitFor(() => {
+      expect(store.getState().profile.apiSessionStatus).not.toBe("valid");
+      expect(mockedAxios.get).not.toHaveBeenCalled();
+    });
+  });
+
+  it("sem sessão em modo legado: limpa Bearer e libera apiSessionReady", async () => {
     setApiAccessToken("residuo");
     mockSession = null;
+    mockStatus = "unauthenticated";
 
     render(
       <Provider store={store}>
@@ -78,12 +104,13 @@ describe("AuthBridge", () => {
     await waitFor(() => {
       expect(getApiAccessToken()).toBeNull();
       expect(store.getState().profile.person).toBeNull();
-      expect(store.getState().profile.apiSessionStatus).toBe("idle");
+      expect(store.getState().profile.apiSessionStatus).toBe("valid");
       expect(mockedAxios.get).not.toHaveBeenCalled();
     });
   });
 
   it("JWT inválido em /auth/me: encerra sessão e redireciona ao login", async () => {
+    mockStatus = "authenticated";
     mockSession = { apiAccessToken: "jwt-expirado" };
     mockedAxios.get.mockRejectedValue({
       isAxiosError: true,

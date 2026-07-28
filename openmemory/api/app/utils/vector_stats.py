@@ -11,6 +11,8 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
+from app.utils.datetime_utc import utc_now_naive
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,7 +67,7 @@ def count_memories_last_24h() -> int:
     from app.database import SessionLocal
     from app.models import WriteAuditLog
 
-    cutoff = datetime.now(UTC) - timedelta(hours=24)
+    cutoff = utc_now_naive() - timedelta(hours=24)
     db = SessionLocal()
     try:
         return (

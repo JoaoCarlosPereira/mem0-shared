@@ -20,8 +20,6 @@ import { useImmutableAgentToken } from "@/hooks/useImmutableAgentToken";
 import type { RootState } from "@/store/store";
 import { cn } from "@/lib/utils";
 
-const TOKEN_PLACEHOLDER = "SEU_TOKEN";
-
 const clientTabs = [
   { key: "claude", label: "Claude", icon: "/images/claude.webp" },
   { key: "cursor", label: "Cursor", icon: "/images/cursor.png" },
@@ -64,7 +62,9 @@ export const Install = () => {
     };
   }, []);
 
-  const tokenForCommands = rawToken ?? TOKEN_PLACEHOLDER;
+  // Só embute ?token= quando há token real (login Google + agent-token).
+  // Sem sessão (ex.: --skip-google-auth) a URL fica no fluxo legado por hostname.
+  const tokenForCommands = rawToken ?? undefined;
 
   const markCopied = (key: string) => {
     setCopiedKey(key);

@@ -53,7 +53,7 @@ export function AppShell({ children }: AppShellProps) {
               "panel-in w-full",
               boardMode
                 ? "flex min-h-0 flex-1 flex-col px-3 py-3 md:px-4"
-                : "mx-auto max-w-[1400px] px-4 py-6 md:px-8",
+                : "mx-auto w-full max-w-[1600px] px-3 py-4 md:px-6 md:py-6",
             )}
           >
             {children}

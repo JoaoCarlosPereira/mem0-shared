@@ -10,13 +10,14 @@ um ponto único que resolve QUATRO métodos de credencial:
   JWT). Inválido/expirado ⇒ 401 em qualquer modo.
 - ``team``        — tokens de equipe existentes (``X-API-Key``/Bearer opaco).
   Comportamento 100% preservado nos modos ``off|warn|enforce``.
-- ``legacy``      — sem credencial: passa em ``warn`` (default) e é rejeitado
-  apenas em ``enforce`` — o fluxo por hostname continua intacto (Fase 1).
+- ``legacy``      — sem credencial, ou ``Bearer local`` (shim OAuth): passa em
+  ``warn`` (default) e é rejeitado apenas em ``enforce`` — o fluxo por hostname
+  continua intacto (Fase 1). Bearer presente mas inválido ⇒ 401 em qualquer modo.
 
 A identidade resolvida vai para contextvars (``auth_method_var``,
-``auth_user_var``, ``machine_var`` — ``app.utils.logging_context``) para
-consumo por auditoria, métricas e MCP. O valor de ``?token=`` nunca aparece em
-log (``TokenMaskingFilter`` + logs deste módulo usam só o path).
+``auth_user_var``, ``auth_email_var``, ``machine_var`` — ``app.utils.logging_context``)
+para consumo por auditoria, métricas e MCP. O valor de ``?token=`` nunca aparece
+em log (``TokenMaskingFilter`` + logs deste módulo usam só o path).
 
 Modos (env ``AUTH_MODE``): ``off`` (bypass), ``warn`` (default), ``enforce``.
 Tokens de equipe: secret ``AUTH_TOKENS_FILE`` ou env ``AUTH_TOKENS``.
@@ -24,6 +25,7 @@ Tokens de equipe: secret ``AUTH_TOKENS_FILE`` ou env ``AUTH_TOKENS``.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -37,6 +39,7 @@ from starlette.requests import Request
 
 from app.utils.agent_tokens import AGENT_TOKEN_PREFIX, resolve_agent_token
 from app.utils.logging_context import (
+    auth_email_var,
     auth_method_var,
     auth_user_var,
     machine_var,
@@ -46,6 +49,9 @@ from app.utils.metrics import AUTH_DENIED_TOTAL, AUTH_OK_TOTAL
 from app.utils.session_jwt import SessionJwtError, decode_session_jwt
 
 logger = logging.getLogger(__name__)
+
+# Alinhado a ``mcp_oauth_compat.LEGACY_MCP_BEARER`` / ``MEM0_API_KEY=local``.
+LEGACY_MCP_BEARER = "local"
 
 _SKIP_PREFIXES = (
     "/health",
@@ -67,6 +73,7 @@ class AuthContext:
 
     method: str  # "session" | "agent_token" | "team" | "legacy"
     user_id: Optional[str] = None
+    email: Optional[str] = None
     machine_hostname: Optional[str] = None
     team: Optional[str] = None
 
@@ -123,6 +130,57 @@ def _mcp_hostname(path: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def resolve_bound_machine_hostname(
+    person_id: str, path_hostname: Optional[str]
+) -> Optional[str]:
+    """Prefer máquina vinculada à pessoa sobre hostname spoofável na URL MCP.
+
+    Se o path bater com uma máquina ``linked`` da pessoa, usa o path. Caso
+    contrário, se houver vínculo(s), usa o primeiro hostname vinculado
+    (ordenado) em vez do path. Sem vínculos, cai no path (legado).
+    """
+    if not person_id:
+        return path_hostname
+    try:
+        import uuid as _uuid
+
+        from app.database import SessionLocal
+        from app.models import Machine, MachineStatus
+        from app.utils.identity import resolve_hostname
+
+        db = SessionLocal()
+        try:
+            linked = sorted(
+                m.hostname
+                for m in db.query(Machine)
+                .filter(
+                    Machine.linked_user_id == _uuid.UUID(person_id),
+                    Machine.status == MachineStatus.linked,
+                )
+                .all()
+                if m.hostname
+            )
+        finally:
+            db.close()
+        if not linked:
+            return path_hostname
+        if path_hostname:
+            key = resolve_hostname(path_hostname)
+            if key in linked:
+                return key
+            logger.warning(
+                "hostname da URL %s ignorado; usando máquina vinculada %s "
+                "(pessoa %s)",
+                key,
+                linked[0],
+                person_id,
+            )
+        return linked[0]
+    except Exception:  # noqa: BLE001 — best-effort; não derruba auth
+        logger.debug("resolve_bound_machine_hostname failed", exc_info=True)
+        return path_hostname
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     def __init__(
         self,
@@ -160,7 +218,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     AUTH_DENIED_TOTAL.labels(mode=self._mode).inc()
                     return self._unauthorized(request, "sessão inválida ou expirada")
                 AUTH_OK_TOTAL.labels(method="session").inc()
-                ctx = AuthContext(method="session", user_id=str(claims.get("sub") or ""))
+                ctx = AuthContext(
+                    method="session",
+                    user_id=str(claims.get("sub") or ""),
+                    email=str(claims.get("email") or ""),
+                )
                 return await self._call_with_context(request, call_next, ctx)
 
             # 3) Token de agente enviado por header (prefixo identificável).
@@ -174,13 +236,31 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 ctx = AuthContext(method="team", team=team)
                 return await self._call_with_context(request, call_next, ctx)
 
-        # 5) Sem credencial válida — caminho legado (idêntico ao anterior).
+            # 4b) ADMIN_TOKEN via Bearer (mutações /admin — mesmo valor que X-Admin-Token).
+            admin = (os.getenv("ADMIN_TOKEN") or "").strip()
+            if admin and hmac.compare_digest(header_token, admin):
+                AUTH_OK_TOTAL.labels(method="admin_token").inc()
+                ctx = AuthContext(method="admin_token")
+                return await self._call_with_context(request, call_next, ctx)
+
+            # 5) Bearer local (shim OAuth) — legado documentado; só em warn/off.
+            if header_token == LEGACY_MCP_BEARER:
+                return await self._handle_legacy(
+                    request, call_next, path, reason="Bearer local"
+                )
+
+            # Credencial Bearer/X-API-Key presente mas inválida ⇒ 401 (mesmo em warn).
+            AUTH_DENIED_TOTAL.labels(mode=self._mode).inc()
+            return self._unauthorized(request, "invalid or missing team token")
+
+        # 6) Sem header de credencial — caminho legado.
+        return await self._handle_legacy(request, call_next, path, reason="sem token")
+
+    async def _handle_legacy(self, request, call_next, path: str, *, reason: str):
         AUTH_DENIED_TOTAL.labels(mode=self._mode).inc()
         if self._mode == "enforce":
             return self._unauthorized(request, "invalid or missing team token")
-        logger.warning(
-            "auth warn: requisição sem token de equipe válido em %s", path
-        )
+        logger.warning("auth warn: requisição %s em %s", reason, path)
         ctx = AuthContext(method="legacy", machine_hostname=_mcp_hostname(path))
         return await self._call_with_context(request, call_next, ctx)
 
@@ -193,10 +273,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 request, "token de agente inválido ou revogado"
             )
         AUTH_OK_TOTAL.labels(method="agent_token").inc()
+        path_host = _mcp_hostname(request.url.path)
         ctx = AuthContext(
             method="agent_token",
             user_id=user_id,
-            machine_hostname=_mcp_hostname(request.url.path),
+            machine_hostname=resolve_bound_machine_hostname(user_id, path_host),
         )
         return await self._call_with_context(request, call_next, ctx)
 
@@ -205,6 +286,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         tokens = [
             (auth_method_var, auth_method_var.set(ctx.method)),
             (auth_user_var, auth_user_var.set(ctx.user_id or "")),
+            (auth_email_var, auth_email_var.set(ctx.email or "")),
             (machine_var, machine_var.set(ctx.machine_hostname or "")),
         ]
         if ctx.team:

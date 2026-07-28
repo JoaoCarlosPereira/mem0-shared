@@ -1,4 +1,6 @@
-fastapi>=0.68.0
+# fastapi-pagination<=0.15.15 importa get_body_field, removido/privado em
+# FastAPI >=0.140.5 (uriyyo/fastapi-pagination#1990). Pin até o pagination acompanhar.
+fastapi>=0.68.0,<0.140.5
 uvicorn>=0.15.0
 sqlalchemy>=1.4.0
 python-dotenv>=0.19.0

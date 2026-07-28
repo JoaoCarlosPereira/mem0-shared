@@ -23,7 +23,8 @@ router = _router_mod.router
 
 
 @pytest.fixture
-def factory():
+def factory(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -32,6 +33,9 @@ def factory():
     Base.metadata.create_all(bind=engine)
     yield sessionmaker(autocommit=False, autoflush=False, bind=engine)
     engine.dispose()
+
+
+ADMIN_HEADERS = {"x-admin-token": "test-admin-token"}
 
 
 def make_client(factory):
@@ -79,7 +83,7 @@ def test_retry_failed_requeues_all(factory):
     db.close()
 
     client = make_client(factory)
-    resp = client.post("/admin/write-queue/retry-failed")
+    resp = client.post("/admin/write-queue/retry-failed", headers=ADMIN_HEADERS)
     assert resp.status_code == 200
     body = resp.json()
     assert body["requeued"] == 2
@@ -117,7 +121,9 @@ def test_retry_failed_project_filter(factory):
 
     client = make_client(factory)
     resp = client.post(
-        "/admin/write-queue/retry-failed", params={"project": "proj-a"}
+        "/admin/write-queue/retry-failed",
+        params={"project": "proj-a"},
+        headers=ADMIN_HEADERS,
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -139,6 +145,6 @@ def test_retry_failed_project_filter(factory):
 
 def test_retry_failed_empty_returns_zero(factory):
     client = make_client(factory)
-    resp = client.post("/admin/write-queue/retry-failed")
+    resp = client.post("/admin/write-queue/retry-failed", headers=ADMIN_HEADERS)
     assert resp.status_code == 200
     assert resp.json() == {"requeued": 0, "projects": []}

@@ -2,6 +2,7 @@
  * Tela de instalação do dashboard: token imutável criado automaticamente e
  * embutido nos comandos (ADR-008). Aguarda sessão autenticada no 2º login.
  * Grupo da conta é pré-carregado quando já vinculado (GET /auth/me → profileSlice).
+ * Sem sessão (ex.: --skip-google-auth) os comandos ficam no fluxo legado, sem ?token=.
  */
 import React from "react";
 import { configureStore } from "@reduxjs/toolkit";
@@ -26,6 +27,7 @@ jest.mock("@/lib/api-url", () => {
   };
 });
 
+import { setApiAccessToken } from "@/lib/api-client";
 import profileReducer from "@/store/profileSlice";
 import { Install } from "@/components/dashboard/Install";
 
@@ -36,33 +38,40 @@ const TOKEN = {
   last_used_at: null,
 };
 
-function makeStore(profileGroup: string | null = null) {
+function makeStore(
+  profileGroup: string | null = null,
+  apiSessionStatus: "idle" | "validating" | "valid" | "invalid" = "idle",
+) {
   return configureStore({
     reducer: { profile: profileReducer },
-    preloadedState: profileGroup
-      ? {
-          profile: {
-            userId: "user",
-            person: {
+    preloadedState: {
+      profile: {
+        userId: "user",
+        apiSessionStatus,
+        person: profileGroup
+          ? {
               email: "joao@sysmo.com.br",
               displayName: "João",
               avatarUrl: null,
               machineHostname: "DESKTOP-01",
               group: profileGroup,
-            },
-            totalMemories: 0,
-            totalApps: 0,
-            status: "idle",
-            error: null,
-            apps: [],
-          },
-        }
-      : undefined,
+            }
+          : null,
+        totalMemories: 0,
+        totalApps: 0,
+        status: "idle",
+        error: null,
+        apps: [],
+      },
+    },
   });
 }
 
-function renderInstall(profileGroup: string | null = null) {
-  const store = makeStore(profileGroup);
+function renderInstall(
+  profileGroup: string | null = null,
+  apiSessionStatus: "idle" | "validating" | "valid" | "invalid" = "idle",
+) {
+  const store = makeStore(profileGroup, apiSessionStatus);
   return {
     store,
     ...render(
@@ -78,13 +87,15 @@ describe("Install (dashboard)", () => {
     mockedAxios.post.mockReset();
     mockSession = null;
     mockStatus = "loading";
+    setApiAccessToken(null);
   });
 
   it("cria o token automaticamente (get-or-create) na primeira visita", async () => {
     mockStatus = "authenticated";
     mockSession = { apiAccessToken: "jwt-sessao" };
+    setApiAccessToken("jwt-sessao");
     mockedAxios.post.mockResolvedValue({ data: TOKEN });
-    renderInstall();
+    renderInstall(null, "valid");
 
     await waitFor(() => {
       expect(mockedAxios.post).toHaveBeenCalledWith(
@@ -102,7 +113,7 @@ describe("Install (dashboard)", () => {
 
   it("2º login: aguarda sessão e carrega o token existente", async () => {
     mockedAxios.post.mockResolvedValue({ data: TOKEN });
-    const store = makeStore();
+    const store = makeStore(null, "idle");
     const { rerender } = render(
       <Provider store={store}>
         <Install />
@@ -113,6 +124,9 @@ describe("Install (dashboard)", () => {
 
     mockStatus = "authenticated";
     mockSession = { apiAccessToken: "jwt-novo-login" };
+    setApiAccessToken("jwt-novo-login");
+    // AuthBridge marca a sessão da API como válida após /auth/me.
+    store.dispatch({ type: "profile/setApiSessionStatus", payload: "valid" });
     rerender(
       <Provider store={store}>
         <Install />
@@ -136,8 +150,9 @@ describe("Install (dashboard)", () => {
   it("exibe o token permanentemente e embutido nos comandos de instalação", async () => {
     mockStatus = "authenticated";
     mockSession = { apiAccessToken: "jwt-sessao" };
+    setApiAccessToken("jwt-sessao");
     mockedAxios.post.mockResolvedValue({ data: TOKEN });
-    const { container } = renderInstall();
+    const { container } = renderInstall(null, "valid");
     await waitFor(() => screen.getByTestId("token-banner"));
 
     // Comandos da aba padrão (Claude) carregam o token real e o IP da LAN.
@@ -149,7 +164,7 @@ describe("Install (dashboard)", () => {
     expect(commands).not.toContain("SEU_TOKEN");
   });
 
-  it("sem sessão: comandos usam placeholder e a página não quebra", async () => {
+  it("sem sessão: comandos sem ?token= (fluxo legado) e a página não quebra", async () => {
     mockStatus = "unauthenticated";
     mockSession = null;
     const { container } = renderInstall();
@@ -161,14 +176,17 @@ describe("Install (dashboard)", () => {
     const commands = Array.from(container.querySelectorAll("pre code"))
       .map((el) => el.textContent ?? "")
       .join("\n");
-    expect(commands).toContain("token=SEU_TOKEN");
+    expect(commands).not.toContain("token=");
+    expect(commands).not.toContain("SEU_TOKEN");
+    expect(commands).toContain("npx @openmemory/install local");
   });
 
   it("pré-carrega o grupo vinculado à conta e bloqueia edição", async () => {
     mockStatus = "authenticated";
     mockSession = { apiAccessToken: "jwt-sessao" };
+    setApiAccessToken("jwt-sessao");
     mockedAxios.post.mockResolvedValue({ data: TOKEN });
-    const { container } = renderInstall("Equipe Fiscal");
+    const { container } = renderInstall("Equipe Fiscal", "valid");
     await waitFor(() => screen.getByTestId("token-banner"));
 
     const input = screen.getByLabelText(/grupo \(equipe\)/i) as HTMLInputElement;

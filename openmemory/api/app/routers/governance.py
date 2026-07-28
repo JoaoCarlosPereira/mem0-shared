@@ -26,6 +26,7 @@ from app.utils.governance_policy import (
     validate_policy_document,
 )
 from app.utils.governance_queue import governance_queue
+from app.utils.admin_auth import require_admin
 from app.utils.quarantine import QuarantineEngine
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -54,7 +55,11 @@ def get_policies(db: Session = Depends(get_db)) -> dict:
 
 
 @router.put("/policies")
-def put_global_policy(body: PolicyUpdate, db: Session = Depends(get_db)) -> dict:
+def put_global_policy(
+    body: PolicyUpdate,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin),
+) -> dict:
     try:
         saved = save_global_policy(db, body.policy)
     except Exception as exc:  # noqa: BLE001
@@ -63,7 +68,12 @@ def put_global_policy(body: PolicyUpdate, db: Session = Depends(get_db)) -> dict
 
 
 @router.put("/policies/{project}")
-def put_project_policy(project: str, body: PolicyUpdate, db: Session = Depends(get_db)) -> dict:
+def put_project_policy(
+    project: str,
+    body: PolicyUpdate,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin),
+) -> dict:
     if db.query(Project).filter(Project.name == project).first() is None:
         raise HTTPException(status_code=404, detail=f"project '{project}' not found")
     try:
@@ -75,10 +85,21 @@ def put_project_policy(project: str, body: PolicyUpdate, db: Session = Depends(g
 
 
 @router.post("/jobs/{job_type}", status_code=202)
-def enqueue_job(job_type: str, body: EnqueueJobRequest) -> dict:
+def enqueue_job(
+    job_type: str,
+    body: EnqueueJobRequest,
+    _: None = Depends(require_admin),
+) -> dict:
     allowed = {"dedup", "ttl_prune", "consolidate", "purge"}
     if job_type not in allowed:
         raise HTTPException(status_code=400, detail=f"unsupported job_type '{job_type}'")
+    if job_type == "purge":
+        from app.utils.deletion_guard import assert_governance_purge_allowed
+
+        try:
+            assert_governance_purge_allowed("governance_purge_enqueue")
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
     job_id = governance_queue.enqueue(
         job_type,
         project=body.project,

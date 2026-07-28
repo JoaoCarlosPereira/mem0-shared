@@ -10,6 +10,12 @@ describe("decideAuthRedirect", () => {
     expect(decideAuthRedirect("/admin/audit", false)).toBe("/login");
   });
 
+  it("modo legado: sem sessão não redireciona", () => {
+    expect(decideAuthRedirect("/", false, false, false)).toBeNull();
+    expect(decideAuthRedirect("/memories", false, undefined, false)).toBeNull();
+    expect(decideAuthRedirect("/login", false, undefined, false)).toBeNull();
+  });
+
   it("sem sessão, /login não redireciona", () => {
     expect(decideAuthRedirect("/login", false)).toBeNull();
   });

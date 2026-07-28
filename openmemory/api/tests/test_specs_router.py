@@ -137,6 +137,12 @@ class TestDocumentVersioning:
 
 
 class TestAccessControl:
+    def _as_subject(self, subject):
+        """Bind auth identity for the request (ACL no longer trusts query params)."""
+        from app.utils.logging_context import auth_user_var
+
+        return auth_user_var.set(str(subject))
+
     def test_sem_allow_recebe_403(self, client, factory):
         ws = _create_ws(client).json()
         ws_id = ws["id"]
@@ -157,11 +163,32 @@ class TestAccessControl:
         finally:
             s.close()
 
-        r = client.get(
-            f"/api/v1/specs/workspaces/{ws_id}",
-            params={"subject_type": "user", "subject_id": str(subject)},
-        )
-        assert r.status_code == 403
+        tok = self._as_subject(subject)
+        try:
+            r = client.get(f"/api/v1/specs/workspaces/{ws_id}")
+            assert r.status_code == 403
+        finally:
+            from app.utils.logging_context import auth_user_var
+
+            auth_user_var.reset(tok)
+
+    def test_query_subject_id_nao_spoofa_acl(self, client, factory):
+        """Omitir/forjar subject_id na query não contorna ACL do usuário autenticado."""
+        ws_id = _create_ws(client).json()["id"]
+        subject = uuid.uuid4()
+        self._add_rule(factory, subject, "deny", None)  # deny-all
+        tok = self._as_subject(subject)
+        try:
+            # Mesmo passando outro UUID (ou omitindo), a ACL do auth user vale.
+            r = client.get(
+                f"/api/v1/specs/workspaces/{ws_id}",
+                params={"subject_type": "user", "subject_id": str(uuid.uuid4())},
+            )
+            assert r.status_code == 403
+        finally:
+            from app.utils.logging_context import auth_user_var
+
+            auth_user_var.reset(tok)
 
     def _add_rule(self, factory, subject, effect, object_id):
         s = factory()
@@ -183,32 +210,41 @@ class TestAccessControl:
         ws_id = _create_ws(client).json()["id"]
         subject = uuid.uuid4()
         self._add_rule(factory, subject, "allow", None)  # allow-all
-        r = client.get(
-            f"/api/v1/specs/workspaces/{ws_id}",
-            params={"subject_type": "user", "subject_id": str(subject)},
-        )
-        assert r.status_code == 200
+        tok = self._as_subject(subject)
+        try:
+            r = client.get(f"/api/v1/specs/workspaces/{ws_id}")
+            assert r.status_code == 200
+        finally:
+            from app.utils.logging_context import auth_user_var
+
+            auth_user_var.reset(tok)
 
     def test_deny_all_sem_object_id_recebe_403(self, client, factory):
         ws_id = _create_ws(client).json()["id"]
         subject = uuid.uuid4()
         self._add_rule(factory, subject, "deny", None)  # deny-all
-        r = client.get(
-            f"/api/v1/specs/workspaces/{ws_id}",
-            params={"subject_type": "user", "subject_id": str(subject)},
-        )
-        assert r.status_code == 403
+        tok = self._as_subject(subject)
+        try:
+            r = client.get(f"/api/v1/specs/workspaces/{ws_id}")
+            assert r.status_code == 403
+        finally:
+            from app.utils.logging_context import auth_user_var
+
+            auth_user_var.reset(tok)
 
     def test_deny_especifico_remove_do_allow(self, client, factory):
         ws_id = _create_ws(client).json()["id"]
         subject = uuid.uuid4()
         self._add_rule(factory, subject, "allow", uuid.UUID(ws_id))
         self._add_rule(factory, subject, "deny", uuid.UUID(ws_id))
-        r = client.get(
-            f"/api/v1/specs/workspaces/{ws_id}",
-            params={"subject_type": "user", "subject_id": str(subject)},
-        )
-        assert r.status_code == 403
+        tok = self._as_subject(subject)
+        try:
+            r = client.get(f"/api/v1/specs/workspaces/{ws_id}")
+            assert r.status_code == 403
+        finally:
+            from app.utils.logging_context import auth_user_var
+
+            auth_user_var.reset(tok)
 
     def test_com_allow_especifico_acessa(self, client, factory):
         ws = _create_ws(client).json()
@@ -229,11 +265,14 @@ class TestAccessControl:
         finally:
             s.close()
 
-        r = client.get(
-            f"/api/v1/specs/workspaces/{ws_id}",
-            params={"subject_type": "user", "subject_id": str(subject)},
-        )
-        assert r.status_code == 200
+        tok = self._as_subject(subject)
+        try:
+            r = client.get(f"/api/v1/specs/workspaces/{ws_id}")
+            assert r.status_code == 200
+        finally:
+            from app.utils.logging_context import auth_user_var
+
+            auth_user_var.reset(tok)
 
 
 def _create_task(client, workspace_id, title="Card", **extra):
@@ -318,11 +357,47 @@ class TestTaskLifecycle:
     def test_patch_status_conflito_de_versao_409(self, client):
         ws = _create_ws(client).json()
         task = _create_task(client, ws["id"]).json()
+        claimed = client.post(
+            f"/api/v1/specs/tasks/{task['id']}/claim", json={"claimant": "A"}
+        ).json()
         r = client.patch(
             f"/api/v1/specs/tasks/{task['id']}/status",
-            json={"new_status": "revisao_codigo", "expected_version": 99},
+            json={
+                "new_status": "revisao_codigo",
+                "expected_version": 99,
+                "actor": "A",
+            },
         )
         assert r.status_code == 409
+        assert r.json()["detail"]["conflict"] is True
+        assert claimed["version"] == 2
+
+    def test_patch_em_andamento_sem_claim_rejeitado(self, client):
+        ws = _create_ws(client).json()
+        task = _create_task(client, ws["id"]).json()
+        r = client.patch(
+            f"/api/v1/specs/tasks/{task['id']}/status",
+            json={"new_status": "em_andamento", "expected_version": 1, "actor": "B"},
+        )
+        assert r.status_code == 409
+        assert r.json()["detail"]["code"] == "use_claim"
+
+    def test_patch_status_outro_assignee_rejeitado(self, client):
+        ws = _create_ws(client).json()
+        task = _create_task(client, ws["id"]).json()
+        claimed = client.post(
+            f"/api/v1/specs/tasks/{task['id']}/claim", json={"claimant": "A"}
+        ).json()
+        r = client.patch(
+            f"/api/v1/specs/tasks/{task['id']}/status",
+            json={
+                "new_status": "revisao_codigo",
+                "expected_version": claimed["version"],
+                "actor": "B",
+            },
+        )
+        assert r.status_code == 409
+        assert r.json()["detail"]["code"] == "not_assignee"
 
     def test_patch_bloqueio_sem_mudar_coluna(self, client):
         ws = _create_ws(client).json()
@@ -335,6 +410,7 @@ class TestTaskLifecycle:
             f"/api/v1/specs/tasks/{task['id']}/status",
             json={
                 "expected_version": claimed["version"],
+                "actor": "A",
                 "is_blocked": True,
                 "block_reason": "dependência",
             },
@@ -347,7 +423,11 @@ class TestTaskLifecycle:
         # is_blocked=false limpa o marcador
         r2 = client.patch(
             f"/api/v1/specs/tasks/{task['id']}/status",
-            json={"expected_version": r.json()["version"], "is_blocked": False},
+            json={
+                "expected_version": r.json()["version"],
+                "actor": "A",
+                "is_blocked": False,
+            },
         )
         assert r2.status_code == 200
         assert r2.json()["is_blocked"] is False
@@ -480,12 +560,15 @@ class TestAllWorkspacesIndex:
             s.commit()
         finally:
             s.close()
-        r = client.get(
-            "/api/v1/specs/workspaces",
-            params={"subject_type": "user", "subject_id": str(subject)},
-        )
-        assert r.status_code == 200
-        assert [w["id"] for w in r.json()] == [ws["id"]]
+        from app.utils.logging_context import auth_user_var
+
+        tok = auth_user_var.set(str(subject))
+        try:
+            r = client.get("/api/v1/specs/workspaces")
+            assert r.status_code == 200
+            assert [w["id"] for w in r.json()] == [ws["id"]]
+        finally:
+            auth_user_var.reset(tok)
 
 
 class TestProjectPanel:
@@ -623,3 +706,49 @@ class TestTaskAndDocumentMutation:
             assert s.query(SpecWorkspace).filter_by(id=uuid.UUID(drop["id"])).count() == 0
         finally:
             s.close()
+
+
+class TestWorkspaceStatusAndIndex:
+    def test_patch_status_concluido_indexa(self, client, monkeypatch):
+        calls = []
+
+        def fake_index(db, ws, **kwargs):
+            calls.append(ws.id)
+            return 1
+
+        monkeypatch.setattr(
+            "app.routers.specs.index_completed_workspace", fake_index
+        )
+        ws = _create_ws(client).json()
+        client.put(
+            f"/api/v1/specs/workspaces/{ws['id']}/documents/prd",
+            json={"content": "# PRD", "expected_version": None},
+        )
+        r = client.patch(
+            f"/api/v1/specs/workspaces/{ws['id']}",
+            json={"status": "concluido"},
+        )
+        assert r.status_code == 200
+        assert r.json()["status"] == "concluido"
+        assert calls == [uuid.UUID(ws["id"])]
+
+    def test_patch_status_idempotente_nao_reindexa(self, client, monkeypatch):
+        calls = []
+
+        def fake_index(db, ws, **kwargs):
+            calls.append(ws.id)
+            return 1
+
+        monkeypatch.setattr(
+            "app.routers.specs.index_completed_workspace", fake_index
+        )
+        ws = _create_ws(client).json()
+        client.patch(
+            f"/api/v1/specs/workspaces/{ws['id']}",
+            json={"status": "concluido"},
+        )
+        client.patch(
+            f"/api/v1/specs/workspaces/{ws['id']}",
+            json={"status": "concluido"},
+        )
+        assert len(calls) == 1

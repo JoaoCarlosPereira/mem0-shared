@@ -55,7 +55,8 @@ class FakeArchive:
 
 
 @pytest.fixture
-def ctx():
+def ctx(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -78,10 +79,13 @@ def ctx():
     engine.dispose()
 
 
+ADMIN_HEADERS = {"x-admin-token": "test-admin-token"}
+
+
 def test_backup_run_returns_202_and_triggers(ctx):
     app, fake = ctx
     with TestClient(app) as client:
-        resp = client.post("/admin/backup/run")
+        resp = client.post("/admin/backup/run", headers=ADMIN_HEADERS)
     assert resp.status_code == 202
     assert resp.json()["status"] == "accepted"
     assert fake.created is True
@@ -129,7 +133,7 @@ def test_policy_put_persists_valid(ctx, tmp_path):
         "mirror_s3": False,
     }
     with TestClient(app) as client:
-        resp = client.put("/admin/backup/policy", json=payload)
+        resp = client.put("/admin/backup/policy", json=payload, headers=ADMIN_HEADERS)
         assert resp.status_code == 200
         assert resp.json()["retention"] == 7
         again = client.get("/admin/backup/policy")
@@ -142,6 +146,7 @@ def test_policy_put_invalid_retention_returns_400(ctx, tmp_path):
         resp = client.put(
             "/admin/backup/policy",
             json={"retention": 51, "local_dir": str(tmp_path)},
+            headers=ADMIN_HEADERS,
         )
     assert resp.status_code == 400
 
@@ -152,6 +157,7 @@ def test_policy_put_invalid_timezone_returns_400(ctx, tmp_path):
         resp = client.put(
             "/admin/backup/policy",
             json={"timezone": "Marte/Olimpo", "local_dir": str(tmp_path)},
+            headers=ADMIN_HEADERS,
         )
     assert resp.status_code == 400
 
@@ -162,12 +168,14 @@ def test_restore_confirm_mismatch_returns_400(ctx):
         resp = client.post(
             "/admin/backup/restore",
             json={"archive": "20260618-030000.zip", "confirm": "errado"},
+            headers=ADMIN_HEADERS,
         )
     assert resp.status_code == 400
     assert fake.restored is None
 
 
-def test_restore_missing_archive_returns_404():
+def test_restore_missing_archive_returns_404(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -180,6 +188,7 @@ def test_restore_missing_archive_returns_404():
         resp = client.post(
             "/admin/backup/restore",
             json={"archive": "nope.zip", "confirm": "nope.zip"},
+            headers=ADMIN_HEADERS,
         )
     assert resp.status_code == 404
     assert fake.restored is None
@@ -192,6 +201,18 @@ def test_restore_valid_returns_202_and_triggers(ctx):
         resp = client.post(
             "/admin/backup/restore",
             json={"archive": "20260618-030000.zip", "confirm": "20260618-030000.zip"},
+            headers=ADMIN_HEADERS,
         )
     assert resp.status_code == 202
     assert fake.restored == "/mnt/backups/20260618-030000.zip"
+
+
+def test_restore_denied_without_admin(ctx):
+    app, fake = ctx
+    with TestClient(app) as client:
+        resp = client.post(
+            "/admin/backup/restore",
+            json={"archive": "20260618-030000.zip", "confirm": "20260618-030000.zip"},
+        )
+    assert resp.status_code == 401
+    assert fake.restored is None

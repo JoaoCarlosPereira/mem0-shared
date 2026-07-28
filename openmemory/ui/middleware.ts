@@ -1,13 +1,15 @@
 /**
  * Proteção de rotas da UI (feature auth Google, ADR-002).
  *
- * Toda a UI exige sessão Google; exceções: /login, rotas do próprio NextAuth,
- * o proxy da API (o backend valida o Bearer por conta própria) e assets.
+ * Com Google configurado (ou AUTH_UI_REQUIRED=1) a UI exige sessão.
+ * Em modo legado (--skip-google-auth / AUTH_UI_REQUIRED=0 / sem GOOGLE_CLIENT_ID)
+ * o middleware não força /login.
  */
 import { NextResponse } from "next/server";
 
 import { auth } from "@/auth";
 import { decideAuthRedirect } from "@/lib/auth-routes";
+import { isAuthUiRequired } from "@/lib/auth-ui-mode";
 
 export default auth((req) => {
   const session = req.auth as (typeof req.auth & { firstLogin?: boolean }) | null;
@@ -15,6 +17,7 @@ export default auth((req) => {
     req.nextUrl.pathname,
     !!session,
     session?.firstLogin,
+    isAuthUiRequired(),
   );
   if (target) {
     return NextResponse.redirect(new URL(target, req.nextUrl));

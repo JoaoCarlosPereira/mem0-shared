@@ -24,7 +24,7 @@ export function MemoriesSection() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const currentPage = Number(searchParams.get("page")) || 1;
-  const itemsPerPage = Number(searchParams.get("size")) || 10;
+  const itemsPerPage = Number(searchParams.get("size")) || 20;
   const searchQuery = searchParams.get("search") || "";
   const searchKey = searchParams.toString();
   const [selectedCategory, setSelectedCategory] = useState<Category | "all">(
@@ -136,12 +136,12 @@ export function MemoriesSection() {
         {memories.length > 0 ? (
           <>
             <MemoryTable />
-            <div className="flex items-center justify-between mt-4">
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <PageSizeSelector
                 pageSize={itemsPerPage}
                 onPageSizeChange={handlePageSizeChange}
               />
-              <div className="mr-2 text-sm text-slate-500">
+              <div className="text-sm text-slate-500 sm:mr-2">
                 Exibindo {(currentPage - 1) * itemsPerPage + 1} a{" "}
                 {Math.min(currentPage * itemsPerPage, totalItems)} de{" "}
                 {totalItems} memórias

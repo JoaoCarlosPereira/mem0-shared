@@ -87,15 +87,21 @@ class SpecTaskTimeoutWorker:
         try:
             released = 0
             for task in self.eligible_tasks(db):
-                result = self._release(
-                    db,
-                    task.id,
-                    TIMEOUT_ACTOR,
-                    reason="liberação automática por timeout de inatividade",
-                    expected_version=task.version,
-                )
-                if result.claimed:
-                    released += 1
+                try:
+                    result = self._release(
+                        db,
+                        task.id,
+                        TIMEOUT_ACTOR,
+                        reason="liberação automática por timeout de inatividade",
+                        expected_version=task.version,
+                    )
+                    if result.claimed:
+                        released += 1
+                except Exception:  # noqa: BLE001 - uma falha não aborta o lote
+                    logger.exception(
+                        "spec-task-timeout: falha ao liberar task %s; continuando",
+                        task.id,
+                    )
             if released:
                 logger.info(
                     "spec-task-timeout: %s task(s) liberada(s) por inatividade", released

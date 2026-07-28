@@ -41,8 +41,60 @@ class UpdateTaskStatusResult:
     current_assignee: str | None
 
 
+@dataclass
+class UpdateTaskMetadataResult:
+    """Resultado de ``update_task_metadata`` (concorrência otimista atômica)."""
+    updated: bool
+    conflict: bool
+    version: int
+    title: str
+    description: str | None
+    branch_ref: str | None
+
+
+class TaskStatusPolicyError(ValueError):
+    """Transição de status inválida (use claim/release; exclusividade ADR-003)."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 def _coerce_status(status: TaskCardStatus | str) -> TaskCardStatus:
     return status if isinstance(status, TaskCardStatus) else TaskCardStatus(status)
+
+
+def _assert_status_policy(
+    task: TaskCard,
+    new_status: TaskCardStatus,
+    actor: str | None,
+) -> None:
+    """Garante exclusividade de claim: em_andamento só via claim; backlog só via release."""
+    old_status = task.status
+    if old_status == TaskCardStatus.tasks and new_status != TaskCardStatus.tasks:
+        raise TaskStatusPolicyError(
+            "use_claim",
+            "Use claim_task para sair do backlog (tasks)",
+        )
+    if (
+        new_status == TaskCardStatus.em_andamento
+        and old_status != TaskCardStatus.em_andamento
+    ):
+        raise TaskStatusPolicyError(
+            "use_claim",
+            "Use claim_task para entrar em em_andamento",
+        )
+    if new_status == TaskCardStatus.tasks and old_status != TaskCardStatus.tasks:
+        raise TaskStatusPolicyError(
+            "use_release",
+            "Use release_task para devolver a task ao backlog",
+        )
+    if task.assignee and (not actor or actor != task.assignee):
+        raise TaskStatusPolicyError(
+            "not_assignee",
+            f"Apenas o assignee ({task.assignee}) pode alterar o status",
+        )
 
 
 def claim_task(db: Session, task_id: uuid.UUID, claimant: str) -> ClaimTaskResult:
@@ -140,6 +192,7 @@ def release_task(
             .where(
                 TaskCard.id == task_id,
                 TaskCard.version == expected_version,
+                TaskCard.status == TaskCardStatus.em_andamento,
             )
             .values(
                 status=TaskCardStatus.tasks,
@@ -219,6 +272,8 @@ def update_task_status(
     if task is None:
         raise ValueError(f"TaskCard {task_id} não encontrada")
 
+    _assert_status_policy(task, new_status, actor)
+
     old_status = task.status
     now = get_current_utc_time()
 
@@ -282,4 +337,68 @@ def update_task_status(
         version=fresh.version,
         status=fresh.status.value,
         current_assignee=fresh.assignee,
+    )
+
+
+def update_task_metadata(
+    db: Session,
+    task_id: uuid.UUID,
+    expected_version: int,
+    *,
+    title: str | None = None,
+    description: str | None = None,
+    branch_ref: str | None = None,
+) -> UpdateTaskMetadataResult:
+    """Atualiza metadados com ``UPDATE … WHERE version = :expected`` atômico.
+
+    Também renova ``last_activity_at`` para que edições contem como atividade
+    perante o timeout worker.
+    """
+    task = db.get(TaskCard, task_id)
+    if task is None:
+        raise ValueError(f"TaskCard {task_id} não encontrada")
+
+    now = get_current_utc_time()
+    values: dict = {
+        "version": TaskCard.version + 1,
+        "last_activity_at": now,
+        "updated_at": now,
+    }
+    if title is not None:
+        values["title"] = title
+    if description is not None:
+        values["description"] = description
+    if branch_ref is not None:
+        values["branch_ref"] = branch_ref
+
+    result = db.execute(
+        sa.update(TaskCard)
+        .where(
+            TaskCard.id == task_id,
+            TaskCard.version == expected_version,
+        )
+        .values(**values)
+    )
+
+    if result.rowcount == 0:
+        db.rollback()
+        fresh = db.get(TaskCard, task_id)
+        return UpdateTaskMetadataResult(
+            updated=False,
+            conflict=True,
+            version=fresh.version,
+            title=fresh.title,
+            description=fresh.description,
+            branch_ref=fresh.branch_ref,
+        )
+
+    db.commit()
+    fresh = db.get(TaskCard, task_id)
+    return UpdateTaskMetadataResult(
+        updated=True,
+        conflict=False,
+        version=fresh.version,
+        title=fresh.title,
+        description=fresh.description,
+        branch_ref=fresh.branch_ref,
     )

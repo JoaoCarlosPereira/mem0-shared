@@ -29,6 +29,7 @@ from app.utils.deletion_guard import (
 def _clear_delete_flags(monkeypatch):
     monkeypatch.delenv("MEM0_ALLOW_MEMORY_DELETE", raising=False)
     monkeypatch.delenv("MEM0_ALLOW_BULK_DELETE", raising=False)
+    monkeypatch.delenv("MEM0_ALLOW_GOVERNANCE_PURGE", raising=False)
 
 
 def test_delete_blocked_by_default():
@@ -47,6 +48,31 @@ def test_delete_allowed_when_env_set(monkeypatch):
     assert bulk_delete_allowed() is True
     assert_memory_delete_allowed("delete")
     assert_bulk_delete_allowed("delete_all")
+
+
+def test_governance_purge_blocked_by_default(monkeypatch):
+    monkeypatch.delenv("MEM0_ALLOW_GOVERNANCE_PURGE", raising=False)
+    monkeypatch.delenv("MEM0_ALLOW_MEMORY_DELETE", raising=False)
+    monkeypatch.delenv("MEM0_ALLOW_BULK_DELETE", raising=False)
+    from app.utils.deletion_guard import (
+        assert_governance_purge_allowed,
+        governance_purge_allowed,
+    )
+
+    assert governance_purge_allowed() is False
+    with pytest.raises(DeletionBlockedError):
+        assert_governance_purge_allowed("governance_purge")
+
+
+def test_governance_purge_allowed_with_dedicated_flag(monkeypatch):
+    monkeypatch.setenv("MEM0_ALLOW_GOVERNANCE_PURGE", "1")
+    from app.utils.deletion_guard import (
+        assert_governance_purge_allowed,
+        governance_purge_allowed,
+    )
+
+    assert governance_purge_allowed() is True
+    assert_governance_purge_allowed("governance_purge")
 
 
 @pytest.fixture

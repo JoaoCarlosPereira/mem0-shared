@@ -2,11 +2,12 @@
 
 import { Suspense } from "react";
 import { signIn } from "next-auth/react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import Image from "next/image";
 
 import { Button } from "@/components/ui/button";
 import { APP_NAME, APP_TAGLINE } from "@/lib/branding";
+import { isLegacyAuthUi, isAuthUiRequired } from "@/lib/auth-ui-mode";
 
 const REDIRECT_ERROR_MESSAGES: Record<string, string> = {
   AccessDenied:
@@ -20,10 +21,15 @@ const REDIRECT_ERROR_MESSAGES: Record<string, string> = {
 
 function LoginContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const redirectError = searchParams.get("error");
   const error = redirectError
     ? REDIRECT_ERROR_MESSAGES[redirectError] ?? REDIRECT_ERROR_MESSAGES.Default
     : null;
+  const legacy = isLegacyAuthUi();
+  const googleAvailable = isAuthUiRequired() || Boolean(
+    (process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || "").trim(),
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex min-h-screen items-center justify-center bg-slate-950/95 backdrop-blur-sm">
@@ -48,12 +54,28 @@ function LoginContent() {
               {error}
             </p>
           )}
-          <Button
-            className="min-h-11 w-full rounded-xl py-6 text-sm font-black uppercase tracking-widest shadow-xl shadow-blue-600/20"
-            onClick={() => signIn("google", { redirectTo: "/" })}
-          >
-            Entrar com Google
-          </Button>
+          {legacy && (
+            <p className="text-center text-sm text-slate-400">
+              Login Google desabilitado neste ambiente (modo legado LAN).
+            </p>
+          )}
+          {!legacy && googleAvailable && (
+            <Button
+              className="min-h-11 w-full rounded-xl py-6 text-sm font-black uppercase tracking-widest shadow-xl shadow-blue-600/20"
+              onClick={() => signIn("google", { redirectTo: "/" })}
+            >
+              Entrar com Google
+            </Button>
+          )}
+          {legacy && (
+            <Button
+              className="min-h-11 w-full rounded-xl py-6 text-sm font-black uppercase tracking-widest"
+              variant="secondary"
+              onClick={() => router.push("/")}
+            >
+              Continuar sem login
+            </Button>
+          )}
         </div>
       </div>
     </div>

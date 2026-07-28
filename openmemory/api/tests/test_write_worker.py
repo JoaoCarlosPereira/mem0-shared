@@ -33,10 +33,11 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.database import Base  # noqa: F401 — load DB before models (circular import)
 from app.models import WriteQueueJob as WriteQueueModel
 from app.models import WriteQueueStatus
 from app.utils.write_queue import WriteJob, WriteQueue
-from app.workers.write_worker import WriteWorker
+from app.workers.write_worker import SKIPPED_NO_MEMORIES_REASON, WriteWorker
 
 
 # --------------------------------------------------------------------------- #
@@ -258,7 +259,7 @@ class TestRetry:
         assert "LLM indisponível" in (row.error or "")
 
     @pytest.mark.asyncio
-    async def test_empty_extraction_and_raw_storage_requeues(self, queue, db_path):
+    async def test_empty_extraction_and_raw_storage_marks_skipped(self, queue, db_path):
         client = MagicMock()
         client.add = MagicMock(return_value={"results": []})
         worker = WriteWorker(queue=queue, client_provider=lambda: client,
@@ -270,10 +271,9 @@ class TestRetry:
             with patch("app.workers.write_worker._clear_llm_extraction_error"):
                 await worker.process_once()
         row = _status(db_path, job_id)
-        assert row.status == WriteQueueStatus.queued
-        assert row.attempts == 1
+        assert row.status == WriteQueueStatus.skipped
+        assert SKIPPED_NO_MEMORIES_REASON in (row.error or "")
         assert client.add.call_count == 2
-        assert "LLM" in (row.error or "")
 
     @pytest.mark.asyncio
     async def test_transient_failure_requeues_for_retry(self, queue, db_path):

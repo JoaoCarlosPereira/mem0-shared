@@ -23,7 +23,16 @@ class DeletionBlockedError(Exception):
     def __init__(self, operation: str, *, bulk: bool = False):
         self.operation = operation
         self.bulk = bulk
-        if bulk:
+        if operation.startswith("governance_") or operation in {
+            "governance_purge",
+            "cold_tier",
+        }:
+            hint = (
+                "Set MEM0_ALLOW_GOVERNANCE_PURGE=1 "
+                "(or MEM0_ALLOW_MEMORY_DELETE=1 and MEM0_ALLOW_BULK_DELETE=1) "
+                "to enable deliberate governance Qdrant deletes."
+            )
+        elif bulk:
             hint = (
                 "Set MEM0_ALLOW_MEMORY_DELETE=1 and MEM0_ALLOW_BULK_DELETE=1 "
                 "to enable deliberate bulk deletes."
@@ -47,6 +56,17 @@ def bulk_delete_allowed() -> bool:
     return memory_delete_allowed() and _env_flag("MEM0_ALLOW_BULK_DELETE", "0")
 
 
+def governance_purge_allowed() -> bool:
+    """True when governance purge/cold-tier may delete Qdrant points.
+
+    Fail-closed: requires either the dedicated ``MEM0_ALLOW_GOVERNANCE_PURGE=1``
+    or the same bulk-delete pair used by API/MCP deletes.
+    """
+    if _env_flag("MEM0_ALLOW_GOVERNANCE_PURGE", "0"):
+        return True
+    return bulk_delete_allowed()
+
+
 def assert_memory_delete_allowed(operation: str = "delete") -> None:
     if not memory_delete_allowed():
         raise DeletionBlockedError(operation)
@@ -54,6 +74,11 @@ def assert_memory_delete_allowed(operation: str = "delete") -> None:
 
 def assert_bulk_delete_allowed(operation: str = "delete_all") -> None:
     if not bulk_delete_allowed():
+        raise DeletionBlockedError(operation, bulk=True)
+
+
+def assert_governance_purge_allowed(operation: str = "governance_purge") -> None:
+    if not governance_purge_allowed():
         raise DeletionBlockedError(operation, bulk=True)
 
 
@@ -78,6 +103,7 @@ def deletion_guard_status() -> dict[str, bool]:
     return {
         "memory_delete_allowed": memory_delete_allowed(),
         "bulk_delete_allowed": bulk_delete_allowed(),
+        "governance_purge_allowed": governance_purge_allowed(),
     }
 
 
@@ -94,4 +120,13 @@ def log_deletion_guard_startup() -> None:
     if status["bulk_delete_allowed"]:
         logger.warning(
             "MEM0 deletion guard: bulk deletes ENABLED (MEM0_ALLOW_BULK_DELETE=1)"
+        )
+    if status["governance_purge_allowed"]:
+        logger.warning(
+            "MEM0 deletion guard: governance purge ENABLED "
+            "(MEM0_ALLOW_GOVERNANCE_PURGE or bulk delete flags)"
+        )
+    else:
+        logger.info(
+            "MEM0 deletion guard: governance purge blocked (default fail-closed)"
         )

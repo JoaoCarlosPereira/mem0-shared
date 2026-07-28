@@ -20,7 +20,7 @@ function MemoriesPageContent() {
     if (!searchParams.has("page") || !searchParams.has("size")) {
       const params = new URLSearchParams(searchParams.toString());
       if (!searchParams.has("page")) params.set("page", "1");
-      if (!searchParams.has("size")) params.set("size", "10");
+      if (!searchParams.has("size")) params.set("size", "20");
       router.replace(`?${params.toString()}`);
     }
   }, [router, searchParams]);
@@ -33,7 +33,7 @@ function MemoriesPageContent() {
         open={updateMemoryDialog.isOpen}
         onOpenChange={handleCloseUpdateMemoryDialog}
       />
-      <div className="space-y-4">
+      <div className="space-y-3">
       <PageHeader
         className="animate-fade-slide-down"
         icon={Layers}

@@ -3,6 +3,8 @@ import {
   TASK_COLUMN_KEYS,
   handleCardDrop,
   isTaskColumn,
+  pickBoardDropTarget,
+  resolveDropColumn,
 } from "@/lib/specsBoard";
 import type { TaskCard } from "@/types/specs";
 
@@ -36,26 +38,150 @@ describe("specsBoard columns", () => {
   });
 });
 
+describe("resolveDropColumn", () => {
+  it("aceita id de coluna diretamente", () => {
+    expect(resolveDropColumn("em_andamento", [])).toBe("em_andamento");
+  });
+
+  it("resolve coluna a partir do id de outro card (drop sobre card)", () => {
+    const tasks = [
+      task({ id: "a", status: "tasks" }),
+      task({ id: "b", status: "revisao_codigo" }),
+    ];
+    expect(resolveDropColumn("b", tasks)).toBe("revisao_codigo");
+  });
+
+  it("ignora id desconhecido e SDD", () => {
+    expect(resolveDropColumn(null, [])).toBeNull();
+    expect(resolveDropColumn("SDD", [])).toBeNull();
+    expect(resolveDropColumn("missing", [task()])).toBeNull();
+  });
+});
+
+describe("pickBoardDropTarget", () => {
+  it("prefere card (type=task) sobre coluna quando ambos batem", () => {
+    expect(
+      pickBoardDropTarget([
+        { id: "em_andamento", data: { type: "column", status: "em_andamento" } },
+        { id: "card-x", data: { type: "task", status: "em_andamento" } },
+      ]),
+    ).toBe("card-x");
+  });
+
+  it("escolhe coluna de task quando não há card sob o ponteiro", () => {
+    expect(
+      pickBoardDropTarget([
+        { id: "SDD", data: { type: "column", status: "SDD" } },
+        { id: "fase_teste", data: { type: "column", status: "fase_teste" } },
+      ]),
+    ).toBe("fase_teste");
+  });
+
+  it("ignora SDD sozinho e retorna null", () => {
+    expect(
+      pickBoardDropTarget([{ id: "SDD", data: { type: "column", status: "SDD" } }]),
+    ).toBeNull();
+  });
+
+  it("lista vazia retorna null", () => {
+    expect(pickBoardDropTarget([])).toBeNull();
+  });
+});
+
 describe("handleCardDrop", () => {
-  it("drop numa coluna nova chama updateTaskStatus com o expected_version atual", async () => {
-    const updateTaskStatus = jest
-      .fn()
-      .mockResolvedValue({ conflict: false, task: task({ status: "em_andamento" }) });
+  it("tasks → em_andamento usa claimTask (não updateTaskStatus)", async () => {
+    const updateTaskStatus = jest.fn();
+    const claimTask = jest.fn().mockResolvedValue({ claimed: true, version: 4 });
     const outcome = await handleCardDrop({
       activeId: "t1",
       overColumn: "em_andamento",
       tasks: [task()],
       actor: "host-a",
       updateTaskStatus,
+      claimTask,
+    });
+    expect(claimTask).toHaveBeenCalledWith("t1", "host-a");
+    expect(updateTaskStatus).not.toHaveBeenCalled();
+    expect(outcome.moved).toBe(true);
+    expect(outcome.conflict).toBe(false);
+    expect(outcome.targetStatus).toBe("em_andamento");
+  });
+
+  it("drop sobre outro card move para a coluna desse card", async () => {
+    const updateTaskStatus = jest.fn().mockResolvedValue({ conflict: false });
+    const tasks = [
+      task({ id: "t1", status: "em_andamento", assignee: "host-a" }),
+      task({ id: "t2", status: "fase_teste" }),
+    ];
+    const outcome = await handleCardDrop({
+      activeId: "t1",
+      overColumn: "t2",
+      tasks,
+      actor: "host-a",
+      updateTaskStatus,
     });
     expect(updateTaskStatus).toHaveBeenCalledWith("t1", {
       expected_version: 3,
-      new_status: "em_andamento",
+      new_status: "fase_teste",
+      actor: "host-a",
+    });
+    expect(outcome.moved).toBe(true);
+    expect(outcome.targetStatus).toBe("fase_teste");
+  });
+
+  it("claim negado propaga claimedDenied", async () => {
+    const claimTask = jest
+      .fn()
+      .mockResolvedValue({ claimed: false, current_assignee: "host-b" });
+    const outcome = await handleCardDrop({
+      activeId: "t1",
+      overColumn: "em_andamento",
+      tasks: [task()],
+      actor: "host-a",
+      updateTaskStatus: jest.fn(),
+      claimTask,
+    });
+    expect(outcome.moved).toBe(true);
+    expect(outcome.conflict).toBe(true);
+    expect(outcome.claimedDenied).toBe(true);
+    expect(outcome.currentAssignee).toBe("host-b");
+  });
+
+  it("voltar ao backlog usa releaseTask", async () => {
+    const releaseTask = jest.fn().mockResolvedValue({});
+    const updateTaskStatus = jest.fn();
+    const outcome = await handleCardDrop({
+      activeId: "t1",
+      overColumn: "tasks",
+      tasks: [task({ status: "revisao_codigo" })],
+      actor: "host-a",
+      updateTaskStatus,
+      releaseTask,
+    });
+    expect(releaseTask).toHaveBeenCalled();
+    expect(updateTaskStatus).not.toHaveBeenCalled();
+    expect(outcome.moved).toBe(true);
+    expect(outcome.targetStatus).toBe("tasks");
+  });
+
+  it("demais colunas usam updateTaskStatus com expected_version", async () => {
+    const updateTaskStatus = jest
+      .fn()
+      .mockResolvedValue({ conflict: false, task: task({ status: "fase_teste" }) });
+    const outcome = await handleCardDrop({
+      activeId: "t1",
+      overColumn: "fase_teste",
+      tasks: [task({ status: "em_andamento", assignee: "host-a" })],
+      actor: "host-a",
+      updateTaskStatus,
+    });
+    expect(updateTaskStatus).toHaveBeenCalledWith("t1", {
+      expected_version: 3,
+      new_status: "fase_teste",
       actor: "host-a",
     });
     expect(outcome.moved).toBe(true);
     expect(outcome.conflict).toBe(false);
-    expect(outcome.targetStatus).toBe("em_andamento");
   });
 
   it("resposta 409 (conflict) é propagada como conflict=true", async () => {
@@ -65,7 +191,7 @@ describe("handleCardDrop", () => {
     const outcome = await handleCardDrop({
       activeId: "t1",
       overColumn: "concluido",
-      tasks: [task()],
+      tasks: [task({ status: "fase_teste" })],
       updateTaskStatus,
     });
     expect(outcome.moved).toBe(true);

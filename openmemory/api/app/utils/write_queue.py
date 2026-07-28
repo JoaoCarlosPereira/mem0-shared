@@ -180,15 +180,24 @@ class WriteQueue:
         finally:
             db.close()
 
-    def recover_stale_processing(self) -> int:
-        """Return orphaned ``processing`` jobs to ``queued`` after worker restarts."""
+    def recover_stale_processing(self, older_than_minutes: int | None = None) -> int:
+        """Return orphaned ``processing`` jobs to ``queued``.
+
+        When ``older_than_minutes`` is set, only jobs whose ``updated_at`` is at
+        least that old are requeued (periodic recovery). When ``None``, all
+        ``processing`` rows are requeued (startup recovery after a crash).
+        """
+        from app.utils.datetime_utc import utc_now_naive
+
         db = self._session()
         try:
-            rows = (
-                db.query(WriteQueueModel)
-                .filter(WriteQueueModel.status == WriteQueueStatus.processing)
-                .all()
+            query = db.query(WriteQueueModel).filter(
+                WriteQueueModel.status == WriteQueueStatus.processing
             )
+            if older_than_minutes is not None and older_than_minutes > 0:
+                cutoff = utc_now_naive() - timedelta(minutes=older_than_minutes)
+                query = query.filter(WriteQueueModel.updated_at <= cutoff)
+            rows = query.all()
             for row in rows:
                 row.status = WriteQueueStatus.queued
             if rows:
@@ -197,7 +206,6 @@ class WriteQueue:
         finally:
             db.close()
 
-
     def recover_failed_jobs(self, older_than_minutes: int) -> int:
         """Re-queue terminal ``failed`` jobs after a cooldown (infra recovery).
 
@@ -205,11 +213,13 @@ class WriteQueue:
         moved back to ``queued`` with ``attempts`` reset so the worker can try
         again (e.g. after LLM/DB came back). Returns the number recovered.
         """
+        from app.utils.datetime_utc import utc_now_naive
+
         if older_than_minutes <= 0:
             return 0
         db = self._session()
         try:
-            cutoff = datetime.utcnow() - timedelta(minutes=older_than_minutes)
+            cutoff = utc_now_naive() - timedelta(minutes=older_than_minutes)
             rows = (
                 db.query(WriteQueueModel)
                 .filter(

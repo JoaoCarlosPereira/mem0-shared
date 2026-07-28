@@ -14,3 +14,5 @@ api/.openmemory*
 ui/package-lock.json
 *.tsbuildinfo
 ui/coverage/
+.pnpm-store/
+**/.pnpm-store/

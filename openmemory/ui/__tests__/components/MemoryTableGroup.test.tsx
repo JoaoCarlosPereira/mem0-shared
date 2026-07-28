@@ -20,6 +20,7 @@ jest.mock("next/navigation", () => ({ useRouter: () => ({ push: jest.fn() }) }))
 import memoriesReducer, { setMemoriesSuccess } from "@/store/memoriesSlice";
 import { MemoryTable } from "@/app/memories/components/MemoryTable";
 import type { Memory } from "@/components/types";
+import { groupCardTone, UNGROUPED_CARD_TONE } from "@/lib/group-card-tone";
 
 const memories: Memory[] = [
   {
@@ -58,27 +59,45 @@ function renderTable() {
   );
 }
 
-describe("MemoryTable — etiqueta de grupo (task_09)", () => {
-  it("exibe o cabeçalho de Grupo", () => {
+describe("MemoryTable — cards por grupo", () => {
+  it("renderiza cards clicáveis em vez de tabela com Categorias", () => {
     renderTable();
-    expect(screen.getByText("Grupo")).toBeInTheDocument();
+    expect(screen.queryByText("Categorias")).not.toBeInTheDocument();
+    expect(screen.queryByText("Criado por")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /com grupo/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /sem grupo/i })).toBeInTheDocument();
   });
 
-  it("renderiza o nome do grupo do autor", () => {
+  it("marca data-group no card com o nome do grupo do autor", () => {
     renderTable();
-    expect(screen.getByText("Equipe A")).toBeInTheDocument();
+    const withGroup = screen.getByRole("link", { name: /com grupo/i });
+    expect(withGroup).toHaveAttribute("data-group", "Equipe A");
+    const withoutGroup = screen.getByRole("link", { name: /sem grupo/i });
+    expect(withoutGroup).toHaveAttribute("data-group", "");
   });
 
-  it("exibe o hostname do autor na coluna Criado por", () => {
+  it("exibe o autor só no aria-label do avatar (hint), não como texto da coluna", () => {
     renderTable();
-    expect(screen.getByText("S0293")).toBeInTheDocument();
+    expect(screen.getByLabelText("Criado por S0293")).toBeInTheDocument();
+    expect(screen.queryByText("S0293")).not.toBeInTheDocument();
   });
 
-  it("usa rótulo neutro '—' para memória sem grupo", () => {
-    renderTable();
-    const labels = screen.getAllByLabelText("Grupo do autor");
-    const texts = labels.map((el) => el.textContent);
-    expect(texts).toContain("Equipe A");
-    expect(texts).toContain("—");
+  it("aplica tom neutro quando não há grupo", () => {
+    expect(groupCardTone(null)).toEqual(UNGROUPED_CARD_TONE);
+    expect(groupCardTone("")).toEqual(UNGROUPED_CARD_TONE);
+  });
+
+  it("escolhe tom estável para o mesmo grupo", () => {
+    expect(groupCardTone("Equipe A")).toEqual(groupCardTone("Equipe A"));
+    expect(groupCardTone("Equipe A")).not.toEqual(groupCardTone("Equipe B"));
+  });
+
+  it("sem grupo varia pelo autor em vez de ficar sempre neutro", () => {
+    expect(groupCardTone(null, "pop-os")).not.toEqual(
+      groupCardTone(null, "outro-host"),
+    );
+    expect(groupCardTone(null, "pop-os")).toEqual(
+      groupCardTone(null, "pop-os"),
+    );
   });
 });

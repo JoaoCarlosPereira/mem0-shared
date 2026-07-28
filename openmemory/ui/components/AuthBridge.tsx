@@ -13,6 +13,7 @@ import axios from "axios";
 
 import { setApiAccessToken } from "@/lib/api-client";
 import { getApiUrl } from "@/lib/api-url";
+import { isLegacyAuthUi } from "@/lib/auth-ui-mode";
 import {
   notifySessionExpired,
   registerSessionExpiryHandler,
@@ -33,18 +34,26 @@ function handleSessionExpired() {
 }
 
 export function AuthBridge() {
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
   const dispatch = useDispatch<AppDispatch>();
 
   useEffect(() => registerSessionExpiryHandler(handleSessionExpired), []);
 
   useEffect(() => {
+    // Evita liberar apiSessionReady durante o bootstrap do NextAuth.
+    if (status === "loading") {
+      return;
+    }
+
     const token = (session as { apiAccessToken?: string | null } | null)?.apiAccessToken ?? null;
     setApiAccessToken(token);
     resetSessionExpiryGuard();
 
     if (!token) {
       dispatch(clearPersonProfile());
+      // Modo legado (sem login Google / --skip-google-auth): libera as telas
+      // que aguardam apiSessionReady. Com Google exigido, anônimo fica invalid.
+      dispatch(setApiSessionStatus(isLegacyAuthUi() ? "valid" : "invalid"));
       return;
     }
 
@@ -75,7 +84,7 @@ export function AuthBridge() {
     return () => {
       cancelled = true;
     };
-  }, [session, dispatch]);
+  }, [session, status, dispatch]);
 
   return null;
 }

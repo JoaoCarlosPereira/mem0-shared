@@ -76,7 +76,25 @@ def test_quarantine_and_revert(session_factory):
     db.close()
 
 
-def test_purge_expired_only_old_quarantined(session_factory):
+def test_purge_expired_blocked_by_default(session_factory, monkeypatch):
+    monkeypatch.delenv("MEM0_ALLOW_GOVERNANCE_PURGE", raising=False)
+    monkeypatch.delenv("MEM0_ALLOW_MEMORY_DELETE", raising=False)
+    monkeypatch.delenv("MEM0_ALLOW_BULK_DELETE", raising=False)
+    db = session_factory()
+    mem = _memory(db, state=MemoryState.quarantined, suffix="blocked")
+    mem.quarantined_at = datetime.now(UTC) - timedelta(days=40)
+    db.commit()
+    db.close()
+
+    from app.utils.deletion_guard import DeletionBlockedError
+
+    engine = QuarantineEngine(session_factory=session_factory, vector_store_provider=lambda: None)
+    with pytest.raises(DeletionBlockedError):
+        engine.purge_expired(older_than_days=30, limit=10)
+
+
+def test_purge_expired_only_old_quarantined(session_factory, monkeypatch):
+    monkeypatch.setenv("MEM0_ALLOW_GOVERNANCE_PURGE", "1")
     db = session_factory()
     mem = _memory(db, state=MemoryState.quarantined, suffix="q")
     mem.quarantined_at = datetime.now(UTC) - timedelta(days=40)

@@ -84,6 +84,9 @@ def run_cold_tier_job(
         archive_writer(key, json.dumps(export).encode())
 
         # 2) Remoção do acervo quente (Qdrant + estado SQL).
+        from app.utils.deletion_guard import assert_governance_purge_allowed
+
+        assert_governance_purge_allowed("cold_tier")
         vs = _vector_store(vector_store_provider)
         archived = 0
         for m in rows:

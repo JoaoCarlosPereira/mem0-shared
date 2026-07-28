@@ -8,6 +8,7 @@ from uuid import UUID
 
 from app.models import User, WriteAuditLog, WriteQueueJob, USER_TYPE_LEGACY_HOST, get_current_utc_time
 from app.read_audit_log_model import ReadAuditLog
+from app.utils.datetime_utc import as_utc_naive
 from app.utils.machine_resolver import legacy_hostname_variants
 from app.utils.read_audit import read_audit_hostname_variants
 from sqlalchemy import case, func
@@ -27,10 +28,14 @@ def _truncate_preview(text: Optional[str], *, limit: int = PREVIEW_MAX_LEN) -> O
     return cleaned[: limit - 1] + "…"
 
 
+# Back-compat alias used across analytics helpers/tests.
+_as_utc_naive = as_utc_naive
+
+
 def _since(hours: Optional[int] = None, days: Optional[int] = None) -> Optional[datetime]:
     if hours is None and days is None:
         return None
-    now = get_current_utc_time()
+    now = as_utc_naive(get_current_utc_time())
     if hours is not None:
         return now - timedelta(hours=hours)
     return now - timedelta(days=days)
@@ -151,7 +156,7 @@ def _last_interaction_at(
     last_write_at: Optional[datetime],
     last_read_at: Optional[datetime],
 ) -> Optional[datetime]:
-    candidates = [dt for dt in (last_write_at, last_read_at) if dt is not None]
+    candidates = [_as_utc_naive(dt) for dt in (last_write_at, last_read_at) if dt is not None]
     if not candidates:
         return None
     return max(candidates)
@@ -173,8 +178,8 @@ def classify_presence(
     if last_at is None:
         return "offline", None
 
-    reference = now or get_current_utc_time()
-    elapsed = reference - last_at
+    reference = _as_utc_naive(now or get_current_utc_time())
+    elapsed = reference - _as_utc_naive(last_at)
     offline_days = max(1, elapsed.days)
     return "offline", offline_days
 

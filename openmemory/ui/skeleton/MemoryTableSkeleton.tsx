@@ -1,81 +1,36 @@
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { HiMiniRectangleStack } from "react-icons/hi2"
-import { PiSwatches } from "react-icons/pi"
-import { GoPackage } from "react-icons/go"
-import { CiCalendar } from "react-icons/ci"
-import { MoreHorizontal } from "lucide-react"
-
 export function MemoryTableSkeleton() {
-  // Create an array of 5 items for the loading state
-  const loadingRows = Array(5).fill(null)
+  const loadingCards = Array(8).fill(null);
 
   return (
-    <div className="rounded-md border">
-      <Table>
-        <TableHeader>
-          <TableRow className="bg-zinc-800 hover:bg-zinc-800">
-            <TableHead className="w-[50px] pl-4">
-              <div className="h-4 w-4 rounded bg-zinc-700/50 animate-pulse" />
-            </TableHead>
-            <TableHead className="border-zinc-700">
-              <div className="flex items-center min-w-[600px]">
-                <HiMiniRectangleStack className="mr-1" />
-                Memória
+    <div className="space-y-4">
+      <div className="flex items-center gap-2.5 px-0.5">
+        <div className="h-4 w-4 animate-pulse rounded bg-slate-800" />
+        <div className="h-3.5 w-28 animate-pulse rounded bg-slate-800" />
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        {loadingCards.map((_, index) => (
+          <div
+            key={index}
+            className="flex min-h-[168px] flex-col overflow-hidden rounded-2xl border border-slate-800 bg-gradient-to-b from-slate-800/40 via-slate-950/90 to-slate-950"
+          >
+            <div className="h-1 w-full bg-slate-700" />
+            <div className="flex flex-1 flex-col p-4 pt-3">
+              <div className="mb-3 flex justify-between">
+                <div className="h-4 w-4 animate-pulse rounded bg-slate-800" />
+                <div className="h-5 w-16 animate-pulse rounded-full bg-slate-800" />
               </div>
-            </TableHead>
-            <TableHead className="border-zinc-700">
-              <div className="flex items-center">
-                <PiSwatches className="mr-1" size={15} />
-                Categorias
+              <div className="mb-4 flex-1 space-y-2">
+                <div className="h-4 w-full animate-pulse rounded bg-slate-800" />
+                <div className="h-4 w-4/5 animate-pulse rounded bg-slate-800" />
               </div>
-            </TableHead>
-            <TableHead className="w-[140px] border-zinc-700">
-              <div className="flex items-center">
-                <GoPackage className="mr-1" />
-                Criado por
+              <div className="mt-auto flex items-center justify-between border-t border-white/5 pt-3">
+                <div className="h-7 w-7 animate-pulse rounded-full bg-slate-800" />
+                <div className="h-3 w-16 animate-pulse rounded bg-slate-800" />
               </div>
-            </TableHead>
-            <TableHead className="w-[140px] border-zinc-700">
-              <div className="flex items-center w-full justify-center">
-                <CiCalendar className="mr-1" size={16} />
-                Criada em
-              </div>
-            </TableHead>
-            <TableHead className="text-right border-zinc-700 flex justify-center">
-              <div className="flex items-center justify-end">
-                <MoreHorizontal className="h-4 w-4 mr-2" />
-              </div>
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {loadingRows.map((_, index) => (
-            <TableRow key={index} className="animate-pulse">
-              <TableCell className="pl-4">
-                <div className="h-4 w-4 rounded bg-zinc-800" />
-              </TableCell>
-              <TableCell>
-                <div className="h-4 w-3/4 bg-zinc-800 rounded" />
-              </TableCell>
-              <TableCell>
-                <div className="flex gap-1">
-                  <div className="h-5 w-16 bg-zinc-800 rounded-full" />
-                  <div className="h-5 w-16 bg-zinc-800 rounded-full" />
-                </div>
-              </TableCell>
-              <TableCell className="w-[140px]">
-                <div className="h-6 w-24 mx-auto bg-zinc-800 rounded" />
-              </TableCell>
-              <TableCell className="w-[140px]">
-                <div className="h-4 w-20 mx-auto bg-zinc-800 rounded" />
-              </TableCell>
-              <TableCell>
-                <div className="h-8 w-8 bg-zinc-800 rounded mx-auto" />
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
-  )
-} 
+  );
+}

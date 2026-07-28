@@ -45,7 +45,7 @@ from app.utils.db import get_user_and_app
 from app.utils.attribution import author_hostname_from_payload
 from app.utils.groups import ensure_user_group, ensure_user_registered, requester_group_for_mcp
 from app.utils.identity import is_plausible_hostname, resolve_hostname
-from app.utils.logging_context import auth_method_var, auth_user_var
+from app.utils.logging_context import auth_method_var, auth_user_var, machine_var
 from app.utils.memory import get_memory_client_safe
 from app.utils.partitioning import bind_active_collection
 from app.utils.permissions import check_memory_access_permissions
@@ -95,10 +95,9 @@ async def add_memories(text: str, project: str) -> str:
     # persistence are performed out of band by the background worker (task_06),
     # so the LLM/memory client is intentionally NOT touched on this request path.
     #
-    # The hostname (from the user_id slot) is attribution only (ADR-003); it is
-    # carried on the job and never used as a read filter. client_name records the
-    # originating MCP client/agent.
-    hostname = resolve_hostname(user_id_var.get(None))
+    # The hostname is attribution only (ADR-003). Prefer machine bound to the
+    # agent token (set by AuthMiddleware) over the spoofable URL path segment.
+    hostname = _mcp_attribution_hostname()
     client_name = client_name_var.get(None) or DEFAULT_CLIENT_NAME
 
     if not text or not text.strip():
@@ -180,6 +179,22 @@ def _usage_user_id() -> str:
     if auth_method_var.get() == "agent_token" and person:
         return person
     return resolve_hostname(user_id_var.get(None))
+
+
+def _mcp_attribution_hostname() -> str:
+    """Hostname for write attribution: bound machine > path user_id."""
+    bound = (machine_var.get() or "").strip()
+    if auth_method_var.get() == "agent_token" and bound:
+        return resolve_hostname(bound)
+    return resolve_hostname(user_id_var.get(None))
+
+
+def _effective_mcp_uid(path_uid: str | None) -> str:
+    """Prefer AuthMiddleware-bound machine over URL path for agent tokens."""
+    bound = (machine_var.get() or "").strip()
+    if auth_method_var.get() == "agent_token" and bound:
+        return bound
+    return path_uid or ""
 
 
 def _log_machine_divergence_if_any(hostname) -> None:
@@ -629,12 +644,46 @@ async def list_spec_workspaces(project_id: str) -> str:
 
         db = SessionLocal()
         try:
-            # Args explícitos: chamada direta (fora do FastAPI) não resolve os
-            # defaults Query(...) dos parâmetros do endpoint.
-            items = list_project_workspaces(
-                project_id, subject_type="user", subject_id=None, db=db
-            )
+            items = list_project_workspaces(project_id, db=db)
             return json.dumps([i.model_dump(mode="json") for i in items], default=str)
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="Update the lifecycle status of a spec workspace (planejamento/ativo/concluido/arquivado). Transitioning to concluido indexes PRD/TechSpec/Tasks for semantic search. Returns JSON with the workspace.")
+async def update_spec_workspace_status(workspace_id: str, status: str) -> str:
+    try:
+        from fastapi import HTTPException
+
+        from app.models import SpecWorkspaceStatus
+        from app.routers.specs import WorkspaceResponse, WorkspaceStatusUpdate
+        from app.routers.specs import update_workspace_status as _update_ws
+
+        db = SessionLocal()
+        try:
+            try:
+                status_enum = SpecWorkspaceStatus(status)
+            except ValueError:
+                return json.dumps(
+                    {
+                        "error": f"status inválido: {status}",
+                        "valid": [s.value for s in SpecWorkspaceStatus],
+                    }
+                )
+            try:
+                ws = _update_ws(
+                    uuid.UUID(workspace_id),
+                    WorkspaceStatusUpdate(status=status_enum),
+                    db=db,
+                )
+            except HTTPException as he:
+                return f"Error: {he.detail}"
+            return json.dumps(
+                WorkspaceResponse.model_validate(ws).model_dump(mode="json"), default=str
+            )
         finally:
             db.close()
     except Exception as e:  # noqa: BLE001
@@ -647,8 +696,10 @@ async def write_spec_document(
     workspace_id: str, document_type: str, content: str, expected_version: int | None = None
 ) -> str:
     try:
+        from fastapi import HTTPException
+
         from app.models import DocumentOrigin, DocumentType, SpecWorkspace
-        from app.routers.specs import get_or_create_document
+        from app.routers.specs import _assert_access, get_or_create_document
         from app.utils.spec_versioning import write_document_version
 
         hostname = resolve_hostname(user_id_var.get(None))
@@ -658,6 +709,10 @@ async def write_spec_document(
             dtype = DocumentType(document_type)
             if db.query(SpecWorkspace).filter(SpecWorkspace.id == ws_uuid).first() is None:
                 return f"Error: workspace {workspace_id} não encontrado"
+            try:
+                _assert_access(db, ws_uuid)
+            except HTTPException as he:
+                return f"Error: {he.detail}"
 
             doc = get_or_create_document(db, ws_uuid, dtype)
             result = write_document_version(
@@ -690,11 +745,18 @@ async def write_spec_document(
 @mcp.tool(description="Read the current version and content of a spec document (document_type = prd/techspec/tasks) in a workspace. Call this to load the latest content and version BEFORE writing an update (pass that version as write_spec_document's expected_version).")
 async def read_spec_document(workspace_id: str, document_type: str) -> str:
     try:
+        from fastapi import HTTPException
+
         from app.models import DocumentType, SpecDocument
+        from app.routers.specs import _assert_access
 
         db = SessionLocal()
         try:
             ws_uuid = uuid.UUID(workspace_id)
+            try:
+                _assert_access(db, ws_uuid)
+            except HTTPException as he:
+                return f"Error: {he.detail}"
             dtype = DocumentType(document_type)
             doc = (
                 db.query(SpecDocument)
@@ -728,10 +790,23 @@ async def read_spec_document(workspace_id: str, document_type: str) -> str:
 @mcp.tool(description="Semantic search over COMPLETED specs (PRD/TechSpec/Tasks) across projects, to reuse prior knowledge when drafting new ones. `project` is an optional filter (soft). Returns a JSON list ranked by relevance; an empty list when nothing matches (never an error).")
 async def search_specs(query: str, project: str | None = None) -> str:
     try:
+        from app.utils.permissions import get_accessible_spec_workspace_ids
+        from app.utils.spec_auth import resolve_spec_subject
         from app.utils.spec_search import search_specs as _search_specs
 
         requester_group = requester_group_for_mcp(user_id_var.get(None))
-        results = _search_specs(query, project_id=project, requester_group=requester_group)
+        subject_type, subject_id = resolve_spec_subject()
+        db = SessionLocal()
+        try:
+            accessible = get_accessible_spec_workspace_ids(db, subject_type, subject_id)
+        finally:
+            db.close()
+        results = _search_specs(
+            query,
+            project_id=project,
+            requester_group=requester_group,
+            accessible_workspace_ids=accessible,
+        )
         return json.dumps({"results": results}, default=str)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
@@ -759,9 +834,7 @@ async def create_task(
                 description=description,
                 branch_ref=branch_ref,
             )
-            task = _create_task_endpoint(
-                payload, subject_type="user", subject_id=None, db=db
-            )
+            task = _create_task_endpoint(payload, db=db)
             return json.dumps(
                 TaskResponse.model_validate(task).model_dump(mode="json"), default=str
             )
@@ -775,15 +848,23 @@ async def create_task(
 @mcp.tool(description="Claim a task so you become its assignee and it moves to 'em_andamento'. This CAN FAIL by exclusivity: if the task is already active with another assignee, the returned JSON has claimed=false and current_assignee set — do NOT retry blindly; treat that task as taken and pick another (use list_spec_workspaces / read the board to see current state). On success claimed=true with the new version.")
 async def claim_task(task_id: str) -> str:
     try:
+        from fastapi import HTTPException
+
         from app.models import TaskCard
+        from app.routers.specs import _assert_access
         from app.utils.task_lock import claim_task as _claim_task
 
         claimant = resolve_hostname(user_id_var.get(None))
         db = SessionLocal()
         try:
             tid = uuid.UUID(task_id)
-            if db.query(TaskCard).filter(TaskCard.id == tid).first() is None:
+            task = db.query(TaskCard).filter(TaskCard.id == tid).first()
+            if task is None:
                 return f"Error: task {task_id} não encontrada"
+            try:
+                _assert_access(db, task.workspace_id)
+            except HTTPException as he:
+                return f"Error: {he.detail}"
             result = _claim_task(db, tid, claimant)
             if result.claimed:
                 return json.dumps(
@@ -810,15 +891,23 @@ async def claim_task(task_id: str) -> str:
 @mcp.tool(description="Release a task you no longer work on: it returns to the 'tasks' column, unassigned, and its block marker is cleared. Returns JSON with the new version.")
 async def release_task(task_id: str) -> str:
     try:
+        from fastapi import HTTPException
+
         from app.models import TaskCard
+        from app.routers.specs import _assert_access
         from app.utils.task_lock import release_task as _release_task
 
         actor = resolve_hostname(user_id_var.get(None))
         db = SessionLocal()
         try:
             tid = uuid.UUID(task_id)
-            if db.query(TaskCard).filter(TaskCard.id == tid).first() is None:
+            task = db.query(TaskCard).filter(TaskCard.id == tid).first()
+            if task is None:
                 return f"Error: task {task_id} não encontrada"
+            try:
+                _assert_access(db, task.workspace_id)
+            except HTTPException as he:
+                return f"Error: {he.detail}"
             result = _release_task(db, tid, actor, reason="release via MCP")
             return json.dumps({"released": True, "version": result.version})
         finally:
@@ -828,7 +917,7 @@ async def release_task(task_id: str) -> str:
         return f"Error: {e}"
 
 
-@mcp.tool(description="Move a task to a new Kanban column and/or set its block marker, using optimistic concurrency. new_status must be one of: tasks, em_andamento, revisao_codigo, fase_teste, concluido. Pass expected_version (the version you last read). To report a blocker without changing column, pass new_status equal to the current status and is_blocked=true (+ block_reason). Returns JSON {updated:true,...}; on a version conflict returns {conflict:true, current_version, current_status}; on an invalid status returns {error:..., valid:[...]}.")
+@mcp.tool(description="Move a task to a new Kanban column and/or set its block marker, using optimistic concurrency. new_status must be one of: tasks, em_andamento, revisao_codigo, fase_teste, concluido. Entering em_andamento MUST use claim_task; returning to tasks MUST use release_task. Pass expected_version (the version you last read). To report a blocker without changing column, pass new_status equal to the current status and is_blocked=true (+ block_reason). Returns JSON {updated:true,...}; on a version conflict returns {conflict:true, current_version, current_status}; on an invalid status returns {error:..., valid:[...]}.")
 async def update_task_status(
     task_id: str,
     new_status: str,
@@ -837,7 +926,11 @@ async def update_task_status(
     block_reason: str | None = None,
 ) -> str:
     try:
+        from fastapi import HTTPException
+
         from app.models import TaskCard, TaskCardStatus
+        from app.routers.specs import _assert_access
+        from app.utils.task_lock import TaskStatusPolicyError
         from app.utils.task_lock import update_task_status as _update_task_status
 
         actor = resolve_hostname(user_id_var.get(None))
@@ -853,17 +946,27 @@ async def update_task_status(
         db = SessionLocal()
         try:
             tid = uuid.UUID(task_id)
-            if db.query(TaskCard).filter(TaskCard.id == tid).first() is None:
+            task = db.query(TaskCard).filter(TaskCard.id == tid).first()
+            if task is None:
                 return f"Error: task {task_id} não encontrada"
-            result = _update_task_status(
-                db,
-                tid,
-                status_enum,
-                expected_version,
-                actor,
-                is_blocked=is_blocked,
-                block_reason=block_reason,
-            )
+            try:
+                _assert_access(db, task.workspace_id)
+            except HTTPException as he:
+                return f"Error: {he.detail}"
+            try:
+                result = _update_task_status(
+                    db,
+                    tid,
+                    status_enum,
+                    expected_version,
+                    actor,
+                    is_blocked=is_blocked,
+                    block_reason=block_reason,
+                )
+            except TaskStatusPolicyError as exc:
+                return json.dumps(
+                    {"policy": True, "code": exc.code, "message": exc.message}
+                )
             if result.conflict:
                 return json.dumps(
                     {
@@ -901,9 +1004,7 @@ async def add_spec_comment(target_type: str, target_id: str, body: str) -> str:
                 author=author,
             )
             try:
-                comment = _create_comment_endpoint(
-                    payload, subject_type="user", subject_id=None, db=db
-                )
+                comment = _create_comment_endpoint(payload, db=db)
             except HTTPException as he:
                 return f"Error: {he.detail}"
             return json.dumps(
@@ -929,15 +1030,16 @@ def _warn_invalid_mcp_hostname(raw_uid: str | None) -> None:
 async def handle_sse(request: Request):
     """Handle SSE connections for a specific user and client"""
     # Extract user_id and client_name from path parameters
-    uid = request.path_params.get("user_id")
-    _warn_invalid_mcp_hostname(uid)
+    path_uid = request.path_params.get("user_id")
+    _warn_invalid_mcp_hostname(path_uid)
+    uid = _effective_mcp_uid(path_uid)
     user_token = user_id_var.set(uid or "")
     client_name = request.path_params.get("client_name")
     client_token = client_name_var.set(client_name or "")
     # ?group= na URL de instalação: vincula equipe na primeira conexão (ADR-004).
     ensure_user_group(uid, request.query_params.get("group"))
     # Token de agente em máquina não vinculada: log estruturado (Fase 2 trata).
-    _log_machine_divergence_if_any(uid)
+    _log_machine_divergence_if_any(path_uid)
 
     try:
         # NOTE: request._send is the raw ASGI `send` callable. Starlette does not
@@ -1004,14 +1106,15 @@ async def handle_streamable_http(request: Request):
     to FastAPI — otherwise FastAPI would also try to send its own response,
     causing a "double-response" bug.
     """
-    uid = request.path_params.get("user_id")
-    _warn_invalid_mcp_hostname(uid)
+    path_uid = request.path_params.get("user_id")
+    _warn_invalid_mcp_hostname(path_uid)
+    uid = _effective_mcp_uid(path_uid)
     user_token = user_id_var.set(uid or "")
     client_name = request.path_params.get("client_name")
     client_token = client_name_var.set(client_name or "")
     ensure_user_group(uid, request.query_params.get("group"))
     # Token de agente em máquina não vinculada: log estruturado (Fase 2 trata).
-    _log_machine_divergence_if_any(uid)
+    _log_machine_divergence_if_any(path_uid)
 
     # Intercept the ASGI messages the transport sends so we can return them
     # as a single Response to FastAPI.  Without this, FastAPI would attempt to

@@ -124,14 +124,20 @@ class GovernanceQueue:
         finally:
             db.close()
 
-    def recover_stale_processing(self) -> int:
+    def recover_stale_processing(self, older_than_minutes: int | None = None) -> int:
+        from datetime import timedelta
+
+        from app.utils.datetime_utc import utc_now_naive
+
         db = self._session()
         try:
-            rows = (
-                db.query(GovernanceJobModel)
-                .filter(GovernanceJobModel.status == GovernanceJobStatus.processing)
-                .all()
+            query = db.query(GovernanceJobModel).filter(
+                GovernanceJobModel.status == GovernanceJobStatus.processing
             )
+            if older_than_minutes is not None and older_than_minutes > 0:
+                cutoff = utc_now_naive() - timedelta(minutes=older_than_minutes)
+                query = query.filter(GovernanceJobModel.updated_at <= cutoff)
+            rows = query.all()
             for row in rows:
                 row.status = GovernanceJobStatus.queued
             if rows:

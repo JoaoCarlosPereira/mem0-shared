@@ -19,8 +19,11 @@ Faz, ponta a ponta:
   3. Coleta segredos (PostgreSQL/Grafana/MinIO/API_KEY/auth de equipe) e o login
      Google da UI (domínio Workspace + client id/secret OAuth; os segredos de
      sessão AUTH_JWT_SECRET/NEXTAUTH_SECRET são gerados automaticamente).
-  4. Sobe a infra base, roda migrations Alembic em container, sobe o stack completo
-     e valida GET /health via proxy.
+     Sem Google (--skip-google-auth ou Enter): grava AUTH_UI_REQUIRED=0 (UI legado).
+  4. Garante Docker utilizável nesta sessão (ACL no socket se o grupo docker
+     ainda não entrou em vigor) e Ollama em 0.0.0.0 quando o LLM é local.
+  5. Sobe a infra base, roda migrations Alembic em container, sobe o stack completo
+     e valida GET /health + UI :3000 via proxy.
 
 Uso:
   python install.py                                   # interativo (produção)
@@ -108,6 +111,76 @@ def docker_usable():
     r = run(["docker", "info"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return r.returncode == 0
+
+
+def _current_username():
+    try:
+        return (os.environ.get("USER") or os.environ.get("USERNAME")
+                or getpass.getuser() or "")
+    except Exception:
+        return ""
+
+
+def user_listed_in_docker_group(user=None):
+    """True se /etc/group lista ``user`` no grupo docker (sessão pode ainda não ter o GID)."""
+    user = user or _current_username()
+    if not user or user == "root":
+        return True
+    try:
+        import grp
+        return user in grp.getgrnam("docker").gr_mem
+    except KeyError:
+        return False
+    except Exception:
+        return False
+
+
+def try_fix_docker_socket_acl(user=None):
+    """Concede ACL u:USER:rw em /var/run/docker.sock (sudo). Retorna True se docker_usable()."""
+    user = user or _current_username()
+    sock = "/var/run/docker.sock"
+    if not user or not Path(sock).exists():
+        return False
+    if not shutil.which("setfacl"):
+        return False
+    r = run(_maybe_sudo(["setfacl", "-m", f"u:{user}:rw", sock]),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return r.returncode == 0 and docker_usable()
+
+
+def ensure_docker_access(args, interactive):
+    """Garante que esta sessão consegue falar com o daemon (além do binário no PATH).
+
+    Caso clássico no Linux: usuário já está em /etc/group docker, mas o shell
+    atual ainda não carregou o GID → permission denied no docker.sock.
+    Tenta ACL temporária (sudo setfacl); senão aborta com instruções claras.
+    """
+    if docker_usable():
+        return
+    warn("Docker instalado, mas sem permissão no socket (unix:///var/run/docker.sock).")
+    if user_listed_in_docker_group():
+        warn("Você já está no grupo 'docker', mas esta sessão ainda não carregou o grupo.")
+        if _confirm_install(
+            "Liberar o docker.sock nesta sessão via ACL (sudo setfacl)?",
+            args, interactive,
+        ):
+            if try_fix_docker_socket_acl():
+                ok("Acesso ao Docker liberado nesta sessão (ACL no socket).")
+                return
+            warn("Não foi possível aplicar a ACL (sudo/setfacl).")
+        die(
+            "Sem acesso ao Docker nesta sessão. Em outro terminal rode:\n"
+            "    newgrp docker\n"
+            "  ou faça logout/login, ou:\n"
+            "    sudo setfacl -m u:$USER:rw /var/run/docker.sock\n"
+            "Depois rode o instalador novamente."
+        )
+    die(
+        "Docker não está acessível para este usuário. No Linux, adicione-se ao "
+        "grupo e reabra a sessão:\n"
+        "    sudo usermod -aG docker $USER && newgrp docker\n"
+        "No macOS/Windows, inicie o Docker Desktop e aguarde o daemon."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -290,12 +363,7 @@ def ensure_docker(args, interactive):
                 "Reabra o terminal (ou reinicie / inicie o Docker Desktop) e rode "
                 "o instalador de novo.")
         ok("Docker instalado.")
-        if not docker_usable():
-            die("Docker instalado, mas o daemon ainda não está acessível para este "
-                "usuário. No Linux, faça logout/login para aplicar o grupo 'docker' "
-                "(ou rode com sudo); no macOS/Windows, inicie o Docker Desktop e "
-                "aguarde o daemon subir. Depois rode o instalador novamente.")
-
+    ensure_docker_access(args, interactive)
 
 def ensure_docker_compose_installed(args, interactive):
     """Garante o plugin 'docker compose' v2; instala se ausente (com consentimento)."""
@@ -826,6 +894,54 @@ def _probe_health(port):
         return False, f"sem resposta ({e})"
 
 
+def parse_health_payload(detail):
+    """Extrai o JSON de um detalhe ``HTTP 200: {...}``. Retorna dict ou {}."""
+    if not detail:
+        return {}
+    idx = detail.find("{")
+    if idx < 0:
+        return {}
+    try:
+        return json.loads(detail[idx:])
+    except Exception:
+        return {}
+
+
+def memory_client_status(detail):
+    """Status do check memory_client em /health, ou None se ausente."""
+    payload = parse_health_payload(detail)
+    check = (payload.get("checks") or {}).get("memory_client") or {}
+    return check.get("status")
+
+
+def _probe_ui(port=3000):
+    """GET na UI. Retorna (ok, detalhe). ok=True em 2xx (não 5xx)."""
+    url = f"http://127.0.0.1:{port}/"
+    try:
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            body = resp.read().decode("utf-8", "replace")
+            okp = 200 <= resp.status < 300
+            hint = "Internal Server Error" if "Internal Server Error" in body else body[:120]
+            return okp, f"HTTP {resp.status}: {hint}"
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")
+        return False, f"HTTP {e.code}: {body[:200]}"
+    except Exception as e:
+        return False, f"sem resposta ({e})"
+
+
+def wait_for_ui(port, timeout):
+    """Poll a UI até responder 2xx. Retorna (ok, detalhe)."""
+    deadline = time.time() + timeout
+    detail = "sem resposta"
+    while time.time() < deadline:
+        okp, detail = _probe_ui(port)
+        if okp:
+            return True, detail
+        time.sleep(3)
+    return False, detail
+
+
 def wait_for_health(port, timeout):
     """Poll GET /health (via proxy) até responder 2xx. Retorna (ok, detalhe)."""
     deadline = time.time() + timeout
@@ -836,6 +952,121 @@ def wait_for_health(port, timeout):
             return True, detail
         time.sleep(3)
     return False, detail
+
+
+def ollama_listening_for_docker(port=11434):
+    """True se Ollama escuta em 0.0.0.0/* (containers alcançam via host-gateway).
+
+    False se só 127.0.0.1/::1. None se não detectou listener (ss ausente / parado).
+    """
+    if not shutil.which("ss"):
+        return None
+    try:
+        r = subprocess.run(
+            ["ss", "-ltn"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except Exception:
+        return None
+    lines = [ln for ln in (r.stdout or "").splitlines() if f":{port}" in ln]
+    if not lines:
+        return None
+    for ln in lines:
+        if f"*:{port}" in ln or f"0.0.0.0:{port}" in ln or f"[::]:{port}" in ln:
+            return True
+    if any(f"127.0.0.1:{port}" in ln or f"[::1]:{port}" in ln for ln in lines):
+        return False
+    return None
+
+
+def configure_ollama_host_bind(port=11434):
+    """Grava drop-in systemd OLLAMA_HOST=0.0.0.0 e reinicia o serviço. Retorna True se ok."""
+    if not shutil.which("systemctl"):
+        return False
+    drop_dir = Path("/etc/systemd/system/ollama.service.d")
+    drop_file = drop_dir / "override.conf"
+    content = (
+        "[Service]\n"
+        f'Environment="OLLAMA_HOST=0.0.0.0:{port}"\n'
+    )
+    script = (
+        f"mkdir -p {drop_dir.as_posix()} && "
+        f"cat > {drop_file.as_posix()} <<'EOF'\n{content}EOF\n"
+        "systemctl daemon-reload && "
+        "systemctl enable ollama 2>/dev/null || true && "
+        "systemctl restart ollama"
+    )
+    r = run(_maybe_sudo(["bash", "-c", script]))
+    if r.returncode != 0:
+        return False
+    time.sleep(2)
+    return ollama_listening_for_docker(port) is not False
+
+
+def inference_uses_host_ollama(compose_env, llm_spec=None, emb_spec=None, args=None):
+    """True se LLM/embedder apontam para Ollama no host (localhost / host.docker.internal)."""
+    urls = []
+    for spec in (llm_spec, emb_spec):
+        if not spec or spec.get("provider") != "ollama":
+            continue
+        raw = spec.get("ollama_url") or (getattr(args, "ollama_url", None) if args else None)
+        if raw:
+            urls.append(container_host_url(raw))
+        else:
+            urls.append("http://host.docker.internal:11434")
+    if compose_env:
+        for key in ("OLLAMA_LLM_URL", "OLLAMA_EMBED_URL"):
+            val = read_env(compose_env, key)
+            if val:
+                urls.append(val)
+        for prefix in ("LLM", "EMBEDDER"):
+            provider = (read_env(compose_env, f"{prefix}_PROVIDER") or "").strip().lower()
+            if provider != "ollama":
+                continue
+            val = read_env(compose_env, f"{prefix}_BASE_URL")
+            if val:
+                urls.append(val)
+    for url in urls:
+        if url and ("host.docker.internal" in url or host_is_local(url)):
+            return True
+    return False
+
+
+def ensure_ollama_reachable_from_docker(args, interactive, compose_env,
+                                        llm_spec=None, emb_spec=None):
+    """Se o stack usa Ollama no host, garante bind 0.0.0.0 (não só 127.0.0.1).
+
+    Sem isso a API no container falha memory_client: host.docker.internal:11434
+    recusa conexão porque o daemon escuta só em localhost.
+    """
+    if not inference_uses_host_ollama(compose_env, llm_spec, emb_spec, args):
+        return
+    bound = ollama_listening_for_docker()
+    if bound is True:
+        ok("Ollama acessível a partir dos containers (bind *:11434).")
+        return
+    if bound is None:
+        warn("Não detectei Ollama escutando na porta 11434. "
+             "Suba o Ollama antes de usar memórias (ollama serve).")
+        return
+    warn("Ollama escuta só em 127.0.0.1 — containers Docker não alcançam "
+         "(memory_client fica degraded).")
+    if _confirm_install(
+        "Expor Ollama em 0.0.0.0:11434 via systemd (sudo) agora?",
+        args, interactive,
+    ):
+        if configure_ollama_host_bind():
+            ok("Ollama reiniciado com OLLAMA_HOST=0.0.0.0:11434.")
+            return
+        warn("Falha ao reconfigurar o Ollama via systemd.")
+    die(
+        "Ajuste o Ollama para escutar em todas as interfaces e rode de novo:\n"
+        "    sudo mkdir -p /etc/systemd/system/ollama.service.d\n"
+        "    echo '[Service]' | sudo tee /etc/systemd/system/ollama.service.d/override.conf\n"
+        "    echo 'Environment=\"OLLAMA_HOST=0.0.0.0:11434\"' | sudo tee -a "
+        "/etc/systemd/system/ollama.service.d/override.conf\n"
+        "    sudo systemctl daemon-reload && sudo systemctl restart ollama"
+    )
 
 
 def docker_api_version():
@@ -952,6 +1183,12 @@ def run_update(args):
         args, compose_env,
         interactive=(not args.yes) and sys.stdin.isatty(),
         ui_url=ui_url_guess,
+    )
+
+    ensure_ollama_reachable_from_docker(
+        args,
+        interactive=(not args.yes) and sys.stdin.isatty(),
+        compose_env=compose_env,
     )
 
     # Salvaguarda (proteção de memórias): mede o Qdrant ANTES de recriar.
@@ -1169,12 +1406,21 @@ def write_inference_scale(compose_env, llm_spec, emb_spec, args):
 def configure_storage_scale(data_dir, interactive, compose_env):
     """Define onde o Qdrant persiste (PostgreSQL usa o volume mem0_pgdata)."""
     if not data_dir and interactive:
+        existing = read_env(compose_env, "QDRANT_STORAGE") or ""
+        hint = existing if existing else "volume Docker gerenciado (padrão)"
         resp = input(
             "  Onde salvar os vetores do Qdrant?\n"
-            "  [Enter] = volume Docker gerenciado (padrão) | ou informe um caminho: "
+            f"  [Enter] = {hint} | ou informe um caminho: "
         ).strip()
         data_dir = resp or None
+        if not data_dir and existing:
+            ok(f"Qdrant: mantendo {existing}. PostgreSQL: volume mem0_pgdata.")
+            return None if existing == "mem0_storage" else str(Path(existing).expanduser().resolve().parent)
     if not data_dir:
+        existing = read_env(compose_env, "QDRANT_STORAGE")
+        if existing:
+            ok(f"Qdrant: mantendo {existing}. PostgreSQL: volume mem0_pgdata.")
+            return None if existing == "mem0_storage" else str(Path(existing).expanduser().resolve().parent)
         set_env(compose_env, "QDRANT_STORAGE", "mem0_storage")
         ok("Qdrant: volume Docker gerenciado. PostgreSQL: volume mem0_pgdata.")
         return None
@@ -1344,16 +1590,22 @@ def configure_google_auth(args, compose_env, interactive, ui_url=None):
                      "(o fluxo legado por hostname segue ativo).")
 
     if not configured:
+        # Modo legado explícito: middleware/UI não forçam /login (sem Google).
+        # AUTH_UI_REQUIRED=0 é lido em runtime pela UI; o entrypoint NÃO faz sed
+        # bare do valor em process.env.* (quebraria o bundle — ver entrypoint.sh).
+        set_env(compose_env, "AUTH_UI_REQUIRED", "0")
         warn("Login Google desabilitado (fail-closed). Configure depois com "
              "'python install.py --update' ou defina AUTH_ALLOWED_DOMAIN, "
              "GOOGLE_CLIENT_ID/SECRET e NEXTAUTH_URL no openmemory/.env "
              "(ver api/.env.example).")
+        ok("UI em modo legado (AUTH_UI_REQUIRED=0 — sem forçar /login).")
         return False
 
     if not cur["NEXTAUTH_URL"]:
         cur["NEXTAUTH_URL"] = ui_url or "http://localhost:3000"
     for key in (*required, "NEXTAUTH_URL"):
         set_env(compose_env, key, cur[key])
+    set_env(compose_env, "AUTH_UI_REQUIRED", "1")
     # Segredos de sessão: gerados uma única vez (regravar invalidaria sessões).
     if not read_env(compose_env, "AUTH_JWT_SECRET"):
         set_env(compose_env, "AUTH_JWT_SECRET", _gen_secret())
@@ -1445,6 +1697,12 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
     # Destino do backup local (.zip) — funcionalidade de backup (ADR-003).
     ensure_backup_dir(compose_env, args)
 
+    # Ollama no host precisa escutar em 0.0.0.0 para host.docker.internal funcionar.
+    ensure_ollama_reachable_from_docker(
+        args, interactive=not args.yes, compose_env=compose_env,
+        llm_spec=llm_spec, emb_spec=emb_spec,
+    )
+
     # Orquestração ------------------------------------------------------------
     log("Subindo infraestrutura base (PostgreSQL, PgBouncer, Redis, Qdrant)")
     if dc("up", "-d", "postgres", "pgbouncer", "redis", "mem0_store").returncode != 0:
@@ -1477,6 +1735,33 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
         dc("logs", "--tail", "60", "openmemory-mcp")
         die("/health não respondeu saudável a tempo (veja a resposta e os logs acima).")
     ok(f"/health saudável ({detail}).")
+    mc = memory_client_status(detail)
+    if mc and mc != "ok":
+        warn(f"memory_client={mc} — Ollama pode estar inacessível aos containers. "
+             "Confira OLLAMA_HOST=0.0.0.0:11434 e os modelos (ollama list).")
+        # Segunda chance: reconfigura bind e pede rebuild só da API.
+        ensure_ollama_reachable_from_docker(
+            args, interactive=not args.yes, compose_env=compose_env,
+            llm_spec=llm_spec, emb_spec=emb_spec,
+        )
+        dc("up", "-d", "--no-deps", "--force-recreate",
+           "openmemory-mcp", "openmemory-write-worker")
+        healthy2, detail2 = wait_for_health(args.proxy_port, min(args.timeout, 90))
+        mc2 = memory_client_status(detail2) if healthy2 else None
+        if mc2 == "ok":
+            ok("memory_client ok após reexpor o Ollama.")
+        else:
+            warn(f"memory_client ainda {mc2 or 'degraded'} — a UI sobe, mas escrita/"
+                 "busca de memórias pode falhar até o Ollama ficar alcançável.")
+
+    log("Aguardando a UI (porta 3000)")
+    ui_ok, ui_detail = wait_for_ui(3000, min(args.timeout, 120))
+    if not ui_ok:
+        warn(f"Última resposta da UI: {ui_detail}")
+        dc("logs", "--tail", "60", "openmemory-ui")
+        die("UI não respondeu 2xx a tempo (causa comum: entrypoint sed quebrando "
+            "o bundle Next.js — veja openmemory/ui/entrypoint.sh).")
+    ok(f"UI ok ({ui_detail}).")
 
     log("Instalação concluída 🎉")
     print(f"""
@@ -1491,6 +1776,7 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
   Stack: PostgreSQL + PgBouncer + Redis + Qdrant + workers (write/governance)
          + Traefik + observabilidade + backup (MinIO) + UI.
   Auth de equipe: AUTH_MODE={secrets['AUTH_MODE']} (defina tokens com --auth-tokens).
+  Auth UI:        AUTH_UI_REQUIRED={read_env(compose_env, 'AUTH_UI_REQUIRED') or '(auto)'}
 
   Rota MCP (preencha hostname e project):
     /mcp/{{client_name}}/sse/{{hostname}}      (SSE)

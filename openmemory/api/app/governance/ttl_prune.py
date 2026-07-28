@@ -54,7 +54,9 @@ def run_ttl_prune_job(
     )
     policy = resolve_policy(project or "", session_factory=session_factory)
     batch_limit = min(limit, policy.batch_limit)
-    now = datetime.now(UTC)
+    from app.utils.datetime_utc import as_utc_naive, utc_now_naive
+
+    now = utc_now_naive()
     max_age_cutoff = now - timedelta(days=policy.ttl_max_age_days)
     idle_cutoff = now - timedelta(days=policy.ttl_idle_days)
 
@@ -74,10 +76,10 @@ def run_ttl_prune_job(
             if _protected_category_names(db, mem, policy.protected_categories):
                 continue
             created = mem.created_at
-            if created is None or created > max_age_cutoff:
+            if created is None or as_utc_naive(created) > max_age_cutoff:
                 continue
             last_access = _last_access(db, mem.id) or created
-            if last_access > idle_cutoff:
+            if as_utc_naive(last_access) > idle_cutoff:
                 continue
             if engine.quarantine(mem.id, reason="ttl_prune", job_id=job_id):
                 pruned += 1

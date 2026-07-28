@@ -8,8 +8,8 @@ services:
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
     ports:
       - "${MINIO_PORT:-9000}:9000"
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
@@ -29,7 +29,7 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      mc alias set local http://minio:9000 ${S3_ACCESS_KEY:-minioadmin} ${S3_SECRET_KEY:-minioadmin} &&
+      mc alias set local http://minio:9000 ${S3_ACCESS_KEY} ${S3_SECRET_KEY} &&
       mc mb --ignore-existing local/${S3_BUCKET:-mem0-backups} &&
       mc version enable local/${S3_BUCKET:-mem0-backups} || true
       "
@@ -45,8 +45,8 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       S3_ENDPOINT: http://minio:9000
       S3_BUCKET: ${S3_BUCKET:-mem0-backups}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
       QDRANT_HOST: ${QDRANT_HOST:-mem0_store}
       QDRANT_PORT: ${QDRANT_PORT:-6333}
     command: ["python", "-m", "app.scripts.run_backup"]

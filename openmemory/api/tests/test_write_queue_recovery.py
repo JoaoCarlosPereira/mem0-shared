@@ -52,3 +52,31 @@ class TestRecoverStaleProcessing:
         q, engine, _ = _make_queue(tmp_path, "recovery2.db")
         assert q.recover_stale_processing() == 0
         engine.dispose()
+
+    def test_age_filter_skips_fresh_processing(self, tmp_path):
+        from datetime import timedelta
+
+        from app.utils.datetime_utc import utc_now_naive
+
+        q, engine, path = _make_queue(tmp_path, "recovery3.db")
+        job_id = q.enqueue(_job())
+        q.dequeue(limit=1)
+
+        factory = sessionmaker(
+            bind=create_engine(
+                f"sqlite:///{path}", connect_args={"check_same_thread": False}
+            )
+        )
+        db = factory()
+        try:
+            row = db.query(WriteQueueModel).filter(
+                WriteQueueModel.id == uuid.UUID(job_id)
+            ).first()
+            row.updated_at = utc_now_naive() - timedelta(minutes=1)
+            db.commit()
+        finally:
+            db.close()
+
+        assert q.recover_stale_processing(older_than_minutes=15) == 0
+        assert q.recover_stale_processing(older_than_minutes=1) == 1
+        engine.dispose()

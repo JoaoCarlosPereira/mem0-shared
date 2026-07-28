@@ -144,6 +144,7 @@ def index_spec_document(
         "owner": owner,
         "created_at": ts,
         "updated_at": ts,
+        "state": "active",
     }
     # ``doc_id`` como id do ponto: reindexar uma nova versão sobrescreve, não duplica.
     vector_store.insert(vectors=[vectors], payloads=[payload], ids=[str(doc_id)])
@@ -219,6 +220,7 @@ def search_specs(
     *,
     project_id: Optional[str] = None,
     requester_group: Optional[str] = None,
+    accessible_workspace_ids: Optional[set] = None,
     top_k: int = DEFAULT_SPECS_TOP_K,
     embedder=None,
     vector_store=None,
@@ -227,23 +229,36 @@ def search_specs(
 
     Aplica os mesmos boosts de grupo/projeto de ``rank_search_results``. Como só
     specs concluídas são indexadas, os resultados são inerentemente concluídos.
-    ``project_id`` filtra por projeto (comparação normalizada).
+    ``project_id`` filtra por projeto (Qdrant + pós-filtro normalizado).
+    ``accessible_workspace_ids`` restringe hits ao ACL do solicitante (``None`` =
+    sem restrição / aberto).
     """
     embedder, vector_store = _resolve_backends(embedder, vector_store)
     if embedder is None or vector_store is None:
         return []
 
+    # Over-fetch quando há filtros pós-busca (projeto / ACL) para não truncar
+    # matches relevantes antes do filtro.
+    needs_post_filter = bool(project_id) or accessible_workspace_ids is not None
+    fetch_k = top_k * 5 if needs_post_filter else top_k
+    qdrant_filters = {"project_id": project_id} if project_id else None
+
     results = semantic_search(
         embedder,
         vector_store,
         query,
-        top_k=top_k,
+        top_k=fetch_k,
         payload_mapper=_map_spec_hit,
+        filters=qdrant_filters,
     )
 
     if project_id:
         target = normalize_project_name(project_id)
         results = [r for r in results if normalize_project_name(r.get("project")) == target]
 
+    if accessible_workspace_ids is not None:
+        allowed = {str(x) for x in accessible_workspace_ids}
+        results = [r for r in results if str(r.get("workspace_id") or "") in allowed]
+
     rank_search_results(results, preferred_project=project_id, requester_group=requester_group)
-    return results
+    return results[:top_k]

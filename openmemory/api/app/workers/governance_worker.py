@@ -263,7 +263,26 @@ class GovernanceWorker:
                 logger.exception("governance worker pass failed")
                 processed = 0
             if processed == 0:
+                self._recover_stale_processing()
                 await self._wait(self._idle_sleep)
+
+    def _recover_stale_processing(self) -> None:
+        minutes = int(os.getenv("GOVERNANCE_STALE_PROCESSING_MINUTES", "15") or "15")
+        if minutes <= 0:
+            return
+        try:
+            recovered = self._queue.recover_stale_processing(
+                older_than_minutes=minutes
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("governance stale-processing recovery failed")
+            return
+        if recovered:
+            logger.info(
+                "recovered %s stale governance jobs -> queued (age>=%sm)",
+                recovered,
+                minutes,
+            )
 
     def start(self) -> asyncio.Task:
         self._stopped.clear()

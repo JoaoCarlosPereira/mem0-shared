@@ -119,8 +119,21 @@ class TestReleaseAndStatus:
     @pytest.mark.asyncio
     async def test_update_status_conflito_de_versao(self):
         _, task = await _mk_ws_and_task()
-        out = json.loads(await update_task_status(task["id"], "revisao_codigo", 99))
+        claimed = json.loads(await claim_task(task["id"]))
+        out = json.loads(
+            await update_task_status(task["id"], "revisao_codigo", 99)
+        )
         assert out["conflict"] is True
+        assert claimed["version"] == 2
+
+    @pytest.mark.asyncio
+    async def test_update_status_sem_claim_rejeitado(self):
+        _, task = await _mk_ws_and_task()
+        out = json.loads(
+            await update_task_status(task["id"], "em_andamento", 1)
+        )
+        assert out.get("policy") is True
+        assert out["code"] == "use_claim"
 
     @pytest.mark.asyncio
     async def test_reportar_bloqueio_mantendo_status(self):

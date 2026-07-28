@@ -49,6 +49,14 @@ x-api-common: &api-common
     WRITE_WORKER_MAX_CONCURRENCY: ${WRITE_WORKER_MAX_CONCURRENCY:-1}
     # Autenticação por equipe (task_11 / ADR-006): warn (default) -> enforce.
     AUTH_MODE: ${AUTH_MODE:-warn}
+    # Token dedicado para mutações destrutivas /admin/* (restore, purge, requeue-done).
+    # Também aceito: sessão JWT com email em AUTH_ADMIN_EMAILS.
+    ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+    AUTH_ADMIN_EMAILS: ${AUTH_ADMIN_EMAILS:-}
+    # CORS explícito (vírgula). Default na API: localhost:3000 + NEXTAUTH_URL.
+    CORS_ORIGINS: ${CORS_ORIGINS:-}
+    NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+    OPENMEMORY_UI_URL: ${OPENMEMORY_UI_URL:-}
     # Caminho do secret de tokens (ex.: Docker secret montado em /run/secrets).
     AUTH_TOKENS_FILE: ${AUTH_TOKENS_FILE:-/run/secrets/team_tokens}
     # Auth Google + identidade (feature auth Google, ADR-002/ADR-006/ADR-007).
@@ -72,8 +80,9 @@ x-api-common: &api-common
     # Object store para backup/cold tier (task_02/07 / ADR-003).
     S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
     S3_BUCKET: ${S3_BUCKET:-mem0-backups}
-    S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-    S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+    # Sem default fraco: defina S3_ACCESS_KEY / S3_SECRET_KEY no .env (obrigatório).
+    S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+    S3_SECRET_KEY: ${S3_SECRET_KEY}
     # Caminho no host montado em /mnt/backups (traduzido pela API para a UI).
     LOCAL_BACKUP_DIR: ${LOCAL_BACKUP_DIR:-./backups}
   env_file:
@@ -262,6 +271,10 @@ services:
       # NEXTAUTH_URL deve ser a URL da UI acessível na LAN (ex.: http://IP:3000).
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      # AUTH_UI_REQUIRED=0 → UI legado (sem forçar /login). Vazio = auto (Google id).
+      - AUTH_UI_REQUIRED=${AUTH_UI_REQUIRED:-}
+      - NEXT_PUBLIC_AUTH_UI_REQUIRED=${AUTH_UI_REQUIRED:-}
+      - NEXT_PUBLIC_GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-}
       - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
 
