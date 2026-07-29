@@ -1,5 +1,6 @@
-# fastapi-pagination<=0.15.15 importa get_body_field, removido/privado em
-# FastAPI >=0.140.5 (uriyyo/fastapi-pagination#1990). Pin até o pagination acompanhar.
+# fastapi-pagination 0.15.16+ espera FastAPI com get_body_field(body_params=...);
+# FastAPI >=0.140.5 removeu/alterou get_body_field (uriyyo/fastapi-pagination#1990).
+# Manter o par abaixo até o pagination acompanhar uma FastAPI nova.
 fastapi>=0.68.0,<0.140.5
 uvicorn>=0.15.0
 sqlalchemy>=1.4.0
@@ -8,11 +9,12 @@ alembic>=1.7.0
 psycopg2-binary>=2.9.0
 python-multipart>=0.0.27
 urllib3>=2.7.0
-fastapi-pagination>=0.12.0
+fastapi-pagination>=0.12.0,<=0.15.15
 mem0ai>=0.1.92
 openai>=1.40.0
-mcp[cli]>=1.25.4
-starlette>=0.40.0
+# mcp 2.0 removeu mcp.server.fastmcp (usado por mcp_server.py).
+mcp[cli]>=1.25.4,<2
+starlette>=0.40.0,<0.50.0
 pytest>=7.0.0
 pytest-asyncio>=0.21.0
 httpx>=0.24.0
