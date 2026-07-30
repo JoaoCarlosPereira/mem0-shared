@@ -50,7 +50,7 @@ Referencie a seção de implementação do TechSpec para padrões e interfaces.]
 - `caminho/dependencia` — [motivo breve]
 
 ### ADRs Relacionados
-- [ADR-NNN: Título](../adrs/adr-NNN.md) — Relevância para esta tarefa
+- ADR-NNN: Título — Relevância para esta tarefa (corpo no PRD/TechSpec compartilhado; usar `#adr-NNN` se for âncora no mesmo documento)
 
 ## Entregáveis
 - [Saída concreta 1]

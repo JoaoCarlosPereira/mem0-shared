@@ -61,9 +61,9 @@ IDEIA
 
 **Por que usar primeiro:** Porque é fundamental definir **O QUÊ** e **POR QUÊ** antes de discutir **O COMO**. Isso evita viciar a discussão em implementação prematuramente e garante que a solução resolve o problema real do usuário.
 
-**Artefatos gerados:**
-- `.docs/tasks/<slug>/_prd.md` — documento principal de requisitos
-- `.docs/tasks/<slug>/adrs/adr-NNN.md` — registros de decisões de produto
+**Artefatos gerados (Mem0 Shared via MCP):**
+- Documento `prd` no SpecWorkspace — requisitos + ADRs de produto embutidos (texto completo)
+- *(Legado)* `.docs/tasks/<slug>/_prd.md` / `adrs/*.md` locais — não são fonte de verdade no Shared; links `adrs/*.md` na UI 404
 
 ---
 
@@ -72,16 +72,16 @@ IDEIA
 **Quando usar:** Após o PRD estar aprovado. Transforma requisitos de negócio em design técnico.
 
 **O que faz:**
-- Lê o `_prd.md`, ADRs existentes e explora a arquitetura do códigobase
+- Lê o PRD (e TechSpec existente) via MCP, extrai ADRs embutidos e explora a arquitetura do códigobase
 - Faz perguntas técnicas interativas (arquitetura, data models, APIs, testing)
-- Cria ADRs para decisões técnicas (padrão arquitetural, tecnologias escolhidas, modelo de dados)
-- Gera o `_techspec.md` com: Arquitetura do Sistema, Modelos de Dados, Design de APIs, Interfaces Principais, Sequenciamento de Desenvolvimento, Requisitos de Teste
+- Cria ADRs técnicos em memória e os embute no TechSpec (texto completo)
+- Grava o TechSpec via MCP com: Arquitetura do Sistema, Modelos de Dados, Design de APIs, Interfaces Principais, Sequenciamento de Desenvolvimento, Requisitos de Teste, ADRs
 
 **Por que usar agora:** Porque o TechSpec é o contrato entre o produto (PRD) e a implementação. Define **O COMO** técnico sem entrar na granularidade de tarefas. Serve como referência para decompor em tarefas.
 
-**Artefatos gerados:**
-- `.docs/tasks/<name>/_techspec.md` — especificação técnica
-- `.docs/tasks/<name>/adrs/adr-NNN.md` — ADRs técnicos adicionais
+**Artefatos gerados (Mem0 Shared via MCP):**
+- Documento `techspec` no SpecWorkspace — especificação técnica + ADRs técnicos embutidos
+- *(Legado)* `.docs/tasks/<name>/adrs/adr-NNN.md` locais — fora do Shared; não gravar no fluxo atual
 
 ---
 

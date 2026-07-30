@@ -93,8 +93,24 @@ NÃO inclua riscos técnicos como complexidade arquitetural ou dívida técnica.
 
 ## Registros de Decisão de Arquitetura
 
-ADRs documentando decisões tomadas no brainstorming:
-- [ADR-NNN: Título](adrs/adr-NNN.md) — Resumo em uma linha da decisão
+Inclua o **texto completo** de cada ADR de produto (o Shared persiste o PRD como um único documento — não há `adrs/*.md` remoto):
+
+### ADR-NNN: Título
+
+**Status**: Aceito
+**Data**: AAAA-MM-DD
+
+**Contexto**
+…
+
+**Decisão**
+…
+
+**Alternativas Consideradas**
+…
+
+**Consequências**
+…
 
 ## Perguntas em Aberto
 

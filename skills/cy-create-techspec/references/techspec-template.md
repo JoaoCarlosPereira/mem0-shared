@@ -114,5 +114,21 @@ Desafios técnicos e estratégias de mitigação:
 
 ## Registros de Decisão de Arquitetura
 
-ADRs que documentam decisões tomadas no PRD e no design técnico:
-- [ADR-NNN: Título](adrs/adr-NNN.md) — Resumo em uma linha da decisão
+ADRs de produto (quando existirem) estão no PRD. Inclua abaixo o **texto completo** de cada ADR técnico desta sessão (nunca links para `adrs/*.md` — o Shared não serve esses arquivos).
+
+### ADR-NNN: Título
+
+**Status**: Aceito
+**Data**: AAAA-MM-DD
+
+**Contexto**
+…
+
+**Decisão**
+…
+
+**Alternativas Consideradas**
+…
+
+**Consequências**
+…

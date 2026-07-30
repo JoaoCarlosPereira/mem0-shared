@@ -54,8 +54,10 @@
       locais.
 - [ ] **Modo standalone (sem PRD):** rodar em um workspace sem PRD; confirmar que a
       skill **pede a descrição ao usuário** em vez de falhar.
-- [ ] **ADRs locais:** confirmar que os ADRs criados nesta skill continuam gravados
-      em `.docs/tasks/<name>/adrs/` (fora do escopo remoto do MVP).
+- [ ] **ADRs no TechSpec remoto:** confirmar que os ADRs técnicos aparecem com
+      **texto completo** na seção "Registros de Decisão de Arquitetura" do
+      TechSpec gravado via MCP — sem arquivos `.docs/tasks/<name>/adrs/*.md` e
+      sem links `adrs/adr-NNN.md` (que 404 na UI compartilhada).
 - [ ] **Conflito de versão:** simular gravação concorrente da TechSpec; confirmar que
       não sobrescreve silenciosamente.
 - [ ] **Indisponibilidade do serviço:** parar o MCP e confirmar falha clara, sem

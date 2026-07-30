@@ -1,6 +1,6 @@
 ---
 name: cy-create-techspec
-description: Cria Especificação Técnica (TechSpec) em PT-BR a partir do PRD, com esclarecimentos técnicos interativos. Lê o PRD e grava a TechSpec no Mem0 Shared via MCP (read/write_spec_document); ADRs permanecem locais no MVP. Use quando existir PRD e precisar de plano técnico. Não use para PRD, tarefas ou implementação direta.
+description: Cria Especificação Técnica (TechSpec) em PT-BR a partir do PRD, com esclarecimentos técnicos interativos. Lê o PRD e grava a TechSpec (com ADRs embutidos) no Mem0 Shared via MCP (read/write_spec_document). Use quando existir PRD e precisar de plano técnico. Não use para PRD, tarefas ou implementação direta.
 argument-hint: "[feature-name] [prd-file]"
 ---
 
@@ -40,9 +40,9 @@ Once the user has answered the technical clarification questions and approved an
 
 You MUST create a task for each phase and complete them in order:
 
-1. **Gather context** — resolve the shared workspace, read the PRD via MCP (`read_spec_document`), read local ADRs, and explore codebase architecture
+1. **Gather context** — resolve the shared workspace, read the PRD/TechSpec via MCP (`read_spec_document`), extract any existing ADRs from those documents, and explore codebase architecture
 2. **Ask technical questions** — 3-6 targeted questions on architecture, data models, APIs, testing
-3. **Create ADRs** — record significant technical decisions (ADRs stay **local** in `adrs/` in this MVP — see note in step 3)
+3. **Create ADRs** — record significant technical decisions **in memory** (full text will be embedded in the TechSpec — never write `adrs/*.md` local files)
 4. **Draft the TechSpec** — write using the canonical template from `references/techspec-template.md`
 5. **Review with user** — present the draft, iterate until approved
 6. **Save via MCP** — persist the TechSpec with `write_spec_document` (document_type="techspec") — never a local `_techspec.md`
@@ -56,7 +56,7 @@ You MUST create a task for each phase and complete them in order:
      - If a PRD is found, use it as the primary input.
      - **Standalone mode:** if no PRD is found (`found=false`), ask the user for a description of what needs technical specification — do NOT fail.
    - Read the current TechSpec via `read_spec_document(workspace_id, document_type="techspec")`; if found, operate in **update mode** and keep its `current_version` for the write.
-   - **ADRs remain LOCAL in this MVP:** read existing ADRs from `.docs/tasks/<name>/adrs/` and create that directory if needed. The PRD/TechSpec are persisted remotely via MCP, but ADRs are out of the remote-versioning scope of the MVP PRD (see step 3).
+   - **ADRs live in the shared documents:** extract existing product ADRs from the PRD section "Registros de Decisão de Arquitetura" and any technical ADRs already embedded in the TechSpec. Do **NOT** read or write `.docs/tasks/<name>/adrs/*.md` — those local files are legacy and invisible to the shared UI (links become 404).
    - Spawn an Agent tool call to explore the codebase for architecture patterns, existing components, dependencies, and technology stack.
    - If any MCP tool errors (service unavailable), STOP and report clearly — do NOT read/write local `_prd.md`/`_techspec.md` as a fallback (ADR-002/ADR-007).
 
@@ -71,16 +71,16 @@ You MUST create a task for each phase and complete them in order:
    - Include a fallback option (e.g., "D) Other — describe") for flexibility.
 
 3. Create ADRs for significant technical decisions.
-   - **MVP scope note (ADR-002):** ADRs are intentionally kept as **local files** in `.docs/tasks/<name>/adrs/`. Remote versioning via MCP covers the PRD and the TechSpec only; ADRs are out of the remote-versioning scope of the MVP PRD. Do not attempt to persist ADRs via `write_spec_document`.
+   - **Shared-space rule:** there is no separate ADR store. Technical ADRs are drafted in memory and **embedded in full** in the TechSpec (same pattern as product ADRs in the PRD). Do **NOT** write `.docs/tasks/<name>/adrs/adr-NNN.md` or any local ADR file.
    - For each significant decision (architecture pattern chosen, technology selected, data model approach, etc.):
      - Read `references/adr-template.md`.
-     - Determine the next ADR number by listing existing files in `.docs/tasks/<name>/adrs/`.
+     - Determine the next ADR number by continuing after the highest ADR already present in the PRD and/or current TechSpec (zero-padded 3-digit, e.g. if PRD ends at ADR-006, start at ADR-007).
      - Fill the template in **PT-BR**: the chosen design as "Decisão", rejected alternatives as "Alternativas Consideradas", and trade-offs as "Consequências". Set Status to "Aceito" and Date to today.
-     - Write each ADR to `.docs/tasks/<name>/adrs/adr-NNN.md` (zero-padded 3-digit sequential number).
+     - Keep the full ADR text ready to paste into the TechSpec section in step 4 — do not persist it anywhere else.
 
 4. Draft the TechSpec.
    - Read `references/techspec-template.md` and fill every applicable section.
-   - **MANDATORY — Registros de Decisão de Arquitetura section:** The generated TechSpec MUST end with a "Registros de Decisão de Arquitetura" section listing every ADR created during this process. Each entry must include the ADR number (e.g., ADR-001), title, and a one-line summary in PT-BR formatted as a link to the `adrs/` directory. Even simple features require at least one ADR documenting the primary technical approach chosen and alternatives rejected. If no ADRs were created in step 3, go back and create at least one before generating the document.
+   - **MANDATORY — Registros de Decisão de Arquitetura section:** The generated TechSpec MUST end with a "Registros de Decisão de Arquitetura" section containing the **full text** of every technical ADR created during this process (and, when useful, a short pointer that product ADRs ADR-001… live in the PRD). Use headings `### ADR-NNN: Título` with Status/Data/Contexto/Decisão/Alternativas/Consequências — **never** bare links to `adrs/adr-NNN.md` (those 404 in the shared UI). Even simple features require at least one ADR documenting the primary technical approach chosen and alternatives rejected. If no ADRs were created in step 3, go back and create at least one before generating the document.
    - Apply YAGNI ruthlessly: remove any component, interface, or abstraction that is not strictly necessary. Do NOT propose new packages or directories when the feature can be implemented by adding a single file to an existing package.
    - Every PRD goal and user story should map to a technical component.
    - Reference PRD sections by name but do not duplicate business context.
@@ -115,14 +115,14 @@ You MUST create a task for each phase and complete them in order:
 digraph create_techspec {
     "Gather context (workspace + PRD via MCP + codebase)" [shape=box];
     "Ask technical questions (one at a time)" [shape=box];
-    "Create ADRs (local) for key decisions" [shape=box];
+    "Create ADRs (in-memory, embed in TechSpec)" [shape=box];
     "Draft TechSpec (canonical template)" [shape=box];
     "User approves draft?" [shape=diamond];
     "write_spec_document (techspec) via MCP" [shape=doublecircle];
 
     "Gather context (workspace + PRD via MCP + codebase)" -> "Ask technical questions (one at a time)";
-    "Ask technical questions (one at a time)" -> "Create ADRs (local) for key decisions";
-    "Create ADRs (local) for key decisions" -> "Draft TechSpec (canonical template)";
+    "Ask technical questions (one at a time)" -> "Create ADRs (in-memory, embed in TechSpec)";
+    "Create ADRs (in-memory, embed in TechSpec)" -> "Draft TechSpec (canonical template)";
     "Draft TechSpec (canonical template)" -> "User approves draft?";
     "User approves draft?" -> "Draft TechSpec (canonical template)" [label="no, revise"];
     "User approves draft?" -> "write_spec_document (techspec) via MCP" [label="approved"];
@@ -159,7 +159,7 @@ digraph create_techspec {
 |----------|---------|
 | PRD (entrada) | Mem0 Shared via `read_spec_document` (document_type="prd") |
 | TechSpec | Mem0 Shared via `write_spec_document` (document_type="techspec") |
-| ADRs | `adrs/adr-NNN.md` (local — fora do escopo remoto no MVP) |
+| ADRs técnicos | Embutidos na seção "Registros de Decisão de Arquitetura" do TechSpec (texto completo) |
 
 Regras:
 - Perguntas técnicas ao usuário, rascunhos e prompts de revisão em PT-BR

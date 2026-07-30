@@ -24,7 +24,7 @@ Decompose requirements into detailed, actionable task files with codebase-inform
    - Derive the slug from the feature name; determine the `project_id` (project/repo name, "default" if none).
    - Resolve the workspace: `list_spec_workspaces(project_id=<project>)`; if absent, `create_spec_workspace(project_id, slug, name)`. Keep the `workspace_id`.
    - Read the PRD via `read_spec_document(workspace_id, document_type="prd")` and the TechSpec via `read_spec_document(workspace_id, document_type="techspec")`.
-   - Read existing ADRs from `.docs/tasks/<name>/adrs/` (ADRs remain local in this MVP) to understand the decision context.
+   - Read existing ADRs from the "Registros de Decisão de Arquitetura" sections of the PRD and TechSpec (full text is embedded there). Do **NOT** rely on `.docs/tasks/<name>/adrs/*.md` — those local files are legacy and invisible in the shared UI.
    - If any MCP tool errors (service unavailable), STOP and report clearly — do NOT read/write local `_prd.md`/`_techspec.md`/task files as a fallback (ADR-002/ADR-007).
    - If the TechSpec is missing (`found=false`):
      - Warn the user that tasks will be higher-level without TechSpec implementation guidance.
@@ -88,7 +88,7 @@ Decompose requirements into detailed, actionable task files with codebase-inform
      - `## Detalhes de Implementação`: caminhos de arquivos, pontos de integração. Referenciar TechSpec.
      - `### Arquivos Relevantes`: caminhos descobertos com motivos breves.
      - `### Arquivos Dependentes`: arquivos afetados com motivos breves.
-     - `### ADRs Relacionados`: links para ADRs relevantes, ou omitir se não houver.
+     - `### ADRs Relacionados`: referências textuais (`ADR-NNN: Título` ou `#adr-NNN`) aos ADRs embutidos no PRD/TechSpec — nunca links `../adrs/*.md`. Omitir se não houver.
      - `## Entregáveis`: saídas concretas com testes obrigatórios e meta >= 80% de cobertura.
      - `## Testes`: casos de teste específicos em checklist (unitários e integração).
      - `## Critérios de Sucesso`: resultados mensuráveis incluindo "Todos os testes passando" e "Cobertura >= 80%".
