@@ -1,8 +1,10 @@
 "use client";
 
-import ReactMarkdown from "react-markdown";
+import React from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
+import { adrHeadingId, adrHrefToAnchor } from "@/lib/markdownAdrLinks";
 
 interface MarkdownViewerProps {
   content: string;
@@ -10,8 +12,81 @@ interface MarkdownViewerProps {
   emptyLabel?: string;
 }
 
+function childrenToPlainText(children: React.ReactNode): string {
+  return React.Children.toArray(children)
+    .map((child) => {
+      if (typeof child === "string" || typeof child === "number") {
+        return String(child);
+      }
+      if (React.isValidElement<{ children?: React.ReactNode }>(child)) {
+        return childrenToPlainText(child.props.children);
+      }
+      return "";
+    })
+    .join("");
+}
+
+const markdownComponents: Components = {
+  a({ href, children, ...rest }) {
+    const anchor = adrHrefToAnchor(href);
+    if (anchor) {
+      return (
+        <a
+          {...rest}
+          href={anchor}
+          title="ADR embutido neste documento (âncora local)"
+          onClick={(e) => {
+            // Stay on the Spec modal/page; never navigate to /docs/.../adrs/*.md
+            const el = typeof document !== "undefined"
+              ? document.getElementById(anchor.slice(1))
+              : null;
+            if (el) {
+              e.preventDefault();
+              el.scrollIntoView({ behavior: "smooth", block: "start" });
+            } else {
+              e.preventDefault();
+            }
+          }}
+        >
+          {children}
+        </a>
+      );
+    }
+    return (
+      <a href={href} {...rest}>
+        {children}
+      </a>
+    );
+  },
+  h2({ children, ...rest }) {
+    const id = adrHeadingId(childrenToPlainText(children));
+    return (
+      <h2 {...rest} id={id}>
+        {children}
+      </h2>
+    );
+  },
+  h3({ children, ...rest }) {
+    const id = adrHeadingId(childrenToPlainText(children));
+    return (
+      <h3 {...rest} id={id}>
+        {children}
+      </h3>
+    );
+  },
+  h4({ children, ...rest }) {
+    const id = adrHeadingId(childrenToPlainText(children));
+    return (
+      <h4 {...rest} id={id}>
+        {children}
+      </h4>
+    );
+  },
+};
+
 /**
  * Visualizador de Markdown (GFM) para specs/PRD/tasks — tema escuro do admin.
+ * Links legados `adrs/adr-NNN.md` viram âncoras `#adr-NNN` (não rotas Next 404).
  */
 export function MarkdownViewer({
   content,
@@ -49,7 +124,9 @@ export function MarkdownViewer({
         className,
       )}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+        {text}
+      </ReactMarkdown>
     </div>
   );
 }

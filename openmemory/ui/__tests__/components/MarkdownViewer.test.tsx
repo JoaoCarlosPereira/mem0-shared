@@ -1,6 +1,23 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import { MarkdownViewer } from "@/components/shared/MarkdownViewer";
+import { adrHeadingId, adrHrefToAnchor } from "@/lib/markdownAdrLinks";
+
+describe("markdownAdrLinks", () => {
+  it("converte hrefs legados adrs/*.md em âncora #adr-NNN", () => {
+    expect(adrHrefToAnchor("adrs/adr-007.md")).toBe("#adr-007");
+    expect(adrHrefToAnchor("../adrs/adr-013.md")).toBe("#adr-013");
+    expect(adrHrefToAnchor("./adrs/adr-001.md#sec")).toBe("#adr-001");
+    expect(adrHrefToAnchor("https://example.com/x")).toBeNull();
+    expect(adrHrefToAnchor("/docs/foo")).toBeNull();
+  });
+
+  it("extrai id estável de headings ADR", () => {
+    expect(adrHeadingId("ADR-007: Repositório")).toBe("adr-007");
+    expect(adrHeadingId("ADR-013: Testes")).toBe("adr-013");
+    expect(adrHeadingId("Outro título")).toBeUndefined();
+  });
+});
 
 describe("MarkdownViewer", () => {
   it("renderiza headings e listas formatados", () => {
@@ -27,5 +44,20 @@ describe("MarkdownViewer", () => {
     );
     expect(screen.getByText("Col A")).toBeInTheDocument();
     expect(screen.getByText("1")).toBeInTheDocument();
+  });
+
+  it("não deixa links adrs/*.md como href relativo navegável", () => {
+    render(
+      <MarkdownViewer
+        content={`- [ADR-007: Título](adrs/adr-007.md) — resumo\n\n### ADR-007: Título\n\n**Decisão**\nfazer X`}
+      />,
+    );
+    const link = screen.getByRole("link", { name: /ADR-007/i });
+    expect(link).toHaveAttribute("href", "#adr-007");
+    expect(link.getAttribute("href")).not.toMatch(/adrs\/adr-007\.md/);
+    expect(screen.getByRole("heading", { level: 3, name: /ADR-007/ })).toHaveAttribute(
+      "id",
+      "adr-007",
+    );
   });
 });
