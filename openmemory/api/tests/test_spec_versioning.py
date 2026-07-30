@@ -226,8 +226,9 @@ class TestUpdateTaskStatus:
         ws = _mk_workspace(db_session)
         task = _mk_task(db_session, ws, status=TaskCardStatus.em_andamento, version=3)
 
+        # Transição adjacente válida (sem pular pipeline); versão esperada errada → conflito.
         res = update_task_status(
-            db_session, task.id, TaskCardStatus.concluido, 1, "DESKTOP-01"
+            db_session, task.id, TaskCardStatus.revisao_codigo, 1, "DESKTOP-01"
         )
         assert res.updated is False and res.conflict is True
         assert res.version == 3

@@ -17,7 +17,8 @@ from app.routers import governance as governance_router
 
 
 @pytest.fixture
-def client(tmp_path):
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -44,8 +45,15 @@ def client(tmp_path):
     db.close()
 
 
+ADMIN_HEADERS = {"x-admin-token": "test-admin-token"}
+
+
 def test_put_invalid_policy_returns_400(client):
-    resp = client.put("/admin/governance/policies", json={"policy": {"similarity_threshold": 9}})
+    resp = client.put(
+        "/admin/governance/policies",
+        json={"policy": {"similarity_threshold": 9}},
+        headers=ADMIN_HEADERS,
+    )
     assert resp.status_code == 400
 
 
@@ -55,7 +63,11 @@ def test_enqueue_job_returns_202(client, monkeypatch):
             return "00000000-0000-0000-0000-000000000001"
 
     monkeypatch.setattr("app.routers.governance.governance_queue", FakeQueue())
-    resp = client.post("/admin/governance/jobs/dedup", json={"project": "proj-a"})
+    resp = client.post(
+        "/admin/governance/jobs/dedup",
+        json={"project": "proj-a"},
+        headers=ADMIN_HEADERS,
+    )
     assert resp.status_code == 202
     assert "job_id" in resp.json()
 
@@ -68,7 +80,10 @@ def test_revert_non_quarantined_returns_409(client, monkeypatch):
             return False
 
     monkeypatch.setattr(gov_mod, "QuarantineEngine", lambda: FakeEngine())
-    resp = client.post("/admin/governance/revert/00000000-0000-0000-0000-000000000099")
+    resp = client.post(
+        "/admin/governance/revert/00000000-0000-0000-0000-000000000099",
+        headers=ADMIN_HEADERS,
+    )
     assert resp.status_code == 409
 
 

@@ -2,7 +2,7 @@
  * Tela de login via Google OAuth redirect (ADR-002).
  */
 import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const mockSignIn = jest.fn().mockResolvedValue(undefined);
 jest.mock("next-auth/react", () => ({
@@ -23,30 +23,38 @@ describe("LoginPage", () => {
   beforeEach(() => {
     mockSignIn.mockClear();
     mockErrorParam = null;
+    (globalThis.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      json: async () => ({ google: { id: "google", name: "Google" } }),
+    });
   });
 
-  it("exibe apenas o botão de login com Google", () => {
+  it("exibe apenas o botão de login com Google", async () => {
     render(<LoginPage />);
-    const buttons = screen.getAllByRole("button");
-    expect(buttons).toHaveLength(1);
-    expect(buttons[0].textContent).toMatch(/^entrar com google$/i);
+    const button = await screen.findByRole("button", {
+      name: /^entrar com google$/i,
+    });
+    expect(button).toBeInTheDocument();
+    expect(screen.getAllByRole("button")).toHaveLength(1);
   });
 
-  it("botão principal dispara o signIn com redirect", () => {
+  it("botão principal dispara o signIn com redirect", async () => {
     render(<LoginPage />);
-    fireEvent.click(screen.getByRole("button", { name: /^entrar com google$/i }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^entrar com google$/i }),
+    );
     expect(mockSignIn).toHaveBeenCalledWith("google", { redirectTo: "/" });
   });
 
-  it("erro AccessDenied do redirect mostra mensagem de domínio", () => {
+  it("erro AccessDenied do redirect mostra mensagem de domínio", async () => {
     mockErrorParam = "AccessDenied";
     render(<LoginPage />);
-    expect(screen.getByRole("alert").textContent).toMatch(/domínio da empresa/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/domínio da empresa/i);
   });
 
-  it("erro Configuration mostra mensagem de indisponibilidade", () => {
+  it("erro Configuration mostra mensagem de indisponibilidade", async () => {
     mockErrorParam = "Configuration";
     render(<LoginPage />);
-    expect(screen.getByRole("alert").textContent).toMatch(/indisponível/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/indisponível/i);
   });
 });

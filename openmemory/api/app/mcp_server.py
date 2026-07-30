@@ -852,14 +852,14 @@ async def update_spec_workspace_status(workspace_id: str, status: str) -> str:
         return f"Error: {e}"
 
 
-@mcp.tool(description="Write a new version of a spec document (document_type = prd/techspec/tasks) in a workspace, using optimistic concurrency. Pass expected_version = the version you last read (omit/null only for the very first write). On a version conflict this returns JSON {conflict: true, expected_version, current_version, current_content} so you can re-read and retry — it NEVER overwrites silently.")
+@mcp.tool(description="Write a new version of a spec document (document_type = prd/techspec/tasks/adrs; alias adr→adrs) in a workspace, using optimistic concurrency. ADRs are NOT Kanban cards — store the full ADR bodies in document_type=adrs and link them from PRD/TechSpec. Pass expected_version = the version you last read (omit/null only for the very first write). On a version conflict this returns JSON {conflict: true, expected_version, current_version, current_content} so you can re-read and retry — it NEVER overwrites silently.")
 async def write_spec_document(
     workspace_id: str, document_type: str, content: str, expected_version: int | None = None
 ) -> str:
     try:
         from fastapi import HTTPException
 
-        from app.models import DocumentOrigin, DocumentType, SpecWorkspace
+        from app.models import DocumentOrigin, SpecWorkspace, parse_document_type
         from app.routers.specs import _assert_access, get_or_create_document
         from app.utils.spec_versioning import write_document_version
 
@@ -867,7 +867,7 @@ async def write_spec_document(
         db = SessionLocal()
         try:
             ws_uuid = uuid.UUID(workspace_id)
-            dtype = DocumentType(document_type)
+            dtype = parse_document_type(document_type)
             if db.query(SpecWorkspace).filter(SpecWorkspace.id == ws_uuid).first() is None:
                 return f"Error: workspace {workspace_id} não encontrado"
             try:
@@ -903,12 +903,12 @@ async def write_spec_document(
         return f"Error: {e}"
 
 
-@mcp.tool(description="Read the current version and content of a spec document (document_type = prd/techspec/tasks) in a workspace. Call this to load the latest content and version BEFORE writing an update (pass that version as write_spec_document's expected_version).")
+@mcp.tool(description="Read the current version and content of a spec document (document_type = prd/techspec/tasks/adrs; alias adr→adrs) in a workspace. Call this to load the latest content and version BEFORE writing an update (pass that version as write_spec_document's expected_version). For Architecture Decision Records, use document_type=adrs.")
 async def read_spec_document(workspace_id: str, document_type: str) -> str:
     try:
         from fastapi import HTTPException
 
-        from app.models import DocumentType, SpecDocument
+        from app.models import SpecDocument, parse_document_type
         from app.routers.specs import _assert_access
 
         db = SessionLocal()
@@ -918,7 +918,7 @@ async def read_spec_document(workspace_id: str, document_type: str) -> str:
                 _assert_access(db, ws_uuid)
             except HTTPException as he:
                 return f"Error: {he.detail}"
-            dtype = DocumentType(document_type)
+            dtype = parse_document_type(document_type)
             doc = (
                 db.query(SpecDocument)
                 .filter(
@@ -979,13 +979,14 @@ async def search_specs(query: str, project: str | None = None) -> str:
 # Kanban. Mesmo molde da Tarefa 7; delegam a task_lock (Tarefa 2) e ao router
 # (Tarefa 4), sem duplicar lógica de negócio.
 # --------------------------------------------------------------------------- #
-@mcp.tool(description="Create a task card in a spec workspace. The card starts in the 'tasks' (backlog) column. Returns JSON with the task id, status and version.")
+@mcp.tool(description="Create a task card in a spec workspace. The card starts in the 'tasks' (backlog) column. Returns JSON with the task id, status, version and kanban guidance (do_now = claim_task before coding).")
 async def create_task(
     workspace_id: str, title: str, description: str | None = None, branch_ref: str | None = None
 ) -> str:
     try:
         from app.routers.specs import TaskCreate, TaskResponse
         from app.routers.specs import create_task as _create_task_endpoint
+        from app.utils.kanban_pipeline import enrich_status_payload
 
         db = SessionLocal()
         try:
@@ -996,8 +997,10 @@ async def create_task(
                 branch_ref=branch_ref,
             )
             task = _create_task_endpoint(payload, db=db)
+            data = TaskResponse.model_validate(task).model_dump(mode="json")
             return json.dumps(
-                TaskResponse.model_validate(task).model_dump(mode="json"), default=str
+                enrich_status_payload(data, data.get("status") or "tasks"),
+                default=str,
             )
         finally:
             db.close()
@@ -1006,13 +1009,14 @@ async def create_task(
         return f"Error: {e}"
 
 
-@mcp.tool(description="Claim a task so you become its assignee and it moves to 'em_andamento'. This CAN FAIL by exclusivity: if the task is already active with another assignee, the returned JSON has claimed=false and current_assignee set — do NOT retry blindly; treat that task as taken and pick another (use list_spec_workspaces / read the board to see current state). On success claimed=true with the new version.")
+@mcp.tool(description="Claim a task so you become its assignee and it moves to 'em_andamento'. On success the JSON includes kanban={column,label,means,do_now,next_column,next_action,pipeline,pipeline_rule} — you MUST follow do_now before advancing. This CAN FAIL by exclusivity: if the task is already active with another assignee, claimed=false — do NOT retry blindly. Pipeline: em_andamento → revisao_codigo → fase_teste → concluido (never skip).")
 async def claim_task(task_id: str) -> str:
     try:
         from fastapi import HTTPException
 
         from app.models import TaskCard
         from app.routers.specs import _assert_access
+        from app.utils.kanban_pipeline import enrich_status_payload
         from app.utils.task_lock import claim_task as _claim_task
 
         claimant = resolve_hostname(user_id_var.get(None))
@@ -1029,7 +1033,15 @@ async def claim_task(task_id: str) -> str:
             result = _claim_task(db, tid, claimant)
             if result.claimed:
                 return json.dumps(
-                    {"claimed": True, "assignee": claimant, "version": result.version}
+                    enrich_status_payload(
+                        {
+                            "claimed": True,
+                            "assignee": claimant,
+                            "version": result.version,
+                            "status": "em_andamento",
+                        },
+                        "em_andamento",
+                    )
                 )
             return json.dumps(
                 {
@@ -1049,13 +1061,14 @@ async def claim_task(task_id: str) -> str:
         return f"Error: {e}"
 
 
-@mcp.tool(description="Release a task you no longer work on: it returns to the 'tasks' column, unassigned, and its block marker is cleared. Returns JSON with the new version.")
+@mcp.tool(description="Release a task you no longer work on: it returns to the 'tasks' column, unassigned, and its block marker is cleared. JSON includes kanban guidance for the backlog column. Returns JSON with the new version.")
 async def release_task(task_id: str) -> str:
     try:
         from fastapi import HTTPException
 
         from app.models import TaskCard
         from app.routers.specs import _assert_access
+        from app.utils.kanban_pipeline import enrich_status_payload
         from app.utils.task_lock import release_task as _release_task
 
         actor = resolve_hostname(user_id_var.get(None))
@@ -1070,7 +1083,12 @@ async def release_task(task_id: str) -> str:
             except HTTPException as he:
                 return f"Error: {he.detail}"
             result = _release_task(db, tid, actor, reason="release via MCP")
-            return json.dumps({"released": True, "version": result.version})
+            return json.dumps(
+                enrich_status_payload(
+                    {"released": True, "version": result.version, "status": "tasks"},
+                    "tasks",
+                )
+            )
         finally:
             db.close()
     except Exception as e:  # noqa: BLE001
@@ -1078,7 +1096,7 @@ async def release_task(task_id: str) -> str:
         return f"Error: {e}"
 
 
-@mcp.tool(description="Move a task to a new Kanban column and/or set its block marker, using optimistic concurrency. new_status must be one of: tasks, em_andamento, revisao_codigo, fase_teste, concluido. Entering em_andamento MUST use claim_task; returning to tasks MUST use release_task. Pass expected_version (the version you last read). To report a blocker without changing column, pass new_status equal to the current status and is_blocked=true (+ block_reason). Returns JSON {updated:true,...}; on a version conflict returns {conflict:true, current_version, current_status}; on an invalid status returns {error:..., valid:[...]}.")
+@mcp.tool(description="Move a task to a new Kanban column and/or set its block marker, using optimistic concurrency. new_status: tasks|em_andamento|revisao_codigo|fase_teste|concluido. MANDATORY: advance ONE column at a time (em_andamento→revisao_codigo→fase_teste→concluido); skipping is rejected with policy skip_pipeline. On success JSON includes kanban={means,do_now,next_column,...} — ALWAYS execute do_now before the next move. Entering em_andamento MUST use claim_task; returning to tasks MUST use release_task. Pass expected_version. Blocker: same status + is_blocked=true + block_reason.")
 async def update_task_status(
     task_id: str,
     new_status: str,
@@ -1091,6 +1109,7 @@ async def update_task_status(
 
         from app.models import TaskCard, TaskCardStatus
         from app.routers.specs import _assert_access
+        from app.utils.kanban_pipeline import enrich_status_payload
         from app.utils.task_lock import TaskStatusPolicyError
         from app.utils.task_lock import update_task_status as _update_task_status
 
@@ -1137,7 +1156,14 @@ async def update_task_status(
                     }
                 )
             return json.dumps(
-                {"updated": True, "status": result.status, "version": result.version}
+                enrich_status_payload(
+                    {
+                        "updated": True,
+                        "status": result.status,
+                        "version": result.version,
+                    },
+                    result.status,
+                )
             )
         finally:
             db.close()

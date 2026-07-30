@@ -109,6 +109,20 @@ class TestWriteAndRead:
         assert out.startswith("Error:")
 
 
+class TestAdrsDocumentType:
+    @pytest.mark.asyncio
+    async def test_write_read_adrs_e_alias_adr(self):
+        ws = json.loads(await create_spec_workspace("mem0-shared", "ws-adrs", "WS ADRs"))
+        body = "# ADRs\n\n### ADR-001: Teste\n\n**Decisão**\nusar adrs"
+        w = json.loads(await write_spec_document(ws["id"], "adrs", body, None))
+        assert w["conflict"] is False
+        assert w["version"] == 1
+        r = json.loads(await read_spec_document(ws["id"], "adr"))
+        assert r["found"] is True
+        assert r["document_type"] == "adrs"
+        assert "ADR-001" in r["current_content"]
+
+
 class TestNeverRaise:
     @pytest.mark.asyncio
     async def test_document_type_invalido_vira_string_error(self):

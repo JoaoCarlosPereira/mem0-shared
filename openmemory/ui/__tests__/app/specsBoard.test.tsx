@@ -75,7 +75,14 @@ const board: WorkspaceBoard = {
       workspace_id: "ws-1",
       document_type: "prd",
       current_version: 2,
-      current_content: "# Hello PRD",
+      current_content: "# Hello PRD\n\nVer [ADR-001: Teste](adrs/adr-001.md).",
+    },
+    {
+      id: "d-adrs",
+      workspace_id: "ws-1",
+      document_type: "adrs",
+      current_version: 1,
+      current_content: "# ADRs\n\n### ADR-001: Teste\n\n**Decisão**\nok",
     },
   ],
   tasks: [
@@ -146,6 +153,19 @@ describe("SpecsBoardPage", () => {
     const sdd = screen.getByTestId("column-SDD");
     expect(within(sdd).getByText("prd")).toBeInTheDocument();
     expect(within(sdd).getByText("versão v2")).toBeInTheDocument();
+    expect(within(sdd).getByText("adrs")).toBeInTheDocument();
+    expect(within(sdd).getByTestId("doc-card-adrs")).toBeInTheDocument();
+  });
+
+  it("link adrs/*.md no PRD abre o documento adrs", async () => {
+    const store = makeStore();
+    store.dispatch(setCurrentBoard(board));
+    renderWith(store);
+    await userEvent.click(screen.getByTestId("doc-card-prd"));
+    const link = await screen.findByRole("link", { name: /ADR-001/i });
+    await userEvent.click(link);
+    expect(await screen.findByText(/ADRs do workspace/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 3, name: /ADR-001/ })).toBeInTheDocument();
   });
 
   it("card de task exibe o responsável quando presente", () => {

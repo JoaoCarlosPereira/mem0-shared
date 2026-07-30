@@ -30,6 +30,7 @@ from app.models import (
     TaskCard,
     TaskCardStatus,
     TaskStatusHistory,
+    parse_document_type,
 )
 
 _SPEC_TABLES = {
@@ -41,6 +42,24 @@ _SPEC_TABLES = {
     "spec_audit_logs",
     "spec_comments",
 }
+
+
+class TestParseDocumentType:
+    def test_aceita_tipos_canonicos(self):
+        assert parse_document_type("prd") is DocumentType.prd
+        assert parse_document_type("techspec") is DocumentType.techspec
+        assert parse_document_type("tasks") is DocumentType.tasks
+        assert parse_document_type("adrs") is DocumentType.adrs
+
+    def test_alias_adr_vira_adrs(self):
+        assert parse_document_type("adr") is DocumentType.adrs
+        assert parse_document_type("ADR") is DocumentType.adrs
+        assert parse_document_type(" Adrs ") is DocumentType.adrs
+
+    def test_tipo_invalido_levanta(self):
+        with pytest.raises(ValueError):
+            parse_document_type("tipo_invalido")
+
 
 
 @pytest.fixture
@@ -293,14 +312,14 @@ class TestSpecMigrationSqlite:
         task_indexes = {idx["name"] for idx in sa.inspect(eng).get_indexes("task_cards")}
         assert "idx_task_card_workspace_status" in task_indexes
 
-        # Idempotência: downgrade + upgrade novamente não quebra.
-        command.downgrade(cfg, "-1")
+        # Idempotência: desfaz só a revisão de enum adrs e sobe de novo.
+        command.downgrade(cfg, "i4d5e6f7a8b9")
         command.upgrade(cfg, "head")
         tables = set(sa.inspect(eng).get_table_names())
         assert _SPEC_TABLES <= tables
 
-        # downgrade -1 remove exatamente as 7 tabelas de specs.
-        command.downgrade(cfg, "-1")
+        # Volta para antes das specs: remove exatamente as 7 tabelas.
+        command.downgrade(cfg, "h3c4d5e6f7a8")
         tables = set(sa.inspect(eng).get_table_names())
         assert not (_SPEC_TABLES & tables)
         # Tabelas pré-existentes permanecem (mudança aditiva).

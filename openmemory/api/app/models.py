@@ -629,10 +629,23 @@ class TaskCardStatus(enum.Enum):
 
 
 class DocumentType(enum.Enum):
-    """Tipo de documento de spec dentro de um workspace."""
+    """Tipo de documento de spec dentro de um workspace.
+
+    ``adrs`` = documento versionado com o texto completo dos ADRs do workspace
+    (não é TaskCard/Kanban). Alias MCP ``adr`` → ``adrs``.
+    """
     prd = "prd"
     techspec = "techspec"
     tasks = "tasks"
+    adrs = "adrs"
+
+
+def parse_document_type(raw: str) -> DocumentType:
+    """Resolve string MCP/API para ``DocumentType`` (aceita alias ``adr``)."""
+    key = (raw or "").strip().lower()
+    if key in ("adr", "adrs"):
+        return DocumentType.adrs
+    return DocumentType(key)
 
 
 class DocumentOrigin(enum.Enum):

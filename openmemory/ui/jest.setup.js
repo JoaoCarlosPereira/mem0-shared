@@ -3,6 +3,15 @@ process.env.TZ = "UTC";
 
 import "@testing-library/jest-dom";
 
+// Polyfill fetch (jsdom) — LoginPage e outras telas chamam fetch no mount.
+globalThis.fetch = jest.fn(() =>
+  Promise.resolve({
+    ok: true,
+    json: async () => ({ google: { id: "google", name: "Google" } }),
+    text: async () => "",
+  }),
+);
+
 // Polyfills para componentes Radix (Select, Dialog) em jsdom, que não
 // implementa Pointer Capture nem scrollIntoView nem matchMedia/ResizeObserver.
 if (typeof window !== "undefined") {

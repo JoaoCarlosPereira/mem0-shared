@@ -1,157 +1,171 @@
 ---
 name: cy-create-techspec
-description: Cria Especificação Técnica (TechSpec) em PT-BR a partir do PRD, com esclarecimentos técnicos interativos. Lê o PRD e grava a TechSpec (com ADRs embutidos) no Mem0 Shared via MCP (read/write_spec_document). Use quando existir PRD e precisar de plano técnico. Não use para PRD, tarefas ou implementação direta.
+description: Cria Especificação Técnica (TechSpec) em PT-BR a partir do PRD, com esclarecimentos técnicos interativos. Lê o PRD e grava a TechSpec e o documento de ADRs (document_type=adrs) no Mem0 Shared via MCP. Sempre atualiza o quadro/workspace Shared a cada etapa. Use quando existir PRD e precisar de plano técnico. Não use para PRD, tarefas ou implementação direta.
 argument-hint: "[feature-name] [prd-file]"
 ---
 
-# Create TechSpec
+# Criar TechSpec
 
-Translate business requirements into a detailed technical specification.
+Traduza requisitos de negócio em uma especificação técnica detalhada.
 
 <HARD-GATE>
-Do NOT write the TechSpec file until ALL phases are complete and the user has approved the final draft.
-Do NOT skip the codebase exploration — every TechSpec MUST be informed by existing architecture.
-Do NOT skip user interactions — the user MUST participate in shaping the TechSpec at every decision point.
-Do NOT require section-by-section approval — generate the complete draft, then let the user review it.
-This applies to EVERY TechSpec regardless of perceived simplicity.
+NÃO escreva o arquivo da TechSpec até que TODAS as fases estejam concluídas e o usuário tenha aprovado o rascunho final.
+NÃO pule a exploração da codebase — toda TechSpec DEVE ser informada pela arquitetura existente.
+NÃO pule as interações com o usuário — o usuário DEVE participar da construção da TechSpec em cada ponto de decisão.
+NÃO exija aprovação seção por seção — gere o rascunho completo e deixe o usuário revisá-lo.
+Isso se aplica a TODA TechSpec, independentemente da simplicidade percebida.
+**KANBAN:** Após cada etapa significativa (resolução do workspace, salvamento da TechSpec, status do workspace), atualize o quadro Mem0 Shared via MCP na MESMA interação. Nunca deixe o progresso apenas no chat. Consulte `../cy-create-prd/references/kanban-shared-obrigatorio.md`.
 </HARD-GATE>
 
-## Asking Questions
+## Quadro Kanban Shared (obrigatório)
 
-When this skill instructs you to ask the user a question, you MUST use your runtime's dedicated interactive question tool — the tool or function that presents a question to the user and **pauses execution until the user responds**. Do not output questions as plain assistant text and continue generating; always use the mechanism that blocks until the user has answered.
+O SpecWorkspace no Mem0 Shared é a fonte de verdade. Em **cada** atividade desta skill:
 
-If your runtime does not provide such a tool, present the question as your complete message and stop generating. Do not answer your own question or proceed without user input.
+1. Resolver o workspace via MCP antes de redigir.
+2. Ao gravar a TechSpec aprovada (`write_spec_document` techspec **e** `write_spec_document` adrs), atualizar o lifecycle: `update_spec_workspace_status(workspace_id, "ativo")` quando o design técnico estiver aprovado e o trabalho seguir (ou confirmar se já estiver `ativo`).
+3. Se já existirem `TaskCard`s e esta sessão os afetar, usar `claim_task` / `update_task_status` / `add_spec_comment` — não narrar progresso só no chat. Respeitar o pipeline `em_andamento` → `revisao_codigo` → `fase_teste` → `concluido` (nunca pular review ou testes).
+4. Seguir `../cy-create-prd/references/kanban-shared-obrigatorio.md` antes de encerrar qualquer fase.
 
-## Anti-Pattern: "This Is Too Simple To Need Technical Design Review"
 
-Every TechSpec goes through the full design review process. A single endpoint, a minor refactor, a configuration change — all of them. "Simple" technical changes are where unexamined assumptions about existing architecture cause the most integration failures. The design review can be brief for genuinely simple changes, but you MUST ask technical clarification questions and get approval on the technical approach before writing the artifact.
+## Fazer Perguntas
 
-## Anti-Pattern: End-Of-Flow Bureaucracy
+Quando esta skill instruir você a fazer uma pergunta ao usuário, você DEVE usar a ferramenta dedicada de pergunta interativa do seu runtime — a ferramenta ou função que apresenta uma pergunta ao usuário e **pausa a execução até que o usuário responda**. Não emita perguntas como texto simples do assistente e continue gerando; sempre use o mecanismo que bloqueia até o usuário ter respondido.
 
-Once the user has answered the technical clarification questions and approved an approach, do not force them through a second approval loop for System Architecture, Data Models, API Design, or other final document sections. Synthesize the approved direction into the TechSpec directly. The user can review and request edits in the generated file afterward.
+Se o seu runtime não fornecer tal ferramenta, apresente a pergunta como sua mensagem completa e pare de gerar. Não responda sua própria pergunta nem prossiga sem entrada do usuário.
 
-## Required Inputs
+## Anti-Padrão: "Isso É Simples Demais Para Revisão de Design Técnico"
 
-- Feature name identifying the `.docs/tasks/<name>/` directory.
-- Optional: existing `_prd.md` as primary input.
-- Optional: existing `_techspec.md` for update mode.
+Toda TechSpec passa pelo processo completo de revisão de design. Um único endpoint, um pequeno refactor, uma mudança de configuração — todos eles. Mudanças técnicas "simples" são onde premissas não examinadas sobre a arquitetura existente causam mais falhas de integração. A revisão de design pode ser breve para mudanças genuinamente simples, mas você DEVE fazer perguntas de esclarecimento técnico e obter aprovação na abordagem técnica antes de escrever o artefato.
+
+## Anti-Padrão: Burocracia no Final do Fluxo
+
+Depois que o usuário tiver respondido às perguntas de esclarecimento técnico e aprovado uma abordagem, não o force a passar por um segundo ciclo de aprovação para Arquitetura do Sistema, Modelos de Dados, Design de API ou outras seções finais do documento. Sintetize a direção aprovada diretamente na TechSpec. O usuário pode revisar e solicitar edições no arquivo gerado depois.
+
+## Entradas Obrigatórias
+
+- Nome da feature identificando o diretório `.docs/tasks/<name>/`.
+- Opcional: `_prd.md` existente como entrada principal.
+- Opcional: `_techspec.md` existente para modo de atualização.
 
 ## Checklist
 
-You MUST create a task for each phase and complete them in order:
+Você DEVE criar uma tarefa para cada fase e completá-las em ordem:
 
-1. **Gather context** — resolve the shared workspace, read the PRD/TechSpec via MCP (`read_spec_document`), extract any existing ADRs from those documents, and explore codebase architecture
-2. **Ask technical questions** — 3-6 targeted questions on architecture, data models, APIs, testing
-3. **Create ADRs** — record significant technical decisions **in memory** (full text will be embedded in the TechSpec — never write `adrs/*.md` local files)
-4. **Draft the TechSpec** — write using the canonical template from `references/techspec-template.md`
-5. **Review with user** — present the draft, iterate until approved
-6. **Save via MCP** — persist the TechSpec with `write_spec_document` (document_type="techspec") — never a local `_techspec.md`
+1. **Coletar contexto** — resolver o workspace shared, ler PRD/TechSpec/`adrs` via MCP (`read_spec_document`), extrair ADRs existentes e explorar a arquitetura da codebase
+2. **Fazer perguntas técnicas** — 3-6 perguntas direcionadas sobre arquitetura, modelos de dados, APIs, testes
+3. **Criar ADRs** — registrar decisões técnicas significativas (texto completo será gravado em `document_type="adrs"` — nunca arquivos locais `adrs/*.md`)
+4. **Rascunhar a TechSpec** — escrever usando o template canônico de `references/techspec-template.md`
+5. **Revisar com o usuário** — apresentar o rascunho, iterar até aprovação
+6. **Salvar via MCP** — persistir TechSpec (`techspec`) **e** ADRs (`adrs`) — nunca um `_techspec.md` local
 
-## Workflow
+## Fluxo de Trabalho
 
-1. Gather context (PRD/TechSpec via MCP — ADR-002).
-   - Derive the slug from the feature name; determine the `project_id` (project/repo name, "default" if none).
-   - Call `list_spec_workspaces(project_id=<project>)` to resolve the workspace for this slug. If it does not exist, call `create_spec_workspace(project_id, slug, name)` and keep the `workspace_id`.
-   - Read the PRD via `read_spec_document(workspace_id, document_type="prd")`.
-     - If a PRD is found, use it as the primary input.
-     - **Standalone mode:** if no PRD is found (`found=false`), ask the user for a description of what needs technical specification — do NOT fail.
-   - Read the current TechSpec via `read_spec_document(workspace_id, document_type="techspec")`; if found, operate in **update mode** and keep its `current_version` for the write.
-   - **ADRs live in the shared documents:** extract existing product ADRs from the PRD section "Registros de Decisão de Arquitetura" and any technical ADRs already embedded in the TechSpec. Do **NOT** read or write `.docs/tasks/<name>/adrs/*.md` — those local files are legacy and invisible to the shared UI (links become 404).
-   - Spawn an Agent tool call to explore the codebase for architecture patterns, existing components, dependencies, and technology stack.
-   - If any MCP tool errors (service unavailable), STOP and report clearly — do NOT read/write local `_prd.md`/`_techspec.md` as a fallback (ADR-002/ADR-007).
+1. Coletar contexto (PRD/TechSpec via MCP — ADR-002).
+   - Derivar o slug a partir do nome da feature; determinar o `project_id` (nome do projeto/repositório, "default" se nenhum).
+   - Chamar `list_spec_workspaces(project_id=<project>)` para resolver o workspace deste slug. Se não existir, chamar `create_spec_workspace(project_id, slug, name)` e manter o `workspace_id`.
+   - Ler o PRD via `read_spec_document(workspace_id, document_type="prd")`.
+     - Se um PRD for encontrado, usá-lo como entrada principal.
+     - **Modo standalone:** se nenhum PRD for encontrado (`found=false`), perguntar ao usuário uma descrição do que precisa de especificação técnica — NÃO falhar.
+   - Ler a TechSpec atual via `read_spec_document(workspace_id, document_type="techspec")`; se encontrada, operar em **modo de atualização** e manter seu `current_version` para a gravação.
+   - Ler ADRs via `read_spec_document(workspace_id, document_type="adrs")` (alias `adr`). Fonte de verdade do texto completo dos ADRs. Também extrair qualquer ADR legado ainda embutido no PRD/TechSpec. **NÃO** ler ou escrever `.docs/tasks/<name>/adrs/*.md` — arquivos locais são legado.
+   - Disparar uma chamada Agent tool para explorar a codebase em busca de padrões de arquitetura, componentes existentes, dependências e stack tecnológica.
+   - Se qualquer ferramenta MCP falhar (serviço indisponível), PARAR e reportar claramente — NÃO ler/escrever `_prd.md`/`_techspec.md` locais como fallback (ADR-002/ADR-007).
 
-2. Ask technical clarification questions **in PT-BR**.
-   - Focus on HOW to implement, WHERE components live, and WHICH technologies to use.
-   - Cover architecture approach and component boundaries.
-   - Cover data models and storage choices.
-   - Cover API design and integration points.
-   - Cover testing strategy and performance requirements.
-   - Ask only one question per message. If a topic needs more exploration, break it into a sequence of individual questions.
-   - Prefer multiple-choice questions when the options can be predetermined.
-   - Include a fallback option (e.g., "D) Other — describe") for flexibility.
+2. Fazer perguntas de esclarecimento técnico **em PT-BR**.
+   - Focar em COMO implementar, ONDE os componentes ficam e QUAIS tecnologias usar.
+   - Cobrir abordagem de arquitetura e limites de componentes.
+   - Cobrir modelos de dados e escolhas de armazenamento.
+   - Cobrir design de API e pontos de integração.
+   - Cobrir estratégia de testes e requisitos de performance.
+   - Fazer apenas uma pergunta por mensagem. Se um tópico precisar de mais exploração, dividi-lo em uma sequência de perguntas individuais.
+   - Preferir perguntas de múltipla escolha quando as opções puderem ser predeterminadas.
+   - Incluir uma opção de fallback (ex.: "D) Outro — descreva") para flexibilidade.
 
-3. Create ADRs for significant technical decisions.
-   - **Shared-space rule:** there is no separate ADR store. Technical ADRs are drafted in memory and **embedded in full** in the TechSpec (same pattern as product ADRs in the PRD). Do **NOT** write `.docs/tasks/<name>/adrs/adr-NNN.md` or any local ADR file.
-   - For each significant decision (architecture pattern chosen, technology selected, data model approach, etc.):
-     - Read `references/adr-template.md`.
-     - Determine the next ADR number by continuing after the highest ADR already present in the PRD and/or current TechSpec (zero-padded 3-digit, e.g. if PRD ends at ADR-006, start at ADR-007).
-     - Fill the template in **PT-BR**: the chosen design as "Decisão", rejected alternatives as "Alternativas Consideradas", and trade-offs as "Consequências". Set Status to "Aceito" and Date to today.
-     - Keep the full ADR text ready to paste into the TechSpec section in step 4 — do not persist it anywhere else.
+3. Criar ADRs para decisões técnicas significativas.
+   - **Regra do espaço shared:** ADRs **não** são TaskCards. Texto completo vive no documento MCP `document_type="adrs"`. TechSpec/PRD só referenciam com links `[ADR-NNN: Título](adrs/adr-NNN.md)`. **NÃO** escrever `.docs/tasks/<name>/adrs/adr-NNN.md` nem qualquer arquivo ADR local.
+   - Para cada decisão significativa (padrão de arquitetura escolhido, tecnologia selecionada, abordagem de modelo de dados, etc.):
+     - Ler `references/adr-template.md`.
+     - Determinar o próximo número de ADR continuando após o ADR mais alto já presente no documento `adrs` e/ou PRD/TechSpec (3 dígitos com zero à esquerda, ex.: se termina em ADR-006, começar em ADR-007).
+     - Preencher o template em **PT-BR**: o design escolhido como "Decisão", alternativas rejeitadas como "Alternativas Consideradas" e trade-offs como "Consequências". Definir Status como "Aceito" e Date como hoje.
+     - Manter o texto completo do ADR pronto para mesclar no documento `adrs` no passo 6.
 
-4. Draft the TechSpec.
-   - Read `references/techspec-template.md` and fill every applicable section.
-   - **MANDATORY — Registros de Decisão de Arquitetura section:** The generated TechSpec MUST end with a "Registros de Decisão de Arquitetura" section containing the **full text** of every technical ADR created during this process (and, when useful, a short pointer that product ADRs ADR-001… live in the PRD). Use headings `### ADR-NNN: Título` with Status/Data/Contexto/Decisão/Alternativas/Consequências — **never** bare links to `adrs/adr-NNN.md` (those 404 in the shared UI). Even simple features require at least one ADR documenting the primary technical approach chosen and alternatives rejected. If no ADRs were created in step 3, go back and create at least one before generating the document.
-   - Apply YAGNI ruthlessly: remove any component, interface, or abstraction that is not strictly necessary. Do NOT propose new packages or directories when the feature can be implemented by adding a single file to an existing package.
-   - Every PRD goal and user story should map to a technical component.
-   - Reference PRD sections by name but do not duplicate business context.
-   - Include code examples only for core interfaces, limited to 20 lines each. The Core Interfaces section must contain at least one Go interface or struct definition as a code block, even for simple features — show the primary type that other components will depend on.
-   - The Development Sequencing section MUST include a numbered Build Order where every step after the first explicitly states which previous steps it depends on.
-   - Prefer active voice, omit needless words, use definite and specific language over vague generalities. Every sentence should earn its place.
-   - Language: **PT-BR** (português brasileiro). Tone: claro, técnico, consistente com os artefatos do projeto.
-   - Present the complete draft to the user for review.
+4. Rascunhar a TechSpec.
+   - Ler `references/techspec-template.md` e preencher cada seção aplicável.
+   - **OBRIGATÓRIO — seção Registros de Decisão de Arquitetura:** A TechSpec DEVE terminar com uma seção "Registros de Decisão de Arquitetura" listando links `[ADR-NNN: Título](adrs/adr-NNN.md)` para todo ADR técnico criado (e ponteiros aos ADRs de produto no doc `adrs` / PRD). O texto completo SoT é gravado em `document_type="adrs"` — **não** deixe ADRs só embutidos na TechSpec sem subir o documento `adrs`. Mesmo features simples exigem pelo menos um ADR. Se nenhum ADR foi criado no passo 3, voltar e criar pelo menos um antes de gerar o documento.
+   - Aplicar YAGNI rigorosamente: remover qualquer componente, interface ou abstração que não seja estritamente necessária. NÃO propor novos pacotes ou diretórios quando a feature puder ser implementada adicionando um único arquivo a um pacote existente.
+   - Todo objetivo e história de usuário do PRD deve mapear para um componente técnico.
+   - Referenciar seções do PRD pelo nome, mas não duplicar contexto de negócio.
+   - Incluir exemplos de código apenas para interfaces principais, limitados a 20 linhas cada. A seção Core Interfaces deve conter pelo menos uma definição de interface ou struct Go como bloco de código, mesmo para features simples — mostrar o tipo principal do qual outros componentes dependerão.
+   - A seção Development Sequencing DEVE incluir um Build Order numerado onde cada passo após o primeiro declara explicitamente de quais passos anteriores depende.
+   - Preferir voz ativa, omitir palavras desnecessárias, usar linguagem definida e específica em vez de generalidades vagas. Cada frase deve merecer seu lugar.
+   - Idioma: **PT-BR** (português brasileiro). Tom: claro, técnico, consistente com os artefatos do projeto.
+   - Apresentar o rascunho completo ao usuário para revisão.
 
-5. Review with the user.
-   - Present the draft and ask using the interactive question tool (in PT-BR):
+5. Revisar com o usuário.
+   - Apresentar o rascunho e perguntar usando a ferramenta de pergunta interativa (em PT-BR):
      - "Segue o rascunho do TechSpec. Revise e informe:"
      - A) Aprovado — salvar como está
      - B) Ajustar seções específicas (indique quais)
      - C) Reescrever a seção X (diga o que mudar)
      - D) Descartar e recomeçar
-   - If B or C: make the changes and present again.
-   - If D: go back to step 2.
+   - Se B ou C: fazer as alterações e apresentar novamente.
+   - Se D: voltar ao passo 2.
 
-6. Save the TechSpec via MCP (only after the HARD-GATE approval in step 5).
-   - Persist the approved document with `write_spec_document(workspace_id=<workspace>, document_type="techspec", content=<TechSpec>, expected_version=<version>)`.
-     - On first write, pass `expected_version=null`.
-     - In update mode, pass the `current_version` returned by `read_spec_document` in step 1.
-   - **Conflict handling:** if the tool returns `conflict=true`, do NOT overwrite. Inform the user (PT-BR), show `current_version`, re-read the current content, reconcile, and retry with the new `current_version`.
-   - **Service unavailability:** if the tool call errors (Mem0 Shared down), STOP and report clearly. Do NOT write a local `_techspec.md` fallback (ADR-002/ADR-007).
-   - On success, confirm to the user (PT-BR) the shared workspace (project + slug) and the new document version.
-   - Remind the user (in PT-BR) that the next step is to create tasks using `cy-create-tasks` from this TechSpec.
+6. Salvar a TechSpec e os ADRs via MCP (somente após a aprovação HARD-GATE no passo 5).
+   - Persistir a TechSpec com `write_spec_document(workspace_id=<workspace>, document_type="techspec", content=<TechSpec>, expected_version=<version>)`.
+     - Na primeira gravação, passar `expected_version=null`.
+     - No modo de atualização, passar o `current_version` retornado por `read_spec_document` no passo 1.
+   - **OBRIGATÓRIO — documento `adrs`:** na mesma interação, mesclar os ADRs novos/atualizados no conteúdo completo do workspace e gravar com `write_spec_document(workspace_id, document_type="adrs", content=<ADRs>, expected_version=<versão adrs|null>)`. Alias `adr` aceito. Sem isso, os links nos specs não têm destino no servidor.
+   - **Tratamento de conflito:** se a ferramenta retornar `conflict=true`, NÃO sobrescrever. Informar o usuário (PT-BR), mostrar `current_version`, reler o conteúdo atual, reconciliar e tentar novamente com o novo `current_version`.
+   - **Indisponibilidade do serviço:** se a chamada da ferramenta falhar (Mem0 Shared fora do ar), PARAR e reportar claramente. NÃO escrever um `_techspec.md` local como fallback (ADR-002/ADR-007).
+   - Em caso de sucesso, confirmar ao usuário (PT-BR) o workspace shared (project + slug) e as novas versões de `techspec` e `adrs`.
+   - Sincronizar o quadro: chamar `update_spec_workspace_status(workspace_id, "ativo")` para que a lista Kanban/workspace mostre trabalho técnico em andamento (idempotente se já estiver `ativo`).
+   - Lembrar o usuário (PT-BR) que o próximo passo é criar tarefas usando `cy-create-tasks` a partir desta TechSpec — e que **cada** atividade seguinte deve atualizar o quadro Shared.
 
-## Process Flow
+## Fluxo do Processo
 
 ```dot
 digraph create_techspec {
-    "Gather context (workspace + PRD via MCP + codebase)" [shape=box];
-    "Ask technical questions (one at a time)" [shape=box];
-    "Create ADRs (in-memory, embed in TechSpec)" [shape=box];
-    "Draft TechSpec (canonical template)" [shape=box];
-    "User approves draft?" [shape=diamond];
-    "write_spec_document (techspec) via MCP" [shape=doublecircle];
+    "Coletar contexto (workspace + PRD via MCP + codebase)" [shape=box];
+    "Fazer perguntas técnicas (uma por vez)" [shape=box];
+    "Criar ADRs (gravar em document_type=adrs)" [shape=box];
+    "Rascunhar TechSpec (template canônico)" [shape=box];
+    "Usuário aprova rascunho?" [shape=diamond];
+    "write_spec_document (techspec + adrs) via MCP" [shape=doublecircle];
 
-    "Gather context (workspace + PRD via MCP + codebase)" -> "Ask technical questions (one at a time)";
-    "Ask technical questions (one at a time)" -> "Create ADRs (in-memory, embed in TechSpec)";
-    "Create ADRs (in-memory, embed in TechSpec)" -> "Draft TechSpec (canonical template)";
-    "Draft TechSpec (canonical template)" -> "User approves draft?";
-    "User approves draft?" -> "Draft TechSpec (canonical template)" [label="no, revise"];
-    "User approves draft?" -> "write_spec_document (techspec) via MCP" [label="approved"];
+    "Coletar contexto (workspace + PRD via MCP + codebase)" -> "Fazer perguntas técnicas (uma por vez)";
+    "Fazer perguntas técnicas (uma por vez)" -> "Criar ADRs (gravar em document_type=adrs)";
+    "Criar ADRs (gravar em document_type=adrs)" -> "Rascunhar TechSpec (template canônico)";
+    "Rascunhar TechSpec (template canônico)" -> "Usuário aprova rascunho?";
+    "Usuário aprova rascunho?" -> "Rascunhar TechSpec (template canônico)" [label="não, revisar"];
+    "Usuário aprova rascunho?" -> "write_spec_document (techspec + adrs) via MCP" [label="aprovado"];
 }
 ```
 
-## Error Handling
+## Tratamento de Erros
 
-- If no PRD is found via `read_spec_document` (standalone mode), proceed with user-provided context and note the absence in the Resumo Executivo — do NOT fail.
-- If the MCP tools (Mem0 Shared) are unavailable, stop and report clearly — do NOT read/write local `_prd.md`/`_techspec.md` fallback (ADR-002/ADR-007).
-- If `write_spec_document` returns `conflict=true`, do not overwrite: re-read the current version, reconcile, and retry with the current version.
-- If codebase exploration reveals conflicting architectural patterns, document both and recommend one with rationale.
-- If the user rejects the design proposal, incorporate all feedback and present a revised proposal.
-- If operating in update mode, preserve sections the user has not asked to change.
+- Se nenhum PRD for encontrado via `read_spec_document` (modo standalone), prosseguir com contexto fornecido pelo usuário e anotar a ausência no Resumo Executivo — NÃO falhar.
+- Se as ferramentas MCP (Mem0 Shared) estiverem indisponíveis, parar e reportar claramente — NÃO ler/escrever fallback local `_prd.md`/`_techspec.md` (ADR-002/ADR-007).
+- Se `write_spec_document` retornar `conflict=true`, não sobrescrever: reler a versão atual, reconciliar e tentar novamente com a versão atual.
+- Se a exploração da codebase revelar padrões arquiteturais conflitantes, documentar ambos e recomendar um com justificativa.
+- Se o usuário rejeitar a proposta de design, incorporar todo o feedback e apresentar uma proposta revisada.
+- Se operando em modo de atualização, preservar seções que o usuário não pediu para alterar.
 
-## Key Principles
+## Princípios-Chave
 
-- **One question at a time** — Do not overwhelm with multiple questions in a single message
-- **Multiple choice preferred** — Easier for users to answer than open-ended when possible
-- **YAGNI ruthlessly** — Remove unnecessary components, abstractions, and interfaces from all designs
-- **Draft then review** — Generate the complete TechSpec draft first, then iterate with the user until approved
-- **Technical focus only** — Never ask business questions; that belongs in the PRD
-- **Trade-offs are mandatory** — Every Resumo Executivo must state the primary technical trade-off of the chosen approach (in PT-BR)
-- **PRD as input** — When `_prd.md` exists, use it as primary context; every PRD goal should map to a technical component
-- **Pipeline awareness** — The TechSpec feeds into `cy-create-tasks`; focus on HOW, not WHAT or WHY
-- **Template compliance** — Every TechSpec MUST follow the canonical template
-- **Language consistency** — Write all artifacts and user-facing messages in PT-BR (see Language Policy below)
+- **Uma pergunta por vez** — Não sobrecarregar com múltiplas perguntas em uma única mensagem
+- **Múltipla escolha preferida** — Mais fácil para os usuários responderem do que aberta quando possível
+- **YAGNI rigoroso** — Remover componentes, abstrações e interfaces desnecessários de todos os designs
+- **Rascunho e depois revisão** — Gerar o rascunho completo da TechSpec primeiro, depois iterar com o usuário até aprovação
+- **Foco técnico apenas** — Nunca fazer perguntas de negócio; isso pertence ao PRD
+- **Trade-offs são obrigatórios** — Todo Resumo Executivo deve declarar o trade-off técnico principal da abordagem escolhida (em PT-BR)
+- **PRD como entrada** — Quando `_prd.md` existir, usá-lo como contexto principal; todo objetivo do PRD deve mapear para um componente técnico
+- **Consciência do pipeline** — A TechSpec alimenta `cy-create-tasks`; focar no COMO, não no O QUÊ ou POR QUÊ
+- **Conformidade com template** — Toda TechSpec DEVE seguir o template canônico
+- **Consistência de idioma** — Escrever todos os artefatos e mensagens ao usuário em PT-BR (consulte Política de Idioma abaixo)
+- **Kanban sempre ativo** — Após cada atividade significativa, o quadro/workspace Shared DEVE já refleti-la (`../cy-create-prd/references/kanban-shared-obrigatorio.md`)
 
-## Language Policy — PT-BR
+## Política de Idioma — PT-BR
 
 **Todos** os artefatos e interações desta skill são em **português brasileiro (PT-BR)**:
 
@@ -159,12 +173,12 @@ digraph create_techspec {
 |----------|---------|
 | PRD (entrada) | Mem0 Shared via `read_spec_document` (document_type="prd") |
 | TechSpec | Mem0 Shared via `write_spec_document` (document_type="techspec") |
-| ADRs técnicos | Embutidos na seção "Registros de Decisão de Arquitetura" do TechSpec (texto completo) |
+| ADRs técnicos | Mem0 Shared via `write_spec_document` (document_type="adrs"); TechSpec com links `adrs/adr-NNN.md` |
 
 Regras:
 - Perguntas técnicas ao usuário, rascunhos e prompts de revisão em PT-BR
 - Ao referenciar o PRD, use os nomes de seção como aparecem no documento (em português)
-- Prosa do TechSpec em português; comentários em exemplos de código podem ser em PT-BR
+- Prosa da TechSpec em português; comentários em exemplos de código podem ser em PT-BR
 - Termos técnicos consagrados no repositório podem permanecer em inglês
 - Status em ADRs: `Proposto`, `Aceito`, `Depreciado`, `Substituído por ADR-XXX`
 - Use os modelos em `references/` (já em PT-BR)

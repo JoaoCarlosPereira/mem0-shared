@@ -1,197 +1,213 @@
 ---
 name: cy-create-prd
-description: Cria Documento de Requisitos de Produto (PRD) em PT-BR com brainstorming interativo, pesquisa de código e mercado. Persiste o PRD no Mem0 Shared via MCP (write_spec_document), não em arquivos locais. Use ao iniciar feature ou produto, criar PRD ou levantar requisitos. Não use para TechSpec, decomposição de tarefas ou implementação.
+description: Cria Documento de Requisitos de Produto (PRD) em PT-BR com brainstorming interativo, pesquisa de código e mercado. Persiste o PRD no Mem0 Shared via MCP (write_spec_document), não em arquivos locais. Sempre atualiza o quadro/workspace Shared a cada etapa. Use ao iniciar feature ou produto, criar PRD ou levantar requisitos. Não use para TechSpec, decomposição de tarefas ou implementação.
 argument-hint: "[feature-name-or-idea] [idea-file]"
 ---
 
-# Create PRD
+# Criar PRD
 
-Create a business-focused Product Requirements Document through structured brainstorming.
+Crie um Documento de Requisitos de Produto orientado ao negócio por meio de brainstorming estruturado.
 
 <HARD-GATE>
-Do NOT write the PRD file until ALL phases are complete and the user has approved the final draft.
-Do NOT skip the research phase — every PRD MUST be enriched with codebase and market context.
-Do NOT skip user interactions — the user MUST participate in shaping the PRD at every decision point.
-Do NOT require section-by-section approval — generate the complete draft, then let the user review it.
-This applies to EVERY PRD regardless of perceived simplicity.
+NÃO escreva o arquivo do PRD até que TODAS as fases estejam concluídas e o usuário tenha aprovado o rascunho final.
+NÃO pule a fase de pesquisa — todo PRD DEVE ser enriquecido com contexto de codebase e mercado.
+NÃO pule as interações com o usuário — o usuário DEVE participar da construção do PRD em cada ponto de decisão.
+NÃO exija aprovação seção por seção — gere o rascunho completo e deixe o usuário revisá-lo.
+Isso se aplica a TODO PRD, independentemente da simplicidade percebida.
+**KANBAN:** Após cada etapa significativa (criação do workspace, salvamento do PRD, mudança de status), atualize o quadro/workspace Mem0 Shared via MCP na MESMA interação. Nunca deixe o progresso apenas no chat. Consulte `references/kanban-shared-obrigatorio.md`.
 </HARD-GATE>
 
-## Asking Questions
+## Quadro Kanban Shared (obrigatório)
 
-When this skill instructs you to ask the user a question, you MUST use your runtime's dedicated interactive question tool — the tool or function that presents a question to the user and **pauses execution until the user responds**. Do not output questions as plain assistant text and continue generating; always use the mechanism that blocks until the user has answered.
+O SpecWorkspace / Documentações no Mem0 Shared é a fonte de verdade da equipe. Em **cada** atividade desta skill:
 
-If your runtime does not provide such a tool, present the question as your complete message and stop generating. Do not answer your own question or proceed without user input.
+1. Resolver/criar o workspace com `list_spec_workspaces` / `create_spec_workspace`.
+2. Ao gravar o PRD aprovado, usar `write_spec_document` (prd) e, se houver ADRs, **também** `write_spec_document` (document_type="adrs") com o texto completo — confirmar project+slug+versões ao usuário.
+3. Manter o status do workspace coerente com `update_spec_workspace_status` (`planejamento` enquanto só há PRD; `ativo` quando a implementação/TechSpec já avançou no mesmo workspace).
+4. Se houver cards no quadro e a atividade os afetar, atualizar com `claim_task` / `update_task_status` / `add_spec_comment` — nunca só narrar no chat. Pipeline obrigatório: `em_andamento` → `revisao_codigo` → `fase_teste` → `concluido` (sem pular).
 
-## Anti-Pattern: "This Feature Is Too Simple For Full Brainstorming"
+Ler e seguir `references/kanban-shared-obrigatorio.md` antes de concluir qualquer fase.
 
-Every PRD goes through the full brainstorming process. A single button, a minor workflow tweak, a configuration option — all of them. "Simple" features are where unexamined business assumptions cause the most rework. The brainstorming can be brief for genuinely simple features, but you MUST ask clarifying questions and get approval on the product approach before writing the artifact.
+## Fazer Perguntas
 
-## Anti-Pattern: End-Of-Flow Bureaucracy
+Quando esta skill instruir você a fazer uma pergunta ao usuário, você DEVE usar a ferramenta dedicada de pergunta interativa do seu runtime — a ferramenta ou função que apresenta uma pergunta ao usuário e **pausa a execução até que o usuário responda**. Não emita perguntas como texto simples do assistente e continue gerando; sempre use o mecanismo que bloqueia até o usuário ter respondido.
 
-Once the user has answered the clarifying questions and approved an approach, do not force them through a second approval loop for Overview, Goals, User Stories, or any other final document section. Synthesize the approved direction into the PRD directly. The user can review and request edits in the generated file afterward.
+Se o seu runtime não fornecer tal ferramenta, apresente a pergunta como sua mensagem completa e pare de gerar. Não responda sua própria pergunta nem prossiga sem entrada do usuário.
 
-## Anti-Pattern: Technical Drift On Technical-Sounding Features
+## Anti-Padrão: "Esta Feature É Simples Demais Para Brainstorming Completo"
 
-When the feature name sounds technical (e.g., "webhook notifications", "CSV export", "dark mode", "API rate limiting"), you will be tempted to discuss HOW to implement it. Resist this. Your job is the WHAT and WHY:
+Todo PRD passa pelo processo completo de brainstorming. Um único botão, um pequeno ajuste de fluxo, uma opção de configuração — todos eles. Features "simples" são onde premissas de negócio não examinadas causam mais retrabalho. O brainstorming pode ser breve para features genuinamente simples, mas você DEVE fazer perguntas esclarecedoras e obter aprovação na abordagem de produto antes de escrever o artefato.
 
-- WRONG: "Should we use WebSockets or polling for notifications?" (implementation)
-- WRONG: "What CSV library format should we target?" (implementation)
-- RIGHT: "Which events should trigger a notification to the user?" (user need)
-- RIGHT: "What information do users need in their exported reports?" (user need)
+## Anti-Padrão: Burocracia no Final do Fluxo
 
-Translate every technical-sounding feature into the user experience question behind it.
+Depois que o usuário tiver respondido às perguntas esclarecedoras e aprovado uma abordagem, não o force a passar por um segundo ciclo de aprovação para Visão Geral, Objetivos, Histórias de Usuário ou qualquer outra seção final do documento. Sintetize a direção aprovada diretamente no PRD. O usuário pode revisar e solicitar edições no arquivo gerado depois.
 
-## Required Inputs
+## Anti-Padrão: Deriva Técnica em Features de Nome Técnico
 
-- Feature name or product idea.
-- Optional: existing `_idea.md` file as primary input for context.
-- Optional: existing `_prd.md` file for update mode.
+Quando o nome da feature soa técnico (ex.: "webhook notifications", "CSV export", "dark mode", "API rate limiting"), você será tentado a discutir COMO implementá-la. Resista a isso. Seu trabalho é o O QUÊ e o POR QUÊ:
+
+- ERRADO: "Devemos usar WebSockets ou polling para notificações?" (implementação)
+- ERRADO: "Qual formato de biblioteca CSV devemos adotar?" (implementação)
+- CERTO: "Quais eventos devem disparar uma notificação para o usuário?" (necessidade do usuário)
+- CERTO: "Quais informações os usuários precisam nos relatórios exportados?" (necessidade do usuário)
+
+Traduza toda feature de nome técnico na pergunta de experiência do usuário por trás dela.
+
+## Entradas Obrigatórias
+
+- Nome da feature ou ideia de produto.
+- Opcional: arquivo `_idea.md` existente como entrada principal de contexto.
+- Opcional: arquivo `_prd.md` existente para modo de atualização.
 
 ## Checklist
 
-You MUST create a task for each phase and complete them in order:
+Você DEVE criar uma tarefa para cada fase e completá-las em ordem:
 
-1. **Resolve shared workspace** — derive slug, resolve/create the `SpecWorkspace` in Mem0 Shared via MCP (`list_spec_workspaces` / `create_spec_workspace`)
-2. **Discover context** — parallel codebase exploration and web research
-3. **Understand the need** — ask 3-6 targeted questions to refine scope and intent
-4. **Present product approaches** — offer 2-3 approaches with trade-offs, capture the chosen one as an ADR (embedded in the PRD's decision section)
-5. **Draft the PRD** — write using the canonical template from `references/prd-template.md`
-6. **Review with user** — present the draft, iterate until approved
-7. **Save via MCP** — persist the PRD with `write_spec_document` (document_type="prd") — never a local `_prd.md`
+1. **Resolver workspace shared** — derivar slug, resolver/criar o `SpecWorkspace` no Mem0 Shared via MCP (`list_spec_workspaces` / `create_spec_workspace`)
+2. **Descobrir contexto** — exploração paralela da codebase e pesquisa web
+3. **Entender a necessidade** — fazer 3-6 perguntas direcionadas para refinar escopo e intenção
+4. **Apresentar abordagens de produto** — oferecer 2-3 abordagens com trade-offs, capturar a escolhida como ADR (texto completo no documento `adrs` + links no PRD)
+5. **Rascunhar o PRD** — escrever usando o template canônico de `references/prd-template.md`
+6. **Revisar com o usuário** — apresentar o rascunho, iterar até aprovação
+7. **Salvar via MCP** — persistir o PRD (`document_type="prd"`) **e** o documento de ADRs (`document_type="adrs"`) — nunca `_prd.md` / `adrs/*.md` locais
 
-## Workflow
+## Fluxo de Trabalho
 
-1. Resolve the shared spec workspace (Mem0 Shared, via MCP — ADR-002).
-   - Derive the slug from the feature name provided by the user.
-   - Determine the `project_id` (the current project/repo name; use "default" if none is clearly defined).
-   - Call `list_spec_workspaces(project_id=<project>)` to check whether a workspace with this slug already exists.
-     - If it exists, operate in **update mode**: call `read_spec_document(workspace_id, document_type="prd")` to load the current content and version.
-     - If it does not exist, call `create_spec_workspace(project_id=<project>, slug=<slug>, name=<feature name>)` (idempotent by project_id+slug) and keep the returned `workspace_id`.
-   - If an `_idea.md` was provided as input, read it as primary context (input only — the PRD itself is persisted via MCP, not to disk).
-   - **Do NOT create any `.docs/tasks/<slug>/` directory or local files.** The shared workspace is the single source of truth (ADR-002).
-   - If any MCP tool returns an error (service unavailable, connection failure), STOP and report the failure clearly to the user — do NOT fall back to writing local files (ADR-002/ADR-007).
+1. Resolver o spec workspace shared (Mem0 Shared, via MCP — ADR-002).
+   - Derivar o slug a partir do nome da feature fornecido pelo usuário.
+   - Determinar o `project_id` (nome do projeto/repositório atual; use "default" se nenhum estiver claramente definido).
+   - Chamar `list_spec_workspaces(project_id=<project>)` para verificar se um workspace com este slug já existe.
+     - Se existir, operar em **modo de atualização**: chamar `read_spec_document(workspace_id, document_type="prd")` e `read_spec_document(workspace_id, document_type="adrs")` para carregar conteúdo e versões atuais.
+     - Se não existir, chamar `create_spec_workspace(project_id=<project>, slug=<slug>, name=<feature name>)` (idempotente por project_id+slug) e manter o `workspace_id` retornado.
+   - Se um `_idea.md` foi fornecido como entrada, lê-lo como contexto principal (somente entrada — o PRD em si é persistido via MCP, não em disco).
+   - **NÃO criar nenhum diretório `.docs/tasks/<slug>/` nem arquivos locais.** O workspace shared é a única fonte de verdade (ADR-002).
+   - Se qualquer ferramenta MCP retornar erro (serviço indisponível, falha de conexão), PARAR e reportar a falha claramente ao usuário — NÃO recorrer a escrever arquivos locais (ADR-002/ADR-007).
 
-2. Discover context through parallel research. You MUST perform BOTH tracks before asking any questions.
+2. Descobrir contexto por meio de pesquisa paralela. Você DEVE executar AMBAS as trilhas antes de fazer qualquer pergunta.
 
-   **Track A — Codebase exploration** (REQUIRED):
-   - Search the codebase for files, patterns, and features related to the user's request.
-   - Look for existing implementations, data models, and integration points that are relevant.
-   - Summarize what you found in 3-5 bullet points.
+   **Trilha A — Exploração da codebase** (OBRIGATÓRIA):
+   - Buscar na codebase arquivos, padrões e features relacionados ao pedido do usuário.
+   - Procurar implementações existentes, modelos de dados e pontos de integração relevantes.
+   - Resumir o que encontrou em 3-5 bullet points.
 
-   **Track B — Market and user research** (REQUIRED):
-   - Perform 3-5 web searches for market trends, competitive products, and user needs related to the feature.
-   - Look for how similar products solve this problem and what users expect.
-   - Summarize what you found in 3-5 bullet points.
+   **Trilha B — Pesquisa de mercado e usuário** (OBRIGATÓRIA):
+   - Realizar 3-5 buscas web sobre tendências de mercado, produtos concorrentes e necessidades dos usuários relacionados à feature.
+   - Procurar como produtos similares resolvem este problema e o que os usuários esperam.
+   - Resumir o que encontrou em 3-5 bullet points.
 
-   Run both tracks in parallel (e.g., two Agent tool calls, two search batches, etc.). Present a brief merged summary of findings from BOTH tracks to the user before moving to questions. If web search tools are unavailable, note the limitation explicitly and proceed with codebase findings only.
+   Executar ambas as trilhas em paralelo (ex.: duas chamadas Agent tool, dois lotes de busca, etc.). Apresentar um breve resumo mesclado dos achados de AMBAS as trilhas ao usuário antes de seguir para as perguntas. Se ferramentas de busca web estiverem indisponíveis, anotar a limitação explicitamente e prosseguir apenas com os achados da codebase.
 
-3. Ask clarifying questions following `references/question-protocol.md` **in PT-BR**.
-   - Focus exclusively on WHAT features users need, WHY it provides business value, and WHO the target users are.
-   - Ask about success criteria and constraints.
-   - Never ask technical implementation questions about databases, APIs, frameworks, or architecture.
-   - **ONE question per message — strictly enforced.** Your message must contain exactly one question mark. After asking the question, STOP. Do not add follow-up questions, "also" questions, or "additionally" prompts. If a topic needs more exploration, ask a follow-up in the NEXT message after the user responds.
+3. Fazer perguntas esclarecedoras seguindo `references/question-protocol.md` **em PT-BR**.
+   - Focar exclusivamente em QUAIS features os usuários precisam, POR QUE isso gera valor de negócio e QUEM são os usuários-alvo.
+   - Perguntar sobre critérios de sucesso e restrições.
+   - Nunca fazer perguntas técnicas de implementação sobre bancos de dados, APIs, frameworks ou arquitetura.
+   - **UMA pergunta por mensagem — estritamente aplicado.** Sua mensagem deve conter exatamente um ponto de interrogação. Depois de fazer a pergunta, PARAR. Não adicionar perguntas de follow-up, perguntas "também" ou prompts "adicionalmente". Se um tópico precisar de mais exploração, fazer um follow-up na PRÓXIMA mensagem após a resposta do usuário.
 
-     Anti-pattern (FORBIDDEN):
-     "What is the primary user persona? Also, what are the key success metrics?"
-     This is TWO questions. Split them into two separate messages.
+     Anti-padrão (PROIBIDO):
+     "Qual é a persona principal do usuário? Também, quais são as métricas-chave de sucesso?"
+     Isso são DUAS perguntas. Dividi-las em duas mensagens separadas.
 
-   - Every question MUST be multiple-choice when reasonable options can be predetermined. Format as labeled options (A, B, C, etc.) so the user can respond with a single letter. Only use open-ended questions when the answer space is genuinely unbounded (e.g., "What problem are you trying to solve?").
-   - Include a fallback option (e.g., "D) Other — describe") for flexibility.
-   - For complex features with many dimensions, decompose into sub-topics and ask about one dimension at a time. Each sub-topic usually has predeterminable options. Example: instead of the open-ended "What should the collaboration feature include?", ask "Which aspect of team collaboration is most important to start with? A) Shared workspaces B) Real-time presence C) Permission controls D) Activity feeds".
-   - Complete at least one full clarification round before presenting approaches.
+   - Toda pergunta DEVE ser de múltipla escolha quando opções razoáveis puderem ser predeterminadas. Formatar como opções rotuladas (A, B, C, etc.) para que o usuário possa responder com uma única letra. Usar perguntas abertas apenas quando o espaço de resposta for genuinamente ilimitado (ex.: "Qual problema você está tentando resolver?").
+   - Incluir uma opção de fallback (ex.: "D) Outro — descreva") para flexibilidade.
+   - Para features complexas com muitas dimensões, decompor em sub-tópicos e perguntar sobre uma dimensão por vez. Cada sub-tópico geralmente tem opções predetermináveis. Exemplo: em vez da pergunta aberta "O que a feature de colaboração deve incluir?", perguntar "Qual aspecto da colaboração em equipe é mais importante para começar? A) Workspaces compartilhados B) Presença em tempo real C) Controles de permissão D) Feeds de atividade".
+   - Completar pelo menos uma rodada completa de esclarecimento antes de apresentar abordagens.
 
-4. Present product approaches.
-   - Offer 2-3 product approaches with trade-offs for each.
-   - Lead with the recommended approach and explain why it is preferred.
-   - Wait for the user to select an approach before continuing.
-   - After the user selects an approach, capture an ADR for this decision **inside the PRD** (the shared space persists documents by type; there is no separate ADR store):
-     - Read `references/adr-template.md` for the ADR structure.
-     - Number ADRs sequentially within this PRD (adr-001, adr-002, ...).
-     - Fill the template in **PT-BR**: the selected approach as "Decisão", rejected approaches as "Alternativas Consideradas" with their trade-offs, and outcomes as "Consequências". Set Status to "Aceito" and Date to today.
-     - Append the full ADR text to the PRD's "Registros de Decisão de Arquitetura" section (step 5) — do NOT write any `adrs/*.md` local file.
+4. Apresentar abordagens de produto.
+   - Oferecer 2-3 abordagens de produto com trade-offs para cada uma.
+   - Liderar com a abordagem recomendada e explicar por que é preferida.
+   - Aguardar o usuário selecionar uma abordagem antes de continuar.
+   - Depois que o usuário selecionar uma abordagem, capturar um ADR para esta decisão e **subir no documento shared `adrs`** (ADRs não são cards Kanban):
+     - Ler `references/adr-template.md` para a estrutura do ADR.
+     - Numerar ADRs sequencialmente no workspace (adr-001, adr-002, …), continuando após o maior número já presente em `read_spec_document(..., "adrs")` e/ou na seção de ADRs do PRD.
+     - Preencher o template em **PT-BR**: a abordagem selecionada como "Decisão", abordagens rejeitadas como "Alternativas Consideradas" com seus trade-offs, e resultados como "Consequências". Definir Status como "Aceito" e Date como hoje.
+     - Guardar o texto completo (`### ADR-NNN: Título` + Status/Data/Contexto/Decisão/Alternativas/Consequências) para gravar em `document_type="adrs"` no passo 7.
+     - No PRD, na seção "Registros de Decisão de Arquitetura", listar links markdown `[ADR-NNN: Título](adrs/adr-NNN.md)` (a UI Shared abre o doc `adrs`). Pode incluir um resumo de uma linha; o texto completo SoT é o documento `adrs`. **NÃO** escrever arquivos locais `adrs/*.md`.
 
-5. Draft the PRD.
-   - After the user selects an approach, synthesize the final product design. Do not present each section for separate approval.
-   - If the user makes a significant scope decision during clarification or approach selection, create an additional ADR following the same process as step 4.
-   - Only pause before writing if a blocking ambiguity remains that would force guessing; otherwise proceed directly to document generation.
-   - Read `references/prd-template.md` and fill every section with gathered context.
-   - Include a "Registros de Decisão de Arquitetura" section containing the **full text** of every ADR captured during this session (numbered adr-001, adr-002, ...), since the shared space stores the PRD as a single document (no separate `adrs/` files).
-   - Apply YAGNI ruthlessly: challenge every feature and remove anything the MVP does not need.
-   - The PRD must describe user capabilities and business outcomes only.
-   - No databases, APIs, code structure, frameworks, testing strategies, or architecture decisions.
-   - Mandatory sections (ALWAYS include): Visão Geral, Objetivos, Histórias de Usuário, Funcionalidades Principais, Experiência do Usuário, Fora de Escopo, Plano de Entrega por Fases, Métricas de Sucesso, Riscos e Mitigações, Registros de Decisão de Arquitetura, Perguntas em Aberto.
-   - Optional sections (include when relevant): Restrições Técnicas de Alto Nível.
-   - Prefer active voice, omit needless words, use definite and specific language over vague generalities. Every sentence should earn its place.
-   - Language: **PT-BR** (português brasileiro). Tone: claro, técnico, consistente com os artefatos do projeto.
-   - Present the complete draft to the user for review.
+5. Rascunhar o PRD.
+   - Depois que o usuário selecionar uma abordagem, sintetizar o design final de produto. Não apresentar cada seção para aprovação separada.
+   - Se o usuário tomar uma decisão significativa de escopo durante o esclarecimento ou seleção de abordagem, criar um ADR adicional seguindo o mesmo processo do passo 4.
+   - Pausar antes de escrever apenas se restar uma ambiguidade bloqueante que force adivinhação; caso contrário, prosseguir diretamente para a geração do documento.
+   - Ler `references/prd-template.md` e preencher cada seção com o contexto coletado.
+   - Incluir uma seção "Registros de Decisão de Arquitetura" com links `[ADR-NNN: Título](adrs/adr-NNN.md)` para cada ADR desta sessão (e anteriores do workspace). O texto completo vai no documento MCP `adrs`.
+   - Aplicar YAGNI rigorosamente: questionar cada feature e remover tudo que o MVP não precisa.
+   - O PRD deve descrever apenas capacidades do usuário e resultados de negócio.
+   - Sem bancos de dados, APIs, estrutura de código, frameworks, estratégias de teste ou decisões de arquitetura.
+   - Seções obrigatórias (SEMPRE incluir): Visão Geral, Objetivos, Histórias de Usuário, Funcionalidades Principais, Experiência do Usuário, Fora de Escopo, Plano de Entrega por Fases, Métricas de Sucesso, Riscos e Mitigações, Registros de Decisão de Arquitetura, Perguntas em Aberto.
+   - Seções opcionais (incluir quando relevante): Restrições Técnicas de Alto Nível.
+   - Preferir voz ativa, omitir palavras desnecessárias, usar linguagem definida e específica em vez de generalidades vagas. Cada frase deve merecer seu lugar.
+   - Idioma: **PT-BR** (português brasileiro). Tom: claro, técnico, consistente com os artefatos do projeto.
+   - Apresentar o rascunho completo ao usuário para revisão.
 
-6. Review with the user.
-   - Present the draft and ask using the interactive question tool (in PT-BR):
+6. Revisar com o usuário.
+   - Apresentar o rascunho e perguntar usando a ferramenta de pergunta interativa (em PT-BR):
      - "Segue o rascunho do PRD. Revise e informe:"
      - A) Aprovado — salvar como está
      - B) Ajustar seções específicas (indique quais)
      - C) Reescrever a seção X (diga o que mudar)
      - D) Descartar e recomeçar
-   - If B or C: make the changes and present again.
-   - If D: go back to step 3.
+   - Se B ou C: fazer as alterações e apresentar novamente.
+   - Se D: voltar ao passo 3.
 
-7. Save the PRD via MCP (only after the HARD-GATE approval in step 6).
-   - Persist the approved document with `write_spec_document(workspace_id=<workspace>, document_type="prd", content=<PRD>, expected_version=<version>)`.
-     - On first write of a new workspace, pass `expected_version=null`.
-     - In update mode, pass the `current_version` returned by the `read_spec_document` in step 1 (or the latest read).
-   - **Conflict handling:** if the tool returns `conflict=true`, the document changed since you read it. Do NOT overwrite. Inform the user (in PT-BR) that another writer updated the PRD, show the `current_version`, re-read the current content, reconcile your changes onto it, and only then retry `write_spec_document` with the new `current_version`.
-   - **Service unavailability:** if the tool call errors (MCP/Mem0 Shared down), STOP and report the failure clearly to the user. Do NOT write a local `_prd.md` as a fallback (ADR-002/ADR-007).
-   - On success, confirm to the user (in PT-BR) the shared workspace (project + slug) and the new document version where the PRD was saved.
-   - Remind the user (in PT-BR) that the next step is to create a TechSpec using `cy-create-techspec` from this PRD.
+7. Salvar o PRD e os ADRs via MCP (somente após a aprovação HARD-GATE no passo 6).
+   - Persistir o PRD com `write_spec_document(workspace_id=<workspace>, document_type="prd", content=<PRD>, expected_version=<version>)`.
+     - Na primeira gravação de um workspace novo, passar `expected_version=null`.
+     - No modo de atualização, passar o `current_version` retornado pelo `read_spec_document` no passo 1 (ou a leitura mais recente).
+   - **OBRIGATÓRIO — documento `adrs`:** na mesma interação, gravar (ou atualizar) o documento de ADRs com `write_spec_document(workspace_id, document_type="adrs", content=<todos os ADRs do workspace em markdown>, expected_version=<versão adrs|null>)`. Incluir o texto completo de cada ADR (`### ADR-NNN: ...`). Alias `adr` também é aceito. ADRs **não** são TaskCards.
+   - **Tratamento de conflito:** se a ferramenta retornar `conflict=true`, o documento mudou desde que você o leu. NÃO sobrescrever. Informar o usuário (em PT-BR) que outro autor atualizou o documento, mostrar o `current_version`, reler o conteúdo atual, reconciliar suas alterações sobre ele e só então tentar novamente `write_spec_document` com o novo `current_version`.
+   - **Indisponibilidade do serviço:** se a chamada da ferramenta falhar (MCP/Mem0 Shared fora do ar), PARAR e reportar a falha claramente ao usuário. NÃO escrever um `_prd.md` local como fallback (ADR-002/ADR-007).
+   - Em caso de sucesso, confirmar ao usuário (em PT-BR) o workspace shared (project + slug) e as novas versões de `prd` e `adrs`.
+   - Garantir que o lifecycle do workspace reflita o planejamento: se ainda houver apenas PRD, `update_spec_workspace_status(workspace_id, "planejamento")` quando ainda não estiver definido.
+   - Lembrar o usuário (em PT-BR) que o próximo passo é criar uma TechSpec usando `cy-create-techspec` a partir deste PRD — e que o quadro Shared deve permanecer sincronizado a cada atividade.
 
-## Process Flow
+## Fluxo do Processo
 
 ```dot
 digraph create_prd {
-    "Resolve shared workspace (MCP)" [shape=box];
-    "Discover context (codebase + web)" [shape=box];
-    "Ask clarifying questions (one at a time)" [shape=box];
-    "Present 2-3 product approaches" [shape=box];
-    "User selects approach?" [shape=diamond];
-    "Capture ADR inside PRD" [shape=box];
-    "Draft PRD (canonical template)" [shape=box];
-    "User approves draft?" [shape=diamond];
-    "write_spec_document (prd) via MCP" [shape=doublecircle];
+    "Resolver workspace shared (MCP)" [shape=box];
+    "Descobrir contexto (codebase + web)" [shape=box];
+    "Fazer perguntas esclarecedoras (uma por vez)" [shape=box];
+    "Apresentar 2-3 abordagens de produto" [shape=box];
+    "Usuário seleciona abordagem?" [shape=diamond];
+    "Capturar ADR (doc adrs + links no PRD)" [shape=box];
+    "Rascunhar PRD (template canônico)" [shape=box];
+    "Usuário aprova rascunho?" [shape=diamond];
+    "write_spec_document (prd + adrs) via MCP" [shape=doublecircle];
 
-    "Resolve shared workspace (MCP)" -> "Discover context (codebase + web)";
-    "Discover context (codebase + web)" -> "Ask clarifying questions (one at a time)";
-    "Ask clarifying questions (one at a time)" -> "Present 2-3 product approaches";
-    "Present 2-3 product approaches" -> "User selects approach?";
-    "User selects approach?" -> "Present 2-3 product approaches" [label="no, revise"];
-    "User selects approach?" -> "Capture ADR inside PRD" [label="yes"];
-    "Capture ADR inside PRD" -> "Draft PRD (canonical template)";
-    "Draft PRD (canonical template)" -> "User approves draft?";
-    "User approves draft?" -> "Draft PRD (canonical template)" [label="no, revise"];
-    "User approves draft?" -> "write_spec_document (prd) via MCP" [label="approved"];
+    "Resolver workspace shared (MCP)" -> "Descobrir contexto (codebase + web)";
+    "Descobrir contexto (codebase + web)" -> "Fazer perguntas esclarecedoras (uma por vez)";
+    "Fazer perguntas esclarecedoras (uma por vez)" -> "Apresentar 2-3 abordagens de produto";
+    "Apresentar 2-3 abordagens de produto" -> "Usuário seleciona abordagem?";
+    "Usuário seleciona abordagem?" -> "Apresentar 2-3 abordagens de produto" [label="não, revisar"];
+    "Usuário seleciona abordagem?" -> "Capturar ADR (doc adrs + links no PRD)" [label="sim"];
+    "Capturar ADR (doc adrs + links no PRD)" -> "Rascunhar PRD (template canônico)";
+    "Rascunhar PRD (template canônico)" -> "Usuário aprova rascunho?";
+    "Usuário aprova rascunho?" -> "Rascunhar PRD (template canônico)" [label="não, revisar"];
+    "Usuário aprova rascunho?" -> "write_spec_document (prd + adrs) via MCP" [label="aprovado"];
 }
 ```
 
-## Error Handling
+## Tratamento de Erros
 
-- If the user provides insufficient context to complete a section, note it in Perguntas em Aberto rather than guessing.
-- If web research tools are unavailable, proceed with codebase exploration only and note the limitation.
-- If the MCP tools (Mem0 Shared) are unavailable, stop and report the failure clearly — do NOT write a local `_prd.md` fallback (ADR-002/ADR-007).
-- If `write_spec_document` returns `conflict=true`, do not overwrite: re-read the current version, reconcile, and retry with the current version.
-- If operating in update mode, preserve sections the user has not asked to change.
+- Se o usuário fornecer contexto insuficiente para completar uma seção, anotar em Perguntas em Aberto em vez de adivinhar.
+- Se ferramentas de pesquisa web estiverem indisponíveis, prosseguir apenas com a exploração da codebase e anotar a limitação.
+- Se as ferramentas MCP (Mem0 Shared) estiverem indisponíveis, parar e reportar a falha claramente — NÃO escrever um fallback local `_prd.md` (ADR-002/ADR-007).
+- Se `write_spec_document` retornar `conflict=true`, não sobrescrever: reler a versão atual, reconciliar e tentar novamente com a versão atual.
+- Se operando em modo de atualização, preservar seções que o usuário não pediu para alterar.
 
-## Key Principles
+## Princípios-Chave
 
-- **One question at a time** — Do not overwhelm with multiple questions in a single message
-- **Multiple choice mandatory** — Every question MUST be multiple-choice (A/B/C) when options can be predetermined; open-ended only when the answer space is genuinely unbounded
-- **YAGNI ruthlessly** — Challenge every feature; remove anything the MVP does not need
-- **Draft then review** — Get approval on the product approach, generate the complete draft, then iterate with the user until approved
-- **Business focus only** — Never ask about implementation; that belongs in TechSpec
-- **Idea as input** — When `_idea.md` exists, use it as primary context to accelerate brainstorming
-- **Pipeline awareness** — The PRD feeds into `cy-create-techspec`; focus on WHAT and WHY, not HOW
-- **Template compliance** — Every PRD MUST follow the canonical template
-- **Language consistency** — Write all artifacts and user-facing messages in PT-BR (see Language Policy below)
+- **Uma pergunta por vez** — Não sobrecarregar com múltiplas perguntas em uma única mensagem
+- **Múltipla escolha obrigatória** — Toda pergunta DEVE ser de múltipla escolha (A/B/C) quando opções puderem ser predeterminadas; aberta apenas quando o espaço de resposta for genuinamente ilimitado
+- **YAGNI rigoroso** — Questionar cada feature; remover tudo que o MVP não precisa
+- **Rascunho e depois revisão** — Obter aprovação na abordagem de produto, gerar o rascunho completo e iterar com o usuário até aprovação
+- **Foco no negócio apenas** — Nunca perguntar sobre implementação; isso pertence à TechSpec
+- **Ideia como entrada** — Quando `_idea.md` existir, usá-lo como contexto principal para acelerar o brainstorming
+- **Consciência do pipeline** — O PRD alimenta `cy-create-techspec`; focar no O QUÊ e no POR QUÊ, não no COMO
+- **Conformidade com template** — Todo PRD DEVE seguir o template canônico
+- **Consistência de idioma** — Escrever todos os artefatos e mensagens ao usuário em PT-BR (consulte Política de Idioma abaixo)
+- **Kanban sempre ativo** — Após cada atividade significativa, o quadro/workspace Shared DEVE já refleti-la (consulte `references/kanban-shared-obrigatorio.md`)
 
-## Language Policy — PT-BR
+## Política de Idioma — PT-BR
 
 **Todos** os artefatos e interações desta skill são em **português brasileiro (PT-BR)**:
 
@@ -199,7 +215,7 @@ digraph create_prd {
 |----------|---------|
 | Ideia (se fornecida como entrada) | `_idea.md` (somente leitura de contexto) |
 | PRD | Mem0 Shared via `write_spec_document` (document_type="prd") |
-| ADRs | seção "Registros de Decisão de Arquitetura" dentro do PRD |
+| ADRs | Mem0 Shared via `write_spec_document` (document_type="adrs"); PRD só com links `adrs/adr-NNN.md` |
 
 Regras:
 - Títulos de seção, narrativa, listas e tabelas em português

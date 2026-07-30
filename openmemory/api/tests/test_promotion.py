@@ -120,13 +120,17 @@ _admin = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_admin)
 
 
-def test_promote_endpoint_accepts_and_schedules():
+def test_promote_endpoint_accepts_and_schedules(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
     service = MagicMock()
     app = FastAPI()
     app.include_router(_admin.router)
     app.dependency_overrides[_admin._promotion] = lambda: service
 
-    resp = TestClient(app).post("/admin/projects/big/promote")
+    resp = TestClient(app).post(
+        "/admin/projects/big/promote",
+        headers={"x-admin-token": "test-admin-token"},
+    )
 
     assert resp.status_code == 202
     assert resp.json() == {"status": "accepted", "project": "big", "shard_key": "big"}

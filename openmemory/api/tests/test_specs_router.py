@@ -85,6 +85,23 @@ class TestWorkspaceCrud:
         assert len(r.json()["documents"]) == 1
         assert r.json()["documents"][0]["document_type"] == "prd"
 
+    def test_board_inclui_documento_adrs(self, client):
+        ws = _create_ws(client).json()
+        put = client.put(
+            f"/api/v1/specs/workspaces/{ws['id']}/documents/adrs",
+            json={
+                "content": "# ADRs\n\n### ADR-001: Teste\n\n**Decisão**\nok",
+                "expected_version": None,
+            },
+        )
+        assert put.status_code == 200
+        assert put.json()["version"] == 1
+        r = client.get(f"/api/v1/specs/workspaces/{ws['id']}")
+        assert r.status_code == 200
+        adrs = next(d for d in r.json()["documents"] if d["document_type"] == "adrs")
+        assert adrs["current_version"] == 1
+        assert "ADR-001" in adrs["current_content"]
+
     def test_board_inexistente_404(self, client):
         r = client.get(f"/api/v1/specs/workspaces/{uuid.uuid4()}")
         assert r.status_code == 404
@@ -505,19 +522,22 @@ class TestEndToEndLifecycle:
         )
         assert conflict.status_code == 409
 
-        # PATCH status para concluido (ator A)
-        done = client.patch(
-            f"/api/v1/specs/tasks/{task['id']}/status",
-            json={
-                "new_status": "concluido",
-                "expected_version": claimed["version"],
-                "actor": "A",
-            },
-        )
-        assert done.status_code == 200
-        assert done.json()["status"] == "concluido"
+        # Pipeline obrigatório: em_andamento → revisao_codigo → fase_teste → concluido
+        version = claimed["version"]
+        for new_status in ("revisao_codigo", "fase_teste", "concluido"):
+            step = client.patch(
+                f"/api/v1/specs/tasks/{task['id']}/status",
+                json={
+                    "new_status": new_status,
+                    "expected_version": version,
+                    "actor": "A",
+                },
+            )
+            assert step.status_code == 200, step.text
+            version = step.json()["version"]
+        assert step.json()["status"] == "concluido"
 
-        # verifica histórico (2 entradas) e auditoria
+        # verifica histórico e auditoria
         s = factory()
         try:
             hist = (
@@ -528,9 +548,9 @@ class TestEndToEndLifecycle:
             audit = s.query(SpecAuditLog).count()
         finally:
             s.close()
-        assert hist == 2  # tasks->em_andamento, em_andamento->concluido
+        # tasks→em_andamento + 3 avanços = 4
+        assert hist == 4
         assert audit >= 3  # write_spec_document + claim_task + update_task_status
-
 
 class TestAllWorkspacesIndex:
     def test_lista_todos_workspaces_de_todos_projetos(self, client):

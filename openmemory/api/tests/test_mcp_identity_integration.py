@@ -92,7 +92,18 @@ class TestUsageUserId:
             user_id_var.reset(token)
 
     def test_sem_hostname_cai_no_sentinel(self):
-        assert _usage_user_id() == "unknown-host"
+        # Contextvars de outros testes MCP (async) podem vazar entre cases.
+        tokens = [
+            auth_method_var.set(""),
+            auth_user_var.set(""),
+            user_id_var.set(None),
+        ]
+        try:
+            assert _usage_user_id() == "unknown-host"
+        finally:
+            user_id_var.reset(tokens[2])
+            auth_user_var.reset(tokens[1])
+            auth_method_var.reset(tokens[0])
 
 
 class TestMachineDivergence:

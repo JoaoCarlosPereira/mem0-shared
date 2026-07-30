@@ -364,6 +364,7 @@ export default function SpecsBoardPage() {
   const [openDoc, setOpenDoc] = useState<SpecDocument | null>(null);
   const [docContent, setDocContent] = useState("");
   const [docEditing, setDocEditing] = useState(false);
+  const [pendingAdrScroll, setPendingAdrScroll] = useState<string | null>(null);
   const [taskDescEditing, setTaskDescEditing] = useState(false);
   const [activeDragTask, setActiveDragTask] = useState<TaskCard | null>(null);
   const [overColumnKey, setOverColumnKey] = useState<TaskCardStatus | null>(null);
@@ -430,6 +431,34 @@ export default function SpecsBoardPage() {
     setOpenDoc(doc);
     setDocContent(doc.current_content || "");
   }, []);
+
+  const openAdrDocument = useCallback(
+    (adrSlug: string) => {
+      const adrsDoc = (board?.documents ?? []).find((d) => d.document_type === "adrs");
+      if (!adrsDoc) {
+        setDialogError(
+          `Documento ADRs ainda não existe neste workspace. Grave com write_spec_document(..., document_type="adrs").`,
+        );
+        return;
+      }
+      setPendingAdrScroll(adrSlug);
+      openDocDialog(adrsDoc);
+    },
+    [board?.documents, openDocDialog],
+  );
+
+  useEffect(() => {
+    if (!openDoc || openDoc.document_type !== "adrs" || !pendingAdrScroll || docEditing) {
+      return;
+    }
+    const id = pendingAdrScroll;
+    const t = window.setTimeout(() => {
+      const el = document.getElementById(id);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      setPendingAdrScroll(null);
+    }, 80);
+    return () => window.clearTimeout(t);
+  }, [openDoc, pendingAdrScroll, docEditing, docContent]);
 
   const onDragEnd = useCallback(
     async (event: DragEndEvent) => {
@@ -960,7 +989,10 @@ export default function SpecsBoardPage() {
                   className="min-h-[200px] border-zinc-700 bg-zinc-900 font-mono text-xs"
                 />
               ) : (
-                <MarkdownViewer content={taskDescription} />
+                <MarkdownViewer
+                  content={taskDescription}
+                  onAdrLink={openAdrDocument}
+                />
               )}
             </div>
             {openTask?.assignee && (
@@ -1024,6 +1056,7 @@ export default function SpecsBoardPage() {
           if (!open) {
             setOpenDoc(null);
             setDocEditing(false);
+            setPendingAdrScroll(null);
           }
         }}
       >
@@ -1036,7 +1069,9 @@ export default function SpecsBoardPage() {
               </span>
             </DialogTitle>
             <DialogDescription className="text-zinc-400">
-              Documento SDD — visualizar, editar ou excluir.
+              {openDoc?.document_type === "adrs"
+                ? "ADRs do workspace — acessíveis pelos links nos specs (não são cards Kanban)."
+                : "Documento SDD — visualizar, editar ou excluir."}
             </DialogDescription>
             {openDoc?.updated_by && (
               <div data-testid="doc-detail-author">
@@ -1064,6 +1099,9 @@ export default function SpecsBoardPage() {
               <MarkdownViewer
                 content={docContent}
                 emptyLabel="(documento vazio)"
+                onAdrLink={
+                  openDoc?.document_type === "adrs" ? undefined : openAdrDocument
+                }
               />
             )}
           </div>

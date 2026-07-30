@@ -80,3 +80,9 @@
       criadas** antes da falha, sem inventar arquivo local.
 - [ ] **Cards no backlog:** confirmar que as tasks nascem na coluna `tasks`
       (backlog) do quadro Kanban.
+- [ ] **Kanban a cada atividade:** após criar os cards, o agente confirma o
+      quadro e lembra que execução exige `claim_task` / `update_task_status`
+      a cada fase (ver `cy-create-prd/references/kanban-shared-obrigatorio.md`).
+- [ ] **Pipeline completo:** confirmar que a skill/agente **não** move card para
+      `concluido` sem ter passado explicitamente por `revisao_codigo` e
+      `fase_teste` (duas atualizações MCP distintas + evidência de teste).

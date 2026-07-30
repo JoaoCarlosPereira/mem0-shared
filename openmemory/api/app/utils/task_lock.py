@@ -21,6 +21,7 @@ from app.models import (
     TaskStatusHistory,
     get_current_utc_time,
 )
+from app.utils.kanban_pipeline import KanbanSkipError, assert_no_forward_skip
 
 
 @dataclass
@@ -95,6 +96,10 @@ def _assert_status_policy(
             "not_assignee",
             f"Apenas o assignee ({task.assignee}) pode alterar o status",
         )
+    try:
+        assert_no_forward_skip(old_status, new_status)
+    except KanbanSkipError as exc:
+        raise TaskStatusPolicyError(exc.code, exc.message) from exc
 
 
 def claim_task(db: Session, task_id: uuid.UUID, claimant: str) -> ClaimTaskResult:

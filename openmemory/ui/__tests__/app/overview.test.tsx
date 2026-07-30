@@ -13,6 +13,7 @@ jest.mock("@/hooks/useAdminApi", () => ({
 
 import adminReducer, { setAdminOverview } from "@/store/adminSlice";
 import queuesReducer, { setFailedJobIds } from "@/store/queuesSlice";
+import profileReducer from "@/store/profileSlice";
 import OverviewPage from "@/app/admin/overview/page";
 import { StatCard } from "@/components/admin/StatCard";
 import { useAdminApi } from "@/hooks/useAdminApi";
@@ -44,7 +45,11 @@ function renderPage(
   },
 ) {
   const store = configureStore({
-    reducer: { admin: adminReducer, queues: queuesReducer },
+    reducer: {
+      admin: adminReducer,
+      queues: queuesReducer,
+      profile: profileReducer,
+    },
   });
   if (overview) store.dispatch(setAdminOverview(overview));
   if (queues?.failedWriteJobIds || queues?.failedGovernanceJobIds) {
