@@ -1,9 +1,9 @@
 """Tests for the non-blocking MCP write tool ``add_memories`` (task_07 / ADR-004).
 
-``add_memories`` no longer extracts synchronously: it validates the input,
-enqueues a :class:`WriteJob` and returns an immediate fire-and-forget ack
-``{"status": "accepted", ...}`` (no job_id — agents must not poll). The slow LLM extraction is done out of band by the
-worker (task_06), so the memory client must NOT be touched on this path.
+``add_memories`` enqueues a :class:`WriteJob` and returns an immediate
+fire-and-forget ack ``{"status": "accepted", ...}`` (no job_id — agents must
+not poll). No embed/search/LLM on the request path; extraction runs in the
+write worker.
 
 Covered:
 - a valid call enqueues exactly one job and returns the accepted ack;
@@ -11,7 +11,7 @@ Covered:
   originating client_name;
 - a missing/blank ``project`` returns a descriptive error and enqueues nothing;
 - a blank ``text`` returns a descriptive error and enqueues nothing;
-- the LLM/memory client is never invoked on the request path;
+- ``client.add`` / embed / search are never invoked on the request path;
 - integration: an ``add_memories`` call lands a row the worker can consume.
 """
 
@@ -190,17 +190,41 @@ class TestValidation:
 
 
 # --------------------------------------------------------------------------- #
-# No LLM on the request path
+# No embed / search / LLM on the request path
 # --------------------------------------------------------------------------- #
 class TestNoLlmOnRequestPath:
     @pytest.mark.asyncio
-    async def test_memory_client_not_invoked(self, fake_queue):
+    async def test_memory_client_not_touched_on_write(self, fake_queue):
         _set_ctx()
         client = MagicMock()
-        with patch.object(mcp_server, "get_memory_client_safe", return_value=client):
-            await add_memories("remember X", project="alpha")
-        # The slow extraction must not run on the request path.
+        with patch.object(
+            mcp_server, "get_memory_client_safe", return_value=client
+        ) as get_client, patch.object(
+            mcp_server, "bind_active_collection"
+        ) as bind:
+            out = await add_memories("remember X", project="alpha")
+        data = json.loads(out)
+        assert data["status"] == "accepted"
+        assert "similar" not in data
+        get_client.assert_not_called()
+        bind.assert_not_called()
         client.add.assert_not_called()
+        client.embedding_model.embed.assert_not_called()
+        client.vector_store.search.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_supersedes_stored_on_job(self, fake_queue):
+        _set_ctx()
+        out = await add_memories(
+            "corrected fact",
+            project="alpha",
+            supersedes=["725104c0-4cf8-4af3-b21a-2d979b0caca5"],
+        )
+        data = json.loads(out)
+        assert data["supersedes"] == ["725104c0-4cf8-4af3-b21a-2d979b0caca5"]
+        assert fake_queue.jobs[0].extras == {
+            "supersedes": ["725104c0-4cf8-4af3-b21a-2d979b0caca5"]
+        }
 
     @pytest.mark.asyncio
     async def test_enqueue_failure_is_reported(self, fake_queue):

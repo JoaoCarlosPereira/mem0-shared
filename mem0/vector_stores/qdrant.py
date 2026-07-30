@@ -25,9 +25,20 @@ from mem0.vector_stores.base import VectorStoreBase
 
 logger = logging.getLogger(__name__)
 
+# Default read guard: hide quarantined + obsolete. Legacy points without ``state``
+# still match the NOT-in branch (missing field is not quarantined/obsolete).
 _ACTIVE_STATE_FILTER = {
     "OR": [
         {"state": "active"},
+        {"NOT": [{"state": {"in": ["quarantined", "obsolete"]}}]},
+    ]
+}
+
+# Audit path: still hide quarantined, but allow obsolete (superseded) points.
+_AUDIT_STATE_FILTER = {
+    "OR": [
+        {"state": "active"},
+        {"state": "obsolete"},
         {"NOT": [{"state": "quarantined"}]},
     ]
 }
@@ -389,11 +400,14 @@ class Qdrant(VectorStoreBase):
                 f"Supported operators: {supported}"
             )
 
-    def _merge_governance_filters(self, filters: dict | None) -> dict:
-        """Inject active-state guard so quarantined points never appear in search."""
+    def _merge_governance_filters(
+        self, filters: dict | None, *, include_obsolete: bool = False
+    ) -> dict:
+        """Inject state guard so quarantined (and by default obsolete) points are hidden."""
+        guard = _AUDIT_STATE_FILTER if include_obsolete else _ACTIVE_STATE_FILTER
         if not filters:
-            return dict(_ACTIVE_STATE_FILTER)
-        return {"AND": [filters, _ACTIVE_STATE_FILTER]}
+            return dict(guard)
+        return {"AND": [filters, guard]}
 
     def backfill_state_payload(self, *, default: str = "active", batch_size: int = 256) -> int:
         """Set ``state`` payload on legacy points missing the field."""
@@ -503,7 +517,7 @@ class Qdrant(VectorStoreBase):
         )
 
     def search(self, query: str, vectors: list, top_k: int = 5, filters: dict = None,
-               shard_key_selector=None) -> list:
+               shard_key_selector=None, include_obsolete: bool = False) -> list:
         """
         Search for similar vectors.
 
@@ -514,11 +528,15 @@ class Qdrant(VectorStoreBase):
             filters (dict, optional): Filters to apply to the search. Defaults to None.
             shard_key_selector (optional): Restrict the search to a dedicated custom
                 shard key when the project was promoted (ADR-002). Defaults to None.
+            include_obsolete (bool): When True, superseded (obsolete) memories are
+                included for audit; quarantined points remain hidden.
 
         Returns:
             list: Search results.
         """
-        query_filter = self._create_filter(self._merge_governance_filters(filters))
+        query_filter = self._create_filter(
+            self._merge_governance_filters(filters, include_obsolete=include_obsolete)
+        )
         query_kwargs = dict(
             collection_name=self.collection_name,
             query=vectors,
@@ -675,18 +693,21 @@ class Qdrant(VectorStoreBase):
         """
         return self.client.get_collection(collection_name=self.collection_name)
 
-    def list(self, filters: dict = None, top_k: int = 100) -> list:
+    def list(self, filters: dict = None, top_k: int = 100, include_obsolete: bool = False) -> list:
         """
         List all vectors in a collection.
 
         Args:
             filters (dict, optional): Filters to apply to the list. Defaults to None.
             top_k (int, optional): Number of vectors to return. Defaults to 100.
+            include_obsolete (bool): When True, include superseded memories.
 
         Returns:
             list: List of vectors.
         """
-        query_filter = self._create_filter(filters) if filters else None
+        query_filter = self._create_filter(
+            self._merge_governance_filters(filters, include_obsolete=include_obsolete)
+        )
         result = self.client.scroll(
             collection_name=self.collection_name,
             scroll_filter=query_filter,

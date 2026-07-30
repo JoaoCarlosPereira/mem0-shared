@@ -73,10 +73,11 @@ mcp = FastMCP("mem0-mcp-server")
 user_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("user_id")
 client_name_var: contextvars.ContextVar[str] = contextvars.ContextVar("client_name")
 
-# Read-path defaults (task_03 / ADR-003): keep top_k bounded so project-scoped
-# reads stay low-latency on the single shared collection.
+# Read-path defaults (task_03 / ADR-003): keep search top_k bounded for latency;
+# list uses a higher default and paginated scroll so project audits are complete.
 DEFAULT_SEARCH_TOP_K = 20
-DEFAULT_LIST_TOP_K = 20
+DEFAULT_LIST_TOP_K = 200
+DEFAULT_LIST_PAGE_SIZE = 256
 
 # Write-path default (task_07): the MCP route always provides a client_name, but
 # a direct tool call may not — fall back to an explicit sentinel for attribution.
@@ -88,15 +89,15 @@ mcp_router = APIRouter(prefix="/mcp")
 # Initialize SSE transport
 sse = SseServerTransport("/mcp/messages/")
 
-@mcp.tool(description="Save content for asynchronous memory extraction in a project. Call this whenever the user shares durable facts or preferences, or asks you to remember something. `project` is REQUIRED and scopes the memory (memories are shared across all machines on the local network). Returns immediately with status accepted — processing is fire-and-forget on the server. Do NOT poll for job status or wait for completion; use search_memory later if needed.")
-async def add_memories(text: str, project: str) -> str:
-    # task_07 / ADR-004: non-blocking write. We validate the input, enqueue the
-    # job and return an immediate accepted ack (no job_id exposed to agents). The slow LLM extraction and
-    # persistence are performed out of band by the background worker (task_06),
-    # so the LLM/memory client is intentionally NOT touched on this request path.
-    #
-    # The hostname is attribution only (ADR-003). Prefer machine bound to the
-    # agent token (set by AuthMiddleware) over the spoofable URL path segment.
+@mcp.tool(description="Save content for asynchronous memory extraction in a project. Call this whenever the user shares durable facts or preferences, or asks you to remember something. `project` is REQUIRED and scopes the memory (memories are shared across all machines on the local network). Optional `supersedes` is a list of memory IDs this write replaces — those are marked obsolete and hidden from search by default. Returns immediately with status accepted after enqueue; extraction runs in the background. Do NOT poll for job status. To find conflicting memories, use search_memory / mark_obsolete — never on this write path.")
+async def add_memories(
+    text: str,
+    project: str,
+    supersedes: list[str] | None = None,
+) -> str:
+    # task_07 / ADR-004: fire-and-forget enqueue only. No embed/search/LLM on
+    # the request path — MCP clients must always get a fast accepted ack when
+    # connected (conflict detection is a separate read tool).
     hostname = _mcp_attribution_hostname()
     client_name = client_name_var.get(None) or DEFAULT_CLIENT_NAME
 
@@ -120,10 +121,19 @@ async def add_memories(text: str, project: str) -> str:
         )
         return blocked
 
-    # Garante cadastro do hostname; grupo vem de users.group_id (Admin), não da URL.
     ensure_user_registered(hostname)
 
     project = project.strip()
+    supersede_ids: list[str] = []
+    if supersedes:
+        for mid in supersedes:
+            if mid is None:
+                continue
+            s = str(mid).strip()
+            if s:
+                supersede_ids.append(s)
+
+    extras = {"supersedes": supersede_ids} if supersede_ids else None
 
     try:
         job_id = write_queue.enqueue(
@@ -134,38 +144,38 @@ async def add_memories(text: str, project: str) -> str:
                 client_name=client_name,
                 text=text,
                 created_at="",
+                extras=extras,
             )
         )
     except Exception as e:
         logging.exception(f"Error enqueuing memory write: {e}")
         return f"Error enqueuing memory write: {e}"
 
-    # Durable attribution/audit record of the write request (task_04 / ADR-003):
-    # who (hostname) originated the write, for which project and via which client.
-    # Persisted to the write_audit_logs table so attribution is queryable and
-    # survives restarts (independent of log scraping). A failure to write the
-    # audit row must NOT fail the (already enqueued) write, so it is isolated.
     _record_write_audit(job_id=job_id, project=project, hostname=hostname,
                          client_name=client_name)
 
     logging.info(
-        "write enqueued job_id=%s project=%s hostname=%s client=%s auth_method=%s auth_user=%s",
+        "write enqueued job_id=%s project=%s hostname=%s client=%s auth_method=%s auth_user=%s supersedes=%s",
         job_id,
         project,
         hostname,
         client_name,
         auth_method_var.get() or "legacy",
         auth_user_var.get() or "-",
+        supersede_ids or None,
     )
-    return json.dumps({
+
+    payload = {
         "status": "accepted",
         "message": (
             "Memory received successfully. The server will process and store it "
             "in the background — no further action needed."
         ),
         "project": project,
-    })
-
+    }
+    if supersede_ids:
+        payload["supersedes"] = supersede_ids
+    return json.dumps(payload, indent=2)
 
 
 def _usage_user_id() -> str:
@@ -263,35 +273,90 @@ def _record_write_audit(*, job_id, project, hostname, client_name):
 
 
 
+def _unwrap_vector_list(raw) -> list:
+    """Normalize vector_store.list / Qdrant scroll return to a flat points list."""
+    if raw is None:
+        return []
+    if isinstance(raw, (tuple, list)) and len(raw) > 0 and isinstance(raw[0], (list, tuple)):
+        return list(raw[0] or [])
+    if isinstance(raw, (list, tuple)):
+        return list(raw)
+    return []
+
+
+def _point_to_memory_result(point) -> dict:
+    payload = getattr(point, "payload", None) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    return {
+        "id": str(getattr(point, "id", None) or ""),
+        "memory": payload.get("data"),
+        "hash": payload.get("hash"),
+        "created_at": payload.get("created_at"),
+        "updated_at": payload.get("updated_at"),
+        "project": payload.get("project"),
+        "owner": author_hostname_from_payload(payload),
+    }
+
+
+def _scroll_project_points(
+    memory_client,
+    project: str | None,
+    *,
+    limit: int,
+    include_obsolete: bool = False,
+) -> list:
+    """Paginated scroll of the active collection, optionally filtered by project.
+
+    Uses the Qdrant client directly so list is not truncated to a single page
+    (vector_store.list only returns the first scroll page). Applies the same
+    governance state filter as search (hides quarantined / obsolete by default).
+    """
+    bind_active_collection(memory_client)
+    vs = memory_client.vector_store
+    filters = {"project": project} if project else None
+    merged = vs._merge_governance_filters(filters, include_obsolete=include_obsolete)
+    scroll_filter = vs._create_filter(merged)
+    points: list = []
+    offset = None
+    page = max(1, min(DEFAULT_LIST_PAGE_SIZE, limit))
+    while len(points) < limit:
+        batch_limit = min(page, limit - len(points))
+        records, offset = vs.client.scroll(
+            collection_name=vs.collection_name,
+            scroll_filter=scroll_filter,
+            limit=batch_limit,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False,
+        )
+        if not records:
+            break
+        points.extend(records)
+        if offset is None:
+            break
+    return points
+
+
 async def _fetch_all_memories(memory_client, top_k: int = DEFAULT_LIST_TOP_K) -> list:
     """Lista memórias de toda a coleção (sem embedding) — fallback quando o embedder falha."""
-    bind_active_collection(memory_client)
-    raw = await anyio.to_thread.run_sync(
-        lambda: memory_client.vector_store.list(filters=None, top_k=top_k)
+    points = await anyio.to_thread.run_sync(
+        lambda: _scroll_project_points(memory_client, None, limit=top_k)
     )
-    points = raw
-    if isinstance(raw, (tuple, list)) and len(raw) > 0 and isinstance(raw[0], (list, tuple)):
-        points = raw[0]
-    results = []
-    for p in points or []:
-        payload = getattr(p, "payload", {}) or {}
-        results.append({
-            "id": getattr(p, "id", None),
-            "memory": payload.get("data"),
-            "hash": payload.get("hash"),
-            "created_at": payload.get("created_at"),
-            "updated_at": payload.get("updated_at"),
-            "project": payload.get("project"),
-            "owner": author_hostname_from_payload(payload),
-        })
-    return results
+    return [_point_to_memory_result(p) for p in points]
 
 
-@mcp.tool(description="Search stored memories across all projects, ranked by relevance and recency. The `project` parameter is a soft hint (slight boost for matching names) — wrong or slightly different project names do not exclude results. Memories are shared across all machines on the local network.")
-async def search_memory(query: str, project: str, rerank: bool = False) -> str:
+@mcp.tool(description="Search stored memories across all projects, ranked by relevance and recency. By default `project` is a soft hint (slight boost for matching names) — wrong or slightly different project names do not exclude results. Pass `strict_project=true` to hard-filter to that exact project name only. Obsolete (superseded) memories are hidden by default; pass `include_obsolete=true` for audit. Memories are shared across all machines on the local network.")
+async def search_memory(
+    query: str,
+    project: str,
+    rerank: bool = False,
+    strict_project: bool = False,
+    include_obsolete: bool = False,
+) -> str:
     # NOTE (task_03 / ADR-003): semantic reads are GLOBAL across projects and SHARED
-    # across all machines. ``project`` is a ranking hint only (small boost for name
-    # match); relevance + recency dominate ordering. We intentionally do NOT filter
+    # across all machines by default. ``project`` is a ranking hint only (small boost
+    # for name match) unless ``strict_project`` is true. We intentionally do NOT filter
     # by ``user_id`` (hostname is write-path attribution only).
     if not project:
         return "Error: project not provided"
@@ -306,8 +371,16 @@ async def search_memory(query: str, project: str, rerank: bool = False) -> str:
 
         bind_active_collection(memory_client)
 
+        search_filters = {"project": project} if strict_project else None
         filter_hash = hashlib.sha256(
-            json.dumps({"mode": "global", "preferred_project": project}, sort_keys=True).encode()
+            json.dumps(
+                {
+                    "mode": "strict" if strict_project else "global",
+                    "preferred_project": project,
+                    "include_obsolete": bool(include_obsolete),
+                },
+                sort_keys=True,
+            ).encode()
         ).hexdigest()[:16]
 
         cached_hits = read_cache.get_search(
@@ -325,13 +398,9 @@ async def search_memory(query: str, project: str, rerank: bool = False) -> str:
             else:
                 EMBED_CACHE_MISS.inc()
                 try:
-                    # Atribuição de tokens da embedding de busca (task_06);
-                    # cache hit não consome tokens, por isso só aqui.
                     with usage_attribution(
                         project=project,
                         agent=client_name_var.get(None) or DEFAULT_CLIENT_NAME,
-                        # Pessoa autenticada quando o agente usa token (ADR-006);
-                        # hostname legado caso contrário.
                         user_id=_usage_user_id(),
                         operation_type="search",
                     ):
@@ -341,12 +410,30 @@ async def search_memory(query: str, project: str, rerank: bool = False) -> str:
                     read_cache.set_embedding(embed_model, query, embeddings)
                 except Exception as embed_err:  # noqa: BLE001
                     logging.warning(
-                        "Semantic search unavailable (%s); falling back to global list",
+                        "Semantic search unavailable (%s); falling back to %s list",
                         embed_err,
+                        "project" if strict_project else "global",
                     )
-                    results = await _fetch_all_memories(
-                        memory_client, DEFAULT_SEARCH_TOP_K
-                    )
+                    if strict_project:
+                        points = await anyio.to_thread.run_sync(
+                            lambda: _scroll_project_points(
+                                memory_client,
+                                project,
+                                limit=DEFAULT_SEARCH_TOP_K,
+                                include_obsolete=include_obsolete,
+                            )
+                        )
+                        results = [_point_to_memory_result(p) for p in points]
+                    else:
+                        points = await anyio.to_thread.run_sync(
+                            lambda: _scroll_project_points(
+                                memory_client,
+                                None,
+                                limit=DEFAULT_SEARCH_TOP_K,
+                                include_obsolete=include_obsolete,
+                            )
+                        )
+                        results = [_point_to_memory_result(p) for p in points]
                     rank_search_results(
                         results,
                         preferred_project=project,
@@ -362,8 +449,9 @@ async def search_memory(query: str, project: str, rerank: bool = False) -> str:
                     query=query,
                     vectors=embeddings,
                     top_k=DEFAULT_SEARCH_TOP_K,
-                    filters=None,
+                    filters=search_filters,
                     shard_key_selector=None,
+                    include_obsolete=include_obsolete,
                 )
             )
 
@@ -379,14 +467,12 @@ async def search_memory(query: str, project: str, rerank: bool = False) -> str:
                     "project": payload.get("project"),
                     "owner": author_hostname_from_payload(payload),
                     "score": score,
+                    "state": payload.get("state"),
                 })
             read_cache.set_search(
                 project, query, DEFAULT_SEARCH_TOP_K, filter_hash, results
             )
 
-        # Ranqueamento aplicado APÓS o cache (group-agnóstico): solicitantes de grupos
-        # diferentes compartilham o mesmo conjunto cacheado, mas recebem ordenações
-        # próprias conforme o seu grupo (ADR-003).
         rank_search_results(
             results, preferred_project=project, requester_group=requester_group
         )
@@ -399,71 +485,100 @@ async def search_memory(query: str, project: str, rerank: bool = False) -> str:
         SEARCH_LATENCY.observe(time.perf_counter() - started)
 
 
-@mcp.tool(description="List stored memories scoped by project (shared across all machines).")
-async def list_memories(project: str) -> str:
-    # NOTE (task_03 / ADR-003): listing is scoped by `project` and SHARED across
-    # all machines on the local network. We do NOT filter by `user_id`. The read
-    # path is direct against the vector store (no write queue) and reuses the
-    # memory client (no per-call reconnect).
+@mcp.tool(description="List stored memories scoped by project (hard filter; shared across all machines). Returns matching points up to `limit` (default 200) via paginated scroll. Obsolete memories are hidden by default; pass `include_obsolete=true` for audit.")
+async def list_memories(
+    project: str,
+    limit: int = DEFAULT_LIST_TOP_K,
+    include_obsolete: bool = False,
+) -> str:
     if not project:
         return "Error: project not provided"
 
+    project = project.strip()
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = DEFAULT_LIST_TOP_K
+    limit = max(1, min(limit, 1000))
+
     requester_group = requester_group_for_mcp(user_id_var.get(None))
 
-    # Get memory client safely (singleton/reused; no reconnect per call)
     memory_client = get_memory_client_safe()
     if not memory_client:
         return "Error: Memory system is currently unavailable. Please try again later."
 
     try:
-        # Route to the active collection (blue-green); list scans the collection
-        # with the project filter (ADR-003).
-        bind_active_collection(memory_client)
-
-        # Project-only filter: shared read across hosts (no user_id restriction).
-        filters = {
-            "project": project,
-        }
-
-        raw = await anyio.to_thread.run_sync(
-            lambda: memory_client.vector_store.list(
-                filters=filters,
-                top_k=DEFAULT_LIST_TOP_K,
+        points = await anyio.to_thread.run_sync(
+            lambda: _scroll_project_points(
+                memory_client,
+                project,
+                limit=limit,
+                include_obsolete=include_obsolete,
             )
         )
-
-        # vector_store.list may return a (points, next_page_offset) tuple or a
-        # flat list depending on the backend; unwrap one level if needed.
-        points = raw
-        if isinstance(raw, (tuple, list)) and len(raw) > 0 and isinstance(raw[0], (list, tuple)):
-            points = raw[0]
-
-        results = []
-        for p in points:
-            payload = getattr(p, "payload", {}) or {}
-            results.append({
-                "id": getattr(p, "id", None),
-                "memory": payload.get("data"),
-                "hash": payload.get("hash"),
-                "created_at": payload.get("created_at"),
-                "updated_at": payload.get("updated_at"),
-                "project": payload.get("project"),
-                "owner": author_hostname_from_payload(payload),
-            })
+        results = [_point_to_memory_result(p) for p in points]
 
         rank_search_results(
             results, preferred_project=project, requester_group=requester_group
         )
 
-        return json.dumps({"results": results}, indent=2)
+        return json.dumps(
+            {"results": results, "total": len(results), "project": project},
+            indent=2,
+        )
     except Exception as e:
         logging.exception(f"Error getting memories: {e}")
         return f"Error getting memories: {e}"
 
 
-@mcp.tool(description="Delete specific memories by their IDs")
+@mcp.tool(description="Mark specific memories as obsolete (superseded) without deleting them. They disappear from search/list by default and remain recoverable via include_obsolete=true. Pass optional superseded_by with the correcting memory ID.")
+async def mark_obsolete(
+    memory_ids: list[str],
+    superseded_by: str | None = None,
+) -> str:
+    from app.utils.supersedes import mark_points_obsolete
+
+    if not memory_ids:
+        return "Error: memory_ids not provided"
+
+    memory_client = get_memory_client_safe()
+    if not memory_client:
+        return "Error: Memory system is currently unavailable. Please try again later."
+
+    ids = [str(m).strip() for m in memory_ids if m and str(m).strip()]
+    if not ids:
+        return "Error: memory_ids not provided"
+
+    try:
+        out = await anyio.to_thread.run_sync(
+            lambda: mark_points_obsolete(
+                memory_client,
+                ids,
+                superseded_by=(superseded_by.strip() if superseded_by else None),
+            )
+        )
+        # Best-effort cache bust for common projects of updated points is hard
+        # without payloads; callers should re-search.
+        return json.dumps(
+            {
+                "status": "ok",
+                "updated": out.get("updated") or [],
+                "missing": out.get("missing") or [],
+            },
+            indent=2,
+        )
+    except Exception as e:
+        logging.exception("mark_obsolete failed")
+        return f"Error marking obsolete: {e}"
+
+
+@mcp.tool(description="Delete specific memories by their IDs from the shared vector store (Qdrant). IDs may come from search_memory or list_memories — no project parameter needed. Respects MEM0_ALLOW_MEMORY_DELETE / MEM0_ALLOW_BULK_DELETE.")
 async def delete_memories(memory_ids: list[str]) -> str:
     from app.utils.deletion_guard import check_bulk_delete_allowed, check_memory_delete_allowed
+    from app.utils.partitioning import bind_active_collection as _bind
+
+    if not memory_ids:
+        return "Error: memory_ids not provided"
 
     if len(memory_ids) > 1:
         blocked = check_bulk_delete_allowed("bulk_delete")
@@ -475,66 +590,112 @@ async def delete_memories(memory_ids: list[str]) -> str:
     uid = resolve_hostname(user_id_var.get(None))
     client_name = client_name_var.get(None) or DEFAULT_CLIENT_NAME
 
-    # Get memory client safely
     memory_client = get_memory_client_safe()
     if not memory_client:
         return "Error: Memory system is currently unavailable. Please try again later."
 
+    # Normalize IDs; reject obviously invalid values early.
+    requested: list[str] = []
+    for mid in memory_ids:
+        if mid is None:
+            continue
+        text = str(mid).strip()
+        if text:
+            requested.append(text)
+    if not requested:
+        return "Error: memory_ids not provided"
+
     try:
-        db = SessionLocal()
-        try:
-            # Get or create user and app
-            user, app = get_user_and_app(db, user_id=uid, app_id=client_name)
+        _bind(memory_client)
+        deleted_ids: list[str] = []
+        missing_ids: list[str] = []
+        vs = memory_client.vector_store
 
-            # Convert string IDs to UUIDs and filter accessible ones
-            requested_ids = [uuid.UUID(mid) for mid in memory_ids]
-            user_memories = db.query(Memory).filter(Memory.user_id == user.id).all()
-            accessible_memory_ids = [memory.id for memory in user_memories if check_memory_access_permissions(db, memory, app.id)]
+        for memory_id in requested:
+            # Confirm the point exists in Qdrant (MCP writes never hit SQL memories).
+            try:
+                found = await anyio.to_thread.run_sync(
+                    lambda mid=memory_id: vs.client.retrieve(
+                        collection_name=vs.collection_name,
+                        ids=[mid],
+                        with_payload=False,
+                        with_vectors=False,
+                    )
+                )
+            except Exception as retrieve_error:  # noqa: BLE001
+                logging.warning(
+                    "Failed to retrieve memory %s before delete: %s",
+                    memory_id,
+                    retrieve_error,
+                )
+                found = []
 
-            # Only delete memories that are both requested and accessible
-            ids_to_delete = [mid for mid in requested_ids if mid in accessible_memory_ids]
+            if not found:
+                missing_ids.append(memory_id)
+                continue
 
-            if not ids_to_delete:
-                return "Error: No accessible memories found with provided IDs"
+            try:
+                await anyio.to_thread.run_sync(
+                    lambda mid=memory_id: memory_client.delete(mid)
+                )
+                deleted_ids.append(memory_id)
+            except Exception as delete_error:
+                logging.warning(
+                    "Failed to delete memory %s from vector store: %s",
+                    memory_id,
+                    delete_error,
+                )
+                missing_ids.append(memory_id)
 
-            # Delete from vector store
-            for memory_id in ids_to_delete:
-                try:
-                    memory_client.delete(str(memory_id))
-                except Exception as delete_error:
-                    logging.warning(f"Failed to delete memory {memory_id} from vector store: {delete_error}")
-
-            # Update each memory's state and create history entries
-            now = datetime.datetime.now(datetime.UTC)
-            for memory_id in ids_to_delete:
-                memory = db.query(Memory).filter(Memory.id == memory_id).first()
-                if memory:
-                    # Update memory state
+        # Best-effort SQL catalog sync when a UI/API row exists for the same ID.
+        if deleted_ids:
+            db = SessionLocal()
+            try:
+                user, app = get_user_and_app(db, user_id=uid, app_id=client_name)
+                now = datetime.datetime.now(datetime.UTC)
+                for memory_id in deleted_ids:
+                    try:
+                        mem_uuid = uuid.UUID(memory_id)
+                    except ValueError:
+                        continue
+                    memory = db.query(Memory).filter(Memory.id == mem_uuid).first()
+                    if not memory:
+                        continue
                     memory.state = MemoryState.deleted
                     memory.deleted_at = now
-
-                    # Create history entry
-                    history = MemoryStatusHistory(
-                        memory_id=memory_id,
-                        changed_by=user.id,
-                        old_state=MemoryState.active,
-                        new_state=MemoryState.deleted
+                    db.add(
+                        MemoryStatusHistory(
+                            memory_id=mem_uuid,
+                            changed_by=user.id,
+                            old_state=MemoryState.active,
+                            new_state=MemoryState.deleted,
+                        )
                     )
-                    db.add(history)
-
-                    # Create access log entry
-                    access_log = MemoryAccessLog(
-                        memory_id=memory_id,
-                        app_id=app.id,
-                        access_type="delete",
-                        metadata_={"operation": "delete_by_id"}
+                    db.add(
+                        MemoryAccessLog(
+                            memory_id=mem_uuid,
+                            app_id=app.id,
+                            access_type="delete",
+                            metadata_={"operation": "delete_by_id", "source": "mcp"},
+                        )
                     )
-                    db.add(access_log)
+                db.commit()
+            except Exception:  # noqa: BLE001
+                logging.exception("SQL catalog sync after MCP delete failed")
+                db.rollback()
+            finally:
+                db.close()
 
-            db.commit()
-            return f"Successfully deleted {len(ids_to_delete)} memories"
-        finally:
-            db.close()
+        if not deleted_ids:
+            return (
+                "Error: No accessible memories found with provided IDs"
+                + (f" (missing={missing_ids})" if missing_ids else "")
+            )
+
+        msg = f"Successfully deleted {len(deleted_ids)} memories"
+        if missing_ids:
+            msg += f" ({len(missing_ids)} not found: {missing_ids})"
+        return msg
     except Exception as e:
         logging.exception(f"Error deleting memories: {e}")
         return f"Error deleting memories: {e}"

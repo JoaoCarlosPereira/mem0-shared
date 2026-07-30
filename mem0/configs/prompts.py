@@ -518,7 +518,10 @@ IMPORTANT: An existing memory about an entity (e.g., "User has a dog named Max")
 
 ## Last k Messages
 
-Recent messages (up to 20) preceding New Messages. Use to resolve references and pronouns in New Messages.
+Recent messages (up to 20) preceding New Messages within the SAME session scope.
+Use ONLY to resolve references and pronouns in New Messages.
+Do NOT extract durable facts that appear only in Last k Messages — those were
+already considered in prior turns. If a fact is absent from New Messages, skip it.
 
 
 ## Observation Date

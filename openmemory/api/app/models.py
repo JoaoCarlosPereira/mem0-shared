@@ -111,6 +111,8 @@ class WriteQueueJob(Base):
     hostname = Column(String, nullable=False, index=True)
     client_name = Column(String, nullable=True)
     text = Column(Text, nullable=False)
+    # Optional write options (e.g. {"supersedes": ["uuid", ...]}) from MCP add_memories.
+    extras = Column(JSON, nullable=True)
     status = Column(Enum(WriteQueueStatus),
                     default=WriteQueueStatus.queued,
                     nullable=False,

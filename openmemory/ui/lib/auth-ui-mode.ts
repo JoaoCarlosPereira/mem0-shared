@@ -13,14 +13,29 @@ function truthy(v: string | undefined): boolean | null {
   return null;
 }
 
+function resolvedPublic(value: string | undefined, placeholder: string): string {
+  const v = (value || "").trim();
+  // entrypoint.sh leaves the key name as value until replaced; treat as empty.
+  if (!v || v === placeholder) return "";
+  return v;
+}
+
 export function isAuthUiRequired(): boolean {
   const flag =
     truthy(process.env.AUTH_UI_REQUIRED) ??
-    truthy(process.env.NEXT_PUBLIC_AUTH_UI_REQUIRED);
+    truthy(
+      resolvedPublic(
+        process.env.NEXT_PUBLIC_AUTH_UI_REQUIRED,
+        "NEXT_PUBLIC_AUTH_UI_REQUIRED",
+      ) || undefined,
+    );
   if (flag !== null) return flag;
   const googleId = (
     process.env.GOOGLE_CLIENT_ID ||
-    process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
+    resolvedPublic(
+      process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
+      "NEXT_PUBLIC_GOOGLE_CLIENT_ID",
+    ) ||
     ""
   ).trim();
   return Boolean(googleId);

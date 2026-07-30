@@ -231,6 +231,7 @@ class WriteWorker:
                         WRITE_WORKER_SUCCESS.inc()
                         return
                     self._maybe_dual_write(client, result)
+                    self._apply_supersedes(client, job, result)
                     self._catalog_project(job)
                     read_cache.invalidate_search(job.project)
                     self._queue.mark_done(job.id)
@@ -281,16 +282,22 @@ class WriteWorker:
         project. Supports both async and sync clients (the OpenMemory default
         client is sync, so it is run in a thread to avoid blocking the loop).
         """
+        metadata = {
+            "project": job.project,
+            "hostname": job.hostname,
+            "source_app": "openmemory",
+            "mcp_client": job.client_name,
+            "state": "active",
+        }
+        extras = job.extras if isinstance(job.extras, dict) else {}
+        supersedes = extras.get("supersedes") or []
+        if isinstance(supersedes, list) and supersedes:
+            metadata["supersedes"] = [str(x) for x in supersedes if x]
         kwargs = dict(
             user_id=job.hostname,
             project=job.project,
             infer=infer,
-            metadata={
-                "project": job.project,
-                "hostname": job.hostname,
-                "source_app": "openmemory",
-                "mcp_client": job.client_name,
-            },
+            metadata=metadata,
         )
         # Writes target the active collection (blue-green, ADR-003).
         bind_active_collection(client)
@@ -352,6 +359,38 @@ class WriteWorker:
         except Exception as e:  # noqa: BLE001 - never fail the job on mirror error
             DUAL_WRITE_ERRORS.inc()
             logger.warning("dual-write to %s failed: %s", target, e)
+
+    def _apply_supersedes(self, client, job: WriteJob, result) -> None:
+        """Mark superseded IDs obsolete after a successful write (best-effort)."""
+        extras = job.extras if isinstance(job.extras, dict) else {}
+        supersedes = extras.get("supersedes") or []
+        if not isinstance(supersedes, list) or not supersedes:
+            return
+        new_ids = [
+            r.get("id")
+            for r in (result or {}).get("results", []) or []
+            if isinstance(r, dict)
+            and r.get("id")
+            and (r.get("event") or "ADD").upper() != "DELETE"
+        ]
+        superseded_by = new_ids[0] if new_ids else None
+        try:
+            from app.utils.supersedes import mark_points_obsolete
+
+            out = mark_points_obsolete(
+                client, supersedes, superseded_by=superseded_by
+            )
+            logger.info(
+                "supersedes applied job_id=%s project=%s updated=%s missing=%s",
+                job.id,
+                job.project,
+                out.get("updated"),
+                out.get("missing"),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "supersedes apply failed job_id=%s project=%s", job.id, job.project
+            )
 
     def _catalog_project(self, job: WriteJob) -> None:
         """Upsert the project catalog on the first write of each project."""

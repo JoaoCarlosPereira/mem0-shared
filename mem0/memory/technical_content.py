@@ -287,11 +287,31 @@ def _combined_memory_corpus(memories: list[dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
+def _summary_related_to_segment(summary: str, segment_content: str) -> bool:
+    """True when a non-vague summary already shares distinctive tokens with the segment."""
+    if not summary or not segment_content:
+        return False
+    if segment_preserved(segment_content, summary):
+        return True
+    significant = _extract_significant_substrings(segment_content)
+    if not significant:
+        return False
+    summary_lower = summary.lower()
+    hits = sum(1 for item in significant if item.lower() in summary_lower)
+    return hits >= max(1, min(2, len(significant) // 3))
+
+
 def enrich_extracted_memories(
     extracted_memories: list[dict[str, Any]] | None,
     source_text: str,
 ) -> list[dict[str, Any]]:
-    """Augment LLM extractions so technical source content is not lost."""
+    """Augment LLM extractions so technical source content is not lost.
+
+    Each technical segment is attached at most once. Unrelated narrative
+    summaries (e.g. bled from another project's Last-k history) must not receive
+    grafted ``--- Original technical content ---`` blocks from the current
+    source — those segments become standalone technical_artifact memories.
+    """
     memories = list(extracted_memories or [])
     if not source_text or not has_technical_content(source_text):
         return memories
@@ -300,49 +320,80 @@ def enrich_extracted_memories(
     if not segments:
         return memories
 
+    used_segment_indexes: set[int] = set()
+
     for mem in memories:
         raw = (mem.get("raw_content") or "").strip()
         text = (mem.get("text") or "").strip()
         if raw:
             mem["text"] = format_memory_with_raw(text, raw)
             mem.setdefault("memory_type", "technical")
+            for idx, segment in enumerate(segments):
+                if idx in used_segment_indexes:
+                    continue
+                if segment_preserved(
+                    segment["content"],
+                    f"{text}\n{raw}",
+                    segment_type=segment.get("type"),
+                ):
+                    used_segment_indexes.add(idx)
             continue
 
-        attached = False
-        for segment in segments:
+        # Mark segments already preserved in this summary as used.
+        for idx, segment in enumerate(segments):
+            if idx in used_segment_indexes:
+                continue
             if segment_preserved(
                 segment["content"],
                 text,
                 segment_type=segment.get("type"),
             ):
+                used_segment_indexes.add(idx)
+
+        # Only graft raw onto vague summaries, or summaries clearly about the
+        # same segment. Never pair an unrelated narrative with technical raw.
+        attach_idx = None
+        for idx, segment in enumerate(segments):
+            if idx in used_segment_indexes:
                 continue
-            mem["raw_content"] = segment["content"]
-            replacement = text
-            if is_vague_technical_summary(text):
-                replacement = re.sub(
-                    r"user (?:sent|shared|provided|submitted|uploaded|pasted|attached|encountered|had|experienced|reported)\b[^.]*\.?",
-                    "",
-                    text,
-                    flags=re.IGNORECASE,
-                ).strip()
-            mem["text"] = format_memory_with_raw(
-                replacement or f"User shared {segment['type'].replace('_', ' ')} for future reference.",
-                segment["content"],
-            )
-            mem["memory_type"] = "technical"
-            attached = True
-            break
-        if attached:
+            if is_vague_technical_summary(text) or _summary_related_to_segment(
+                text, segment["content"]
+            ):
+                attach_idx = idx
+                break
+
+        if attach_idx is None:
             continue
+
+        segment = segments[attach_idx]
+        mem["raw_content"] = segment["content"]
+        replacement = text
+        if is_vague_technical_summary(text):
+            replacement = re.sub(
+                r"user (?:sent|shared|provided|submitted|uploaded|pasted|attached|encountered|had|experienced|reported)\b[^.]*\.?",
+                "",
+                text,
+                flags=re.IGNORECASE,
+            ).strip()
+        mem["text"] = format_memory_with_raw(
+            replacement
+            or f"User shared {segment['type'].replace('_', ' ')} for future reference.",
+            segment["content"],
+        )
+        mem["memory_type"] = "technical"
+        used_segment_indexes.add(attach_idx)
 
     corpus = _combined_memory_corpus(memories)
     next_id = len(memories)
-    for segment in segments:
+    for idx, segment in enumerate(segments):
+        if idx in used_segment_indexes:
+            continue
         if segment_preserved(
             segment["content"],
             corpus,
             segment_type=segment.get("type"),
         ):
+            used_segment_indexes.add(idx)
             continue
         label = {
             "code_fence": "code block",
@@ -363,6 +414,7 @@ def enrich_extracted_memories(
                 "memory_type": "technical_artifact",
             }
         )
+        used_segment_indexes.add(idx)
         corpus = _combined_memory_corpus(memories)
         next_id += 1
 

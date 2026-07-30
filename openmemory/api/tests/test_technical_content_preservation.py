@@ -201,6 +201,41 @@ class TestEnrichExtractedMemories:
         assert "Connection refused" in combined
         assert "localhost:11434" in combined
 
+    def test_does_not_graft_technical_raw_onto_unrelated_summaries(self):
+        """Regression: session bleed produced Pricing summaries + SELECT raw grafted on."""
+        source = (
+            "SELECT LENTO (TESOURARIA x CONTABIL)\n\n"
+            "PROBLEMA: query de auditoria de duplicidades em TB_INTTESOURARIACONTABILCAD "
+            "levava HORAS. CORRECAO: trocar IS NOT DISTINCT FROM por =.\n"
+        )
+        extracted = [
+            {
+                "id": "0",
+                "text": (
+                    "O alinhamento com a equipe de Pricing para o uso do MS-Tributação "
+                    "foi agendado para 29/07/2026 via Discord."
+                ),
+                "attributed_to": "user",
+            },
+            {
+                "id": "1",
+                "text": (
+                    "O projeto MS-Tributação está sendo desenvolvido no repositório "
+                    "sysmo-api-tributacao usando Quarkus/Java 17."
+                ),
+                "attributed_to": "user",
+            },
+        ]
+        result = enrich_extracted_memories(extracted, source)
+        unrelated = [m for m in result if "Pricing" in m.get("text", "") or "MS-Tributação" in m.get("text", "")]
+        assert unrelated
+        for mem in unrelated:
+            assert RAW_CONTENT_MARKER not in mem["text"]
+            assert "TB_INTTESOURARIACONTABILCAD" not in mem["text"]
+        combined = "\n".join(m.get("text", "") + m.get("raw_content", "") for m in result)
+        assert "TB_INTTESOURARIACONTABILCAD" in combined
+        assert any(m.get("memory_type") == "technical_artifact" for m in result)
+
 
 class TestPromptIntegration:
     def test_additive_prompt_documents_raw_content_field(self):

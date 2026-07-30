@@ -434,9 +434,15 @@ def _build_filters_and_metadata(
 
 
 def _build_session_scope(filters):
-    """Build deterministic session scope string from entity IDs."""
+    """Build deterministic session scope string from entity IDs.
+
+    Includes ``project`` when present so concurrent OpenMemory writes for the
+    same hostname (user_id) but different projects do not share Last-k message
+    history. Without project isolation, extraction prompts can bleed summaries
+    across projects while technical raw segments stay correct.
+    """
     parts = []
-    for key in sorted(["user_id", "agent_id", "run_id"]):
+    for key in sorted(["user_id", "agent_id", "run_id", "project"]):
         val = filters.get(key)
         if val:
             parts.append(f"{key}={val}")

@@ -55,6 +55,7 @@ _MCP_WRITE_TOOLS = frozenset(
         "delete_all_memories",
         "delete_entities",
         "remember",
+        "mark_obsolete",
     }
 )
 _MCP_SKIP_LIMIT_METHODS = frozenset({"initialize", "notifications/initialized", "tools/list", "ping"})

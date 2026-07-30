@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { signIn } from "next-auth/react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Image from "next/image";
@@ -19,6 +19,18 @@ const REDIRECT_ERROR_MESSAGES: Record<string, string> = {
   Default: "Não foi possível concluir o login. Tente novamente.",
 };
 
+function envGoogleConfigured(): boolean {
+  return Boolean(
+    (
+      process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
+      process.env.GOOGLE_CLIENT_ID ||
+      ""
+    ).trim() &&
+      // Placeholder still unreplaced by entrypoint → treat as missing.
+      process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID !== "NEXT_PUBLIC_GOOGLE_CLIENT_ID",
+  );
+}
+
 function LoginContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -26,10 +38,32 @@ function LoginContent() {
   const error = redirectError
     ? REDIRECT_ERROR_MESSAGES[redirectError] ?? REDIRECT_ERROR_MESSAGES.Default
     : null;
-  const legacy = isLegacyAuthUi();
-  const googleAvailable = isAuthUiRequired() || Boolean(
-    (process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || "").trim(),
-  );
+  // Runtime check: NextAuth providers are server-configured even when the
+  // client bundle lost NEXT_PUBLIC_* during an image rebuild without placeholders.
+  const [providerGoogle, setProviderGoogle] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/auth/providers")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!cancelled) setProviderGoogle(Boolean(data?.google));
+      })
+      .catch(() => {
+        if (!cancelled) setProviderGoogle(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const googleAvailable =
+    isAuthUiRequired() || envGoogleConfigured() || providerGoogle === true;
+  // Only show legacy LAN skip when Google is confirmed unavailable (or still loading
+  // with no env signal). Prefer Google button whenever the provider exists.
+  const legacy =
+    providerGoogle === false && isLegacyAuthUi() && !envGoogleConfigured();
+  const showGoogle =
+    googleAvailable || (providerGoogle === null && !isLegacyAuthUi());
 
   return (
     <div className="fixed inset-0 z-50 flex min-h-screen items-center justify-center bg-slate-950/95 backdrop-blur-sm">
@@ -59,7 +93,7 @@ function LoginContent() {
               Login Google desabilitado neste ambiente (modo legado LAN).
             </p>
           )}
-          {!legacy && googleAvailable && (
+          {showGoogle && (
             <Button
               className="min-h-11 w-full rounded-xl py-6 text-sm font-black uppercase tracking-widest shadow-xl shadow-blue-600/20"
               onClick={() => signIn("google", { redirectTo: "/" })}

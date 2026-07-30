@@ -59,6 +59,22 @@ def _make_client(search_return=None, list_return=None):
     client.embedding_model.embed.return_value = [0.1, 0.2, 0.3]
     client.vector_store.search.return_value = search_return or []
     client.vector_store.list.return_value = list_return or []
+    client.vector_store.collection_name = "openmemory"
+    # Mirror real Qdrant merge so scroll gets a filter dict.
+    from mem0.vector_stores.qdrant import Qdrant
+
+    client.vector_store._merge_governance_filters = (
+        lambda filters, include_obsolete=False: Qdrant._merge_governance_filters(
+            client.vector_store, filters, include_obsolete=include_obsolete
+        )
+    )
+    client.vector_store._create_filter = (
+        lambda filters: filters  # pass-through for assertions
+    )
+    points = list_return
+    if isinstance(list_return, tuple):
+        points = list_return[0]
+    client.vector_store.client.scroll.return_value = (points or [], None)
     return client
 
 
@@ -190,6 +206,14 @@ class TestSearchMemoryProjectScope:
         assert "Error searching memory" in out
 
     @pytest.mark.asyncio
+    async def test_search_strict_project_hard_filters(self, patched_client):
+        client, _ = patched_client
+        client.vector_store.search.return_value = [_hit("1", "coffee", "A")]
+        await search_memory("coffee", project="A", strict_project=True)
+        filters = client.vector_store.search.call_args.kwargs["filters"]
+        assert filters == {"project": "A"}
+
+    @pytest.mark.asyncio
     async def test_search_reuses_client_no_reconnect(self, patched_client):
         client, getter = patched_client
         await search_memory("q1", project="A")
@@ -206,38 +230,48 @@ class TestListMemoriesProjectScope:
     @pytest.mark.asyncio
     async def test_list_scoped_to_project(self, patched_client):
         client, _ = patched_client
-        client.vector_store.list.return_value = [
-            _point("1", "m1", "A"),
-            _point("2", "m2", "A"),
-        ]
+        client.vector_store.client.scroll.return_value = (
+            [_point("1", "m1", "A"), _point("2", "m2", "A")],
+            None,
+        )
         mcp_server.user_id_var.set("maqA")
         out = await list_memories(project="A")
         data = json.loads(out)
 
-        filters = client.vector_store.list.call_args.kwargs["filters"]
-        assert filters == {"project": "A"}
+        scroll_kwargs = client.vector_store.client.scroll.call_args.kwargs
+        scroll_filter = scroll_kwargs["scroll_filter"]
+        # Governance merge wraps project filter; project must still be present.
+        assert "project" in str(scroll_filter) or (
+            isinstance(scroll_filter, dict)
+            and (
+                scroll_filter.get("project") == "A"
+                or "A" in json.dumps(scroll_filter)
+            )
+        )
         assert {r["id"] for r in data["results"]} == {"1", "2"}
+        assert data["total"] == 2
+        assert data["project"] == "A"
 
     @pytest.mark.asyncio
     async def test_list_does_not_filter_by_user_id(self, patched_client):
         client, _ = patched_client
         mcp_server.user_id_var.set("maqA")
         await list_memories(project="A")
-        filters = client.vector_store.list.call_args.kwargs["filters"]
-        assert "user_id" not in filters
+        scroll_filter = client.vector_store.client.scroll.call_args.kwargs["scroll_filter"]
+        assert "user_id" not in (scroll_filter or {})
 
     @pytest.mark.asyncio
     async def test_list_applies_default_top_k(self, patched_client):
         client, _ = patched_client
         await list_memories(project="A")
-        assert client.vector_store.list.call_args.kwargs["top_k"] == DEFAULT_LIST_TOP_K
-        assert DEFAULT_LIST_TOP_K == 20
+        assert client.vector_store.client.scroll.call_args.kwargs["limit"] <= DEFAULT_LIST_TOP_K
+        assert DEFAULT_LIST_TOP_K == 200
 
     @pytest.mark.asyncio
     async def test_list_unwraps_tuple_return(self, patched_client):
         client, _ = patched_client
         # Qdrant scroll returns (points, next_page_offset).
-        client.vector_store.list.return_value = (
+        client.vector_store.client.scroll.return_value = (
             [_point("1", "m1", "A")],
             None,
         )
@@ -259,7 +293,7 @@ class TestListMemoriesProjectScope:
     @pytest.mark.asyncio
     async def test_list_handles_backend_error(self, patched_client):
         client, _ = patched_client
-        client.vector_store.list.side_effect = RuntimeError("scroll failed")
+        client.vector_store.client.scroll.side_effect = RuntimeError("scroll failed")
         out = await list_memories(project="A")
         assert "Error getting memories" in out
 

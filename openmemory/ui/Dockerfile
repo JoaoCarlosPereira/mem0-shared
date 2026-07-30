@@ -24,6 +24,8 @@ COPY --from=deps /app/pnpm-lock.yaml ./pnpm-lock.yaml
 COPY . .
 
 RUN cp next.config.dev.mjs next.config.mjs
+# .env.example must include NEXT_PUBLIC_* = same-name placeholders so
+# entrypoint.sh can inject runtime values (Google client id, AUTH_UI_REQUIRED).
 RUN cp .env.example .env
 RUN pnpm build
 

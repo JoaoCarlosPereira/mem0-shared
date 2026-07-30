@@ -41,6 +41,10 @@ echo "==> Build openmemory-mcp (API)..."
 run_docker build -f api/Dockerfile -t mem0/openmemory-mcp ..
 
 echo "==> Build openmemory-ui..."
+# .env.example embeds NEXT_PUBLIC_* placeholders so entrypoint.sh can inject
+# GOOGLE_CLIENT_ID / AUTH_UI_REQUIRED at runtime (compose already passes them).
+# Building without those placeholders made the client bundle think Google auth
+# was off ("modo legado LAN") even though NextAuth still had the provider.
 run_docker build -f ui/Dockerfile -t mem0/openmemory-ui:latest ui/
 
 echo "==> Recriando containers (API, workers, UI)..."

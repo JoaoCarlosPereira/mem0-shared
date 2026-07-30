@@ -161,7 +161,7 @@ class TestStreamableHTTPProtocol:
         assert "result" in data
         tool_names = {t["name"] for t in data["result"]["tools"]}
         expected = {"add_memories", "search_memory", "list_memories",
-                    "delete_memories", "delete_all_memories"}
+                    "delete_memories", "delete_all_memories", "mark_obsolete"}
         assert expected.issubset(tool_names), f"Missing tools: {expected - tool_names}"
 
     @pytest.mark.asyncio

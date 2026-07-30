@@ -32,10 +32,14 @@ class WriteJob:
     text: str         # raw content for LLM extraction
     created_at: str
     attempts: int = 0  # processing attempts already made (retry bookkeeping)
+    extras: Optional[dict] = None  # e.g. {"supersedes": ["uuid", ...]}
 
 
 def _to_job(row: WriteQueueModel) -> WriteJob:
     """Map a persisted row to the in-memory ``WriteJob`` dataclass."""
+    extras = getattr(row, "extras", None)
+    if extras is not None and not isinstance(extras, dict):
+        extras = None
     return WriteJob(
         id=str(row.id),
         project=row.project,
@@ -44,6 +48,7 @@ def _to_job(row: WriteQueueModel) -> WriteJob:
         text=row.text,
         created_at=format_utc_iso(row.created_at),
         attempts=row.attempts or 0,
+        extras=extras,
     )
 
 
@@ -72,6 +77,7 @@ class WriteQueue:
                 hostname=job.hostname,
                 client_name=job.client_name,
                 text=job.text,
+                extras=job.extras if isinstance(job.extras, dict) else None,
                 status=WriteQueueStatus.queued,
             )
             db.add(row)

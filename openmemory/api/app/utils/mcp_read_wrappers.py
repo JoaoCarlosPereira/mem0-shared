@@ -36,8 +36,20 @@ def _audit_results(
 
 def _wrap_search(fn: Callable) -> Callable:
     @wraps(fn)
-    async def wrapper(query: str, project: str, rerank: bool = False) -> str:
-        out = await fn(query, project, rerank=rerank)
+    async def wrapper(
+        query: str,
+        project: str,
+        rerank: bool = False,
+        strict_project: bool = False,
+        include_obsolete: bool = False,
+    ) -> str:
+        out = await fn(
+            query,
+            project,
+            rerank=rerank,
+            strict_project=strict_project,
+            include_obsolete=include_obsolete,
+        )
         try:
             from app.mcp_server import (
                 DEFAULT_CLIENT_NAME,
@@ -66,8 +78,16 @@ def _wrap_search(fn: Callable) -> Callable:
 
 def _wrap_list(fn: Callable) -> Callable:
     @wraps(fn)
-    async def wrapper(project: str) -> str:
-        out = await fn(project)
+    async def wrapper(
+        project: str, limit: int | None = None, include_obsolete: bool = False
+    ) -> str:
+        from app.mcp_server import DEFAULT_LIST_TOP_K
+
+        out = await fn(
+            project,
+            limit=DEFAULT_LIST_TOP_K if limit is None else limit,
+            include_obsolete=include_obsolete,
+        )
         try:
             from app.mcp_server import (
                 DEFAULT_CLIENT_NAME,
