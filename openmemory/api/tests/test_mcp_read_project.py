@@ -30,6 +30,7 @@ from app import mcp_server
 from app.utils import recency
 from app.mcp_server import (
     DEFAULT_LIST_TOP_K,
+    DEFAULT_SEARCH_CANDIDATE_K,
     DEFAULT_SEARCH_TOP_K,
     list_memories,
     search_memory,
@@ -130,11 +131,68 @@ class TestSearchMemoryProjectScope:
         assert filters is None
 
     @pytest.mark.asyncio
-    async def test_search_applies_default_top_k(self, patched_client):
+    async def test_search_overfetches_candidates_before_ranking(self, patched_client):
+        """The vector store is queried for the wider candidate pool, not the page.
+
+        Ranking blends score with recency/project/group and can only promote what
+        was retrieved, so retrieval must be wider than the returned page.
+        """
         client, _ = patched_client
         await search_memory("q", project="A")
-        assert client.vector_store.search.call_args.kwargs["top_k"] == DEFAULT_SEARCH_TOP_K
+        assert (
+            client.vector_store.search.call_args.kwargs["top_k"]
+            == DEFAULT_SEARCH_CANDIDATE_K
+        )
         assert DEFAULT_SEARCH_TOP_K == 20
+        assert DEFAULT_SEARCH_CANDIDATE_K > DEFAULT_SEARCH_TOP_K
+
+    @pytest.mark.asyncio
+    async def test_search_truncates_page_to_top_k(self, patched_client):
+        """More candidates than a page → response is cut to DEFAULT_SEARCH_TOP_K."""
+        client, _ = patched_client
+        client.vector_store.search.return_value = [
+            _hit(str(i), f"m{i}", "A", score=0.9 - i / 1000)
+            for i in range(DEFAULT_SEARCH_TOP_K + 15)
+        ]
+
+        out = await search_memory("q", project="A")
+        data = json.loads(out)
+
+        assert len(data["results"]) == DEFAULT_SEARCH_TOP_K
+
+    @pytest.mark.asyncio
+    async def test_recent_candidate_outside_raw_top_k_reaches_the_page(
+        self, patched_client
+    ):
+        """Regression: re-ranking used to happen AFTER truncation.
+
+        A fresh memory whose raw score puts it beyond the page must still surface,
+        because the recency boost is applied to the whole candidate pool first.
+        """
+        client, _ = patched_client
+        now = datetime.now(timezone.utc).isoformat()
+        old = datetime(2020, 1, 1, tzinfo=timezone.utc).isoformat()
+
+        stale = [
+            _hit(f"stale{i}", f"stale{i}", "A", score=0.90 - i / 1000, updated_at=old)
+            for i in range(DEFAULT_SEARCH_TOP_K + 10)
+        ]
+        fresh = _hit("fresh", "fresh", "A", score=0.60, updated_at=now)
+        corpus = stale + [fresh]
+
+        # Faithful vector-store behavior: honor top_k, best raw score first. Without
+        # this the mock would hand back the whole corpus and hide the truncation bug.
+        def _search(*_args, top_k, **_kwargs):
+            return sorted(corpus, key=lambda h: h.score, reverse=True)[:top_k]
+
+        client.vector_store.search.side_effect = _search
+
+        out = await search_memory("q", project="A")
+        data = json.loads(out)
+
+        returned = [r["id"] for r in data["results"]]
+        assert "fresh" in returned, "recency boost must survive truncation"
+        assert returned[0] == "fresh"
 
     @pytest.mark.asyncio
     async def test_search_orders_by_score_without_timestamps(self, patched_client):

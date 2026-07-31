@@ -20,6 +20,7 @@ import datetime
 import hashlib
 import json
 import logging
+import os
 import time
 import uuid
 
@@ -78,6 +79,18 @@ client_name_var: contextvars.ContextVar[str] = contextvars.ContextVar("client_na
 DEFAULT_SEARCH_TOP_K = 20
 DEFAULT_LIST_TOP_K = 200
 DEFAULT_LIST_PAGE_SIZE = 256
+
+# Over-fetch factor for the semantic read path. ``rank_search_results`` blends the
+# raw score with recency, project and group boosts, so it can only promote what the
+# vector store already returned: fetching exactly DEFAULT_SEARCH_TOP_K candidates
+# meant re-ranking AFTER truncation, and a recent, same-group memory that missed the
+# raw top-20 could never be recovered by any boost. We therefore retrieve a wider
+# candidate pool, rank it, and only then cut to DEFAULT_SEARCH_TOP_K.
+# Tunable via MEM0_SEARCH_CANDIDATE_K (clamped to at least DEFAULT_SEARCH_TOP_K).
+DEFAULT_SEARCH_CANDIDATE_K = max(
+    DEFAULT_SEARCH_TOP_K,
+    int(os.getenv("MEM0_SEARCH_CANDIDATE_K", "150")),
+)
 
 # Write-path default (task_07): the MCP route always provides a client_name, but
 # a direct tool call may not — fall back to an explicit sentinel for attribution.
@@ -383,12 +396,16 @@ async def search_memory(
             ).encode()
         ).hexdigest()[:16]
 
+        # The cache holds the unranked CANDIDATE pool (not the final page), so the
+        # ranking below stays group-specific while the expensive retrieval is shared.
         cached_hits = read_cache.get_search(
-            project, query, DEFAULT_SEARCH_TOP_K, filter_hash
+            project, query, DEFAULT_SEARCH_CANDIDATE_K, filter_hash
         )
         if cached_hits is not None:
             SEARCH_CACHE_HIT.inc()
-            results = cached_hits
+            # Shallow copy: rank_search_results sorts in place and must not reorder
+            # the shared cached pool for other requesters.
+            results = list(cached_hits)
         else:
             SEARCH_CACHE_MISS.inc()
             embed_model = getattr(memory_client.embedding_model, "model", "default")
@@ -414,33 +431,26 @@ async def search_memory(
                         embed_err,
                         "project" if strict_project else "global",
                     )
-                    if strict_project:
-                        points = await anyio.to_thread.run_sync(
-                            lambda: _scroll_project_points(
-                                memory_client,
-                                project,
-                                limit=DEFAULT_SEARCH_TOP_K,
-                                include_obsolete=include_obsolete,
-                            )
+                    scope = project if strict_project else None
+                    points = await anyio.to_thread.run_sync(
+                        lambda: _scroll_project_points(
+                            memory_client,
+                            scope,
+                            limit=DEFAULT_SEARCH_CANDIDATE_K,
+                            include_obsolete=include_obsolete,
                         )
-                        results = [_point_to_memory_result(p) for p in points]
-                    else:
-                        points = await anyio.to_thread.run_sync(
-                            lambda: _scroll_project_points(
-                                memory_client,
-                                None,
-                                limit=DEFAULT_SEARCH_TOP_K,
-                                include_obsolete=include_obsolete,
-                            )
-                        )
-                        results = [_point_to_memory_result(p) for p in points]
+                    )
+                    results = [_point_to_memory_result(p) for p in points]
                     rank_search_results(
                         results,
                         preferred_project=project,
                         requester_group=requester_group,
                     )
                     return json.dumps(
-                        {"results": results, "degraded": "list_fallback"},
+                        {
+                            "results": results[:DEFAULT_SEARCH_TOP_K],
+                            "degraded": "list_fallback",
+                        },
                         indent=2,
                     )
 
@@ -448,7 +458,7 @@ async def search_memory(
                 lambda: memory_client.vector_store.search(
                     query=query,
                     vectors=embeddings,
-                    top_k=DEFAULT_SEARCH_TOP_K,
+                    top_k=DEFAULT_SEARCH_CANDIDATE_K,
                     filters=search_filters,
                     shard_key_selector=None,
                     include_obsolete=include_obsolete,
@@ -470,14 +480,16 @@ async def search_memory(
                     "state": payload.get("state"),
                 })
             read_cache.set_search(
-                project, query, DEFAULT_SEARCH_TOP_K, filter_hash, results
+                project, query, DEFAULT_SEARCH_CANDIDATE_K, filter_hash, results
             )
 
+        # Rank the whole candidate pool, THEN cut the page: recency/project/group
+        # boosts must be able to promote a candidate that missed the raw top-K.
         rank_search_results(
             results, preferred_project=project, requester_group=requester_group
         )
 
-        return json.dumps({"results": results}, indent=2)
+        return json.dumps({"results": results[:DEFAULT_SEARCH_TOP_K]}, indent=2)
     except Exception as e:
         logging.exception(e)
         return f"Error searching memory: {e}"
