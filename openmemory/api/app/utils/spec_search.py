@@ -124,12 +124,18 @@ def index_spec_document(
     group_id: Optional[str],
     owner: Optional[str] = None,
     updated_at=None,
+    workspace_status: Optional[str] = None,
 ) -> None:
     """Indexa (upsert por ``doc_id``) a versão vigente de um ``SpecDocument``.
 
     O payload inclui ``project_id``/``workspace_id``/``document_type``/``group_id``
     (filtros/boosts) e ``owner`` (autor) para o boost de grupo de
     ``rank_search_results``.
+
+    ``workspace_status`` grava o status do workspace no momento da indexação, para
+    que a busca possa distinguir spec concluída de spec em andamento. Pontos
+    antigos não têm o campo; a busca os trata como ``concluido``, que é o único
+    estado em que a indexação acontecia antes.
     """
     ts = format_utc_iso(updated_at or get_current_utc_time())
     vectors = embedder.embed(content, "add")
@@ -145,6 +151,7 @@ def index_spec_document(
         "created_at": ts,
         "updated_at": ts,
         "state": "active",
+        "workspace_status": workspace_status or SpecWorkspaceStatus.concluido.value,
     }
     # ``doc_id`` como id do ponto: reindexar uma nova versão sobrescreve, não duplica.
     vector_store.insert(vectors=[vectors], payloads=[payload], ids=[str(doc_id)])
@@ -156,14 +163,19 @@ def index_completed_workspace(
     *,
     embedder=None,
     vector_store=None,
+    only_completed: bool = True,
 ) -> int:
-    """Gatilho de indexação: indexa cada documento quando o workspace conclui.
+    """Indexa cada documento do workspace. Retorna quantos foram indexados.
 
-    No-op (retorna 0) se o workspace NÃO está em ``concluido`` — a indexação só
-    ocorre na transição para concluído, não a cada versão intermediária. Retorna
-    o número de documentos indexados.
+    Com ``only_completed=True`` (padrão, comportamento histórico) é no-op quando o
+    workspace não está em ``concluido`` — o gatilho é a transição para concluído.
+
+    Com ``only_completed=False`` indexa em qualquer status, gravando o status
+    corrente no payload. É o que permite achar uma spec **em andamento**, que é
+    justamente o período em que descobri-la importa; antes disso ela ficava
+    invisível na busca semântica durante todo o desenvolvimento.
     """
-    if workspace.status != SpecWorkspaceStatus.concluido:
+    if only_completed and workspace.status != SpecWorkspaceStatus.concluido:
         return 0
 
     embedder, vector_store = _resolve_backends(embedder, vector_store)
@@ -190,10 +202,51 @@ def index_completed_workspace(
             group_id=group_id,
             owner=owner,
             updated_at=doc.updated_at,
+            workspace_status=workspace.status.value,
         )
         count += 1
     logger.info("spec-index: %s documento(s) indexado(s) do workspace %s", count, workspace.id)
     return count
+
+
+def index_document_now(
+    db: Session,
+    workspace: SpecWorkspace,
+    document,
+    *,
+    embedder=None,
+    vector_store=None,
+) -> bool:
+    """Indexa UM documento imediatamente, seja qual for o status do workspace.
+
+    Chamado a cada gravação para que a spec em andamento apareça na busca. É
+    best-effort por contrato: falha de indexação nunca pode derrubar a escrita do
+    documento — o dado já está no Postgres, o índice é derivado.
+    """
+    if not getattr(document, "current_content", None):
+        return False
+    try:
+        embedder, vector_store = _resolve_backends(embedder, vector_store)
+        if embedder is None or vector_store is None:
+            return False
+        owner = workspace.created_by
+        index_spec_document(
+            embedder,
+            vector_store,
+            doc_id=document.id,
+            content=document.current_content,
+            project_id=workspace.project_id,
+            workspace_id=workspace.id,
+            document_type=document.document_type.value,
+            group_id=group_of_hostname(owner) if owner else None,
+            owner=owner,
+            updated_at=document.updated_at,
+            workspace_status=workspace.status.value,
+        )
+        return True
+    except Exception:  # noqa: BLE001
+        logger.warning("spec-index: falha ao indexar documento %s", document.id, exc_info=True)
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -212,7 +265,26 @@ def _map_spec_hit(hit) -> dict:
         "owner": payload.get("owner"),
         "created_at": payload.get("created_at"),
         "updated_at": payload.get("updated_at"),
+        # Ausente nos pontos indexados antes deste campo existir; nesses casos o
+        # workspace estava concluído, pois era o único gatilho de indexação.
+        "workspace_status": payload.get("workspace_status")
+        or SpecWorkspaceStatus.concluido.value,
     }
+
+
+def _normalize_statuses(statuses: Optional[list]) -> Optional[set]:
+    """Conjunto de status a aceitar, ou ``None`` para não filtrar.
+
+    ``None`` (padrão do chamador) vira só ``concluido``, preservando o
+    comportamento anterior. Lista vazia ou ``"*"`` desliga o filtro — é como se
+    pede explicitamente "qualquer estado, inclusive em andamento".
+    """
+    if statuses is None:
+        return {SpecWorkspaceStatus.concluido.value}
+    values = [str(s).strip() for s in statuses if str(s).strip()]
+    if not values or "*" in values:
+        return None
+    return set(values)
 
 
 def search_specs(
@@ -221,25 +293,36 @@ def search_specs(
     project_id: Optional[str] = None,
     requester_group: Optional[str] = None,
     accessible_workspace_ids: Optional[set] = None,
+    statuses: Optional[list] = None,
     top_k: int = DEFAULT_SPECS_TOP_K,
     embedder=None,
     vector_store=None,
 ) -> list:
-    """Busca semântica em specs concluídas, ordenada por relevância.
+    """Busca semântica em specs, ordenada por relevância.
 
-    Aplica os mesmos boosts de grupo/projeto de ``rank_search_results``. Como só
-    specs concluídas são indexadas, os resultados são inerentemente concluídos.
+    Aplica os mesmos boosts de grupo/projeto de ``rank_search_results``.
     ``project_id`` filtra por projeto (Qdrant + pós-filtro normalizado).
     ``accessible_workspace_ids`` restringe hits ao ACL do solicitante (``None`` =
     sem restrição / aberto).
+
+    ``statuses`` escolhe em que estados de workspace buscar. O padrão continua
+    sendo só ``concluido``, preservando o comportamento anterior; passe outros
+    estados (ou ``[]`` / ``["*"]`` para todos) quando quiser encontrar trabalho em
+    andamento. Pontos indexados antes deste campo existir não trazem
+    ``workspace_status`` e são tratados como ``concluido``, que era o único estado
+    em que a indexação ocorria.
     """
     embedder, vector_store = _resolve_backends(embedder, vector_store)
     if embedder is None or vector_store is None:
         return []
 
-    # Over-fetch quando há filtros pós-busca (projeto / ACL) para não truncar
-    # matches relevantes antes do filtro.
-    needs_post_filter = bool(project_id) or accessible_workspace_ids is not None
+    wanted_statuses = _normalize_statuses(statuses)
+
+    # Over-fetch quando há filtros pós-busca (projeto / ACL / status) para não
+    # truncar matches relevantes antes do filtro.
+    needs_post_filter = (
+        bool(project_id) or accessible_workspace_ids is not None or wanted_statuses is not None
+    )
     fetch_k = top_k * 5 if needs_post_filter else top_k
     qdrant_filters = {"project_id": project_id} if project_id else None
 
@@ -255,6 +338,14 @@ def search_specs(
     if project_id:
         target = normalize_project_name(project_id)
         results = [r for r in results if normalize_project_name(r.get("project")) == target]
+
+    if wanted_statuses is not None:
+        results = [
+            r
+            for r in results
+            if (r.get("workspace_status") or SpecWorkspaceStatus.concluido.value)
+            in wanted_statuses
+        ]
 
     if accessible_workspace_ids is not None:
         allowed = {str(x) for x in accessible_workspace_ids}

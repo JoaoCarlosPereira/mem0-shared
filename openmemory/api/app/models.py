@@ -641,11 +641,22 @@ class DocumentType(enum.Enum):
 
 
 def parse_document_type(raw: str) -> DocumentType:
-    """Resolve string MCP/API para ``DocumentType`` (aceita alias ``adr``)."""
+    """Resolve string MCP/API para ``DocumentType`` (aceita alias ``adr``).
+
+    Fonte autoritativa dos tipos aceitos. Em entrada inválida, a mensagem lista os
+    válidos — ``DocumentType(key)`` sozinho diria apenas que o valor não serve, sem
+    dizer o que serviria.
+    """
     key = (raw or "").strip().lower()
     if key in ("adr", "adrs"):
         return DocumentType.adrs
-    return DocumentType(key)
+    try:
+        return DocumentType(key)
+    except ValueError:
+        raise ValueError(
+            f"document_type inválido: {raw!r}. "
+            f"Válidos: {', '.join(t.value for t in DocumentType)} (alias: adr → adrs)"
+        ) from None
 
 
 class DocumentOrigin(enum.Enum):

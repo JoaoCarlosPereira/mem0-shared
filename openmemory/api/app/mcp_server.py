@@ -843,14 +843,24 @@ async def create_spec_workspace(project_id: str, slug: str, name: str) -> str:
         return f"Error: {e}"
 
 
-@mcp.tool(description="List spec workspaces of a project, each with a task-count summary per Kanban column. Use to discover existing workspaces before creating a new one.")
-async def list_spec_workspaces(project_id: str) -> str:
+@mcp.tool(description="List spec workspaces, each with a task-count summary per Kanban column. Use to discover existing workspaces before creating a new one. `project_id` scopes to one project; OMIT it to list every workspace you can access, across all projects. `slug` finds a workspace by slug in ANY project — use it when a feature spans several repositories, since project_id follows the working directory and would otherwise return empty in the other repos. An empty list means there really is none; do NOT create a second workspace for a spec that already exists elsewhere.")
+async def list_spec_workspaces(
+    project_id: str | None = None, slug: str | None = None
+) -> str:
     try:
-        from app.routers.specs import list_project_workspaces
+        from app.routers.specs import list_all_workspaces, list_project_workspaces
 
         db = SessionLocal()
         try:
-            items = list_project_workspaces(project_id, db=db)
+            if project_id:
+                items = list_project_workspaces(project_id, db=db)
+                if slug:
+                    items = [i for i in items if i.slug == slug]
+            else:
+                # Sem project_id: índice global (opcionalmente por slug). É o
+                # caminho de descoberta de quem está noutro repositório da mesma
+                # feature e não sabe sob qual project_id a spec foi criada.
+                items = list_all_workspaces(slug=slug, db=db)
             return json.dumps([i.model_dump(mode="json") for i in items], default=str)
         finally:
             db.close()
@@ -924,6 +934,14 @@ async def write_spec_document(
             result = write_document_version(
                 db, doc.id, content, expected_version, hostname, DocumentOrigin.mcp
             )
+            if not result.conflict:
+                # Indexa já, com o workspace ainda em andamento, para que a spec
+                # seja encontrável enquanto está sendo escrita. Best-effort.
+                from app.utils.spec_search import index_document_now
+
+                ws = db.query(SpecWorkspace).filter(SpecWorkspace.id == ws_uuid).first()
+                if ws is not None:
+                    index_document_now(db, ws, doc)
             if result.conflict:
                 return json.dumps(
                     {
@@ -993,8 +1011,10 @@ async def read_spec_document(workspace_id: str, document_type: str) -> str:
         return f"Error: {e}"
 
 
-@mcp.tool(description="Semantic search over COMPLETED specs (PRD/TechSpec/Tasks) across projects, to reuse prior knowledge when drafting new ones. `project` is an optional filter (soft). Returns a JSON list ranked by relevance; an empty list when nothing matches (never an error).")
-async def search_specs(query: str, project: str | None = None) -> str:
+@mcp.tool(description="Semantic search over specs (PRD/TechSpec/Tasks/ADRs) across projects, to find existing work or reuse prior knowledge. By default only COMPLETED specs are searched. Pass statuses to include work in progress — e.g. statuses=['ativo','planejamento'] or statuses=['*'] for any state — which is how you find a spec that is still being written. `project` is an optional filter. Returns a JSON list ranked by relevance; an empty list when nothing matches (never an error).")
+async def search_specs(
+    query: str, project: str | None = None, statuses: list[str] | None = None
+) -> str:
     try:
         from app.utils.permissions import get_accessible_spec_workspace_ids
         from app.utils.spec_auth import resolve_spec_subject
@@ -1012,6 +1032,7 @@ async def search_specs(query: str, project: str | None = None) -> str:
             project_id=project,
             requester_group=requester_group,
             accessible_workspace_ids=accessible,
+            statuses=statuses,
         )
         return json.dumps({"results": results}, default=str)
     except Exception as e:  # noqa: BLE001
@@ -1242,6 +1263,144 @@ async def add_spec_comment(target_type: str, target_id: str, body: str) -> str:
             return json.dumps(
                 CommentResponse.model_validate(comment).model_dump(mode="json"), default=str
             )
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="List the comments of a workspace, document or task, oldest first. target_type must be one of: workspace, document, task; target_id is that object's id. Use it to read back code-review notes and test evidence recorded on a card — including ones written in an earlier session. Returns a JSON list; empty when there are none (never an error).")
+async def list_spec_comments(target_type: str, target_id: str) -> str:
+    try:
+        from fastapi import HTTPException
+
+        from app.models import CommentTargetType
+        from app.routers.specs import CommentResponse
+        from app.routers.specs import list_comments as _list_comments_endpoint
+
+        db = SessionLocal()
+        try:
+            try:
+                ttype = CommentTargetType(target_type)
+            except ValueError:
+                return json.dumps(
+                    {
+                        "error": f"target_type inválido: {target_type}",
+                        "valid": [t.value for t in CommentTargetType],
+                    }
+                )
+            try:
+                comments = _list_comments_endpoint(ttype, uuid.UUID(target_id), db=db)
+            except HTTPException as he:
+                return f"Error: {he.detail}"
+            return json.dumps(
+                {
+                    "results": [
+                        CommentResponse.model_validate(c).model_dump(mode="json")
+                        for c in comments
+                    ]
+                },
+                default=str,
+            )
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="Read a task card in full, including its `description` (requirements, subtasks, relevant files, deliverables, test cases, acceptance criteria) and `version`. Call this before claim_task to decide whether to take the card, and to build the execution checklist. Returns JSON with the card plus kanban guidance.")
+async def get_task(task_id: str) -> str:
+    try:
+        from fastapi import HTTPException
+
+        from app.routers.specs import TaskResponse
+        from app.routers.specs import get_task as _get_task_endpoint
+        from app.utils.kanban_pipeline import enrich_status_payload
+
+        db = SessionLocal()
+        try:
+            try:
+                task = _get_task_endpoint(uuid.UUID(task_id), db=db)
+            except HTTPException as he:
+                return f"Error: {he.detail}"
+            data = TaskResponse.model_validate(task).model_dump(mode="json")
+            return json.dumps(
+                enrich_status_payload(data, data.get("status") or "tasks"),
+                default=str,
+            )
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="List the task cards of a spec workspace, optionally filtered by Kanban column (tasks/em_andamento/revisao_codigo/fase_teste/concluido). This is how you go from a workspace to a claimable task_id without copying it from the web UI. Each item carries `version`, which update_task_status requires as expected_version — no extra read needed. Pass include_description=true to also get each card's body. Returns a JSON list; empty when there are none (never an error).")
+async def list_tasks(
+    workspace_id: str,
+    status: str | None = None,
+    include_description: bool = False,
+) -> str:
+    try:
+        from fastapi import HTTPException
+
+        from app.models import TaskCardStatus
+        from app.routers.specs import TaskResponse
+        from app.routers.specs import list_workspace_tasks as _list_tasks_endpoint
+
+        db = SessionLocal()
+        try:
+            status_enum = None
+            if status:
+                try:
+                    status_enum = TaskCardStatus(status)
+                except ValueError:
+                    return json.dumps(
+                        {
+                            "error": f"status inválido: {status}",
+                            "valid": [s.value for s in TaskCardStatus],
+                        }
+                    )
+            try:
+                tasks = _list_tasks_endpoint(
+                    uuid.UUID(workspace_id), status=status_enum, db=db
+                )
+            except HTTPException as he:
+                return f"Error: {he.detail}"
+
+            results = []
+            for t in tasks:
+                data = TaskResponse.model_validate(t).model_dump(mode="json")
+                if not include_description:
+                    # Omitido por padrão: o corpo enriquecido de um card é longo, e
+                    # listar um workspace inteiro com todos eles estoura o contexto
+                    # de quem só quer escolher o que puxar.
+                    data.pop("description", None)
+                results.append(data)
+            return json.dumps({"results": results}, default=str)
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="Delete a task card and its status history and comments. Use it to remove a card created by mistake or duplicated — without this, a test card stays on the board forever, which discourages validating against the real server. Irreversible; it does NOT touch memories. Returns JSON {deleted: true, task_id}.")
+async def delete_task(task_id: str) -> str:
+    try:
+        from fastapi import HTTPException
+
+        from app.routers.specs import delete_task as _delete_task_endpoint
+
+        db = SessionLocal()
+        try:
+            try:
+                _delete_task_endpoint(uuid.UUID(task_id), db=db)
+            except HTTPException as he:
+                return f"Error: {he.detail}"
+            return json.dumps({"deleted": True, "task_id": task_id})
         finally:
             db.close()
     except Exception as e:  # noqa: BLE001
