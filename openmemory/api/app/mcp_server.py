@@ -20,6 +20,7 @@ import datetime
 import hashlib
 import json
 import logging
+import os
 import time
 import uuid
 
@@ -50,7 +51,9 @@ from app.utils.memory import get_memory_client_safe
 from app.utils.partitioning import bind_active_collection
 from app.utils.permissions import check_memory_access_permissions
 from app.utils.read_cache import read_cache
+from app.utils.project_groups import projects_in_group
 from app.utils.recency import rank_search_results
+from app.utils.reranking import apply_rerank
 from app.utils.token_usage_wrapper import usage_attribution
 from app.utils.write_guard import check_write_allowed
 from app.utils.write_queue import WriteJob, write_queue
@@ -78,6 +81,18 @@ client_name_var: contextvars.ContextVar[str] = contextvars.ContextVar("client_na
 DEFAULT_SEARCH_TOP_K = 20
 DEFAULT_LIST_TOP_K = 200
 DEFAULT_LIST_PAGE_SIZE = 256
+
+# Over-fetch factor for the semantic read path. ``rank_search_results`` blends the
+# raw score with recency, project and group boosts, so it can only promote what the
+# vector store already returned: fetching exactly DEFAULT_SEARCH_TOP_K candidates
+# meant re-ranking AFTER truncation, and a recent, same-group memory that missed the
+# raw top-20 could never be recovered by any boost. We therefore retrieve a wider
+# candidate pool, rank it, and only then cut to DEFAULT_SEARCH_TOP_K.
+# Tunable via MEM0_SEARCH_CANDIDATE_K (clamped to at least DEFAULT_SEARCH_TOP_K).
+DEFAULT_SEARCH_CANDIDATE_K = max(
+    DEFAULT_SEARCH_TOP_K,
+    int(os.getenv("MEM0_SEARCH_CANDIDATE_K", "150")),
+)
 
 # Write-path default (task_07): the MCP route always provides a client_name, but
 # a direct tool call may not — fall back to an explicit sentinel for attribution.
@@ -346,7 +361,7 @@ async def _fetch_all_memories(memory_client, top_k: int = DEFAULT_LIST_TOP_K) ->
     return [_point_to_memory_result(p) for p in points]
 
 
-@mcp.tool(description="Search stored memories across all projects, ranked by relevance and recency. By default `project` is a soft hint (slight boost for matching names) — wrong or slightly different project names do not exclude results. Pass `strict_project=true` to hard-filter to that exact project name only. Obsolete (superseded) memories are hidden by default; pass `include_obsolete=true` for audit. Memories are shared across all machines on the local network.")
+@mcp.tool(description="Search stored memories across all projects, ranked by relevance and recency. By default `project` is a soft hint (slight boost for matching names) — wrong or slightly different project names do not exclude results. Pass `strict_project=true` to hard-filter to that exact project name only. Obsolete (superseded) memories are hidden by default; pass `include_obsolete=true` for audit. Pass `rerank=true` to refine relevance with a cross-encoder when the server has one configured — the response then carries a `rerank` object reporting whether it was actually applied. Memories are shared across all machines on the local network.")
 async def search_memory(
     query: str,
     project: str,
@@ -371,24 +386,44 @@ async def search_memory(
 
         bind_active_collection(memory_client)
 
-        search_filters = {"project": project} if strict_project else None
+        # strict_project narrows to the project's configured family when there is
+        # one: asking to stay "in this project" means the subject, not the single
+        # repository the session happens to be rooted at.
+        strict_scope = projects_in_group(project) if strict_project else []
+        if strict_project:
+            search_filters = (
+                {"project": {"in": strict_scope}}
+                if len(strict_scope) > 1
+                else {"project": project}
+            )
+        else:
+            search_filters = None
         filter_hash = hashlib.sha256(
             json.dumps(
                 {
                     "mode": "strict" if strict_project else "global",
                     "preferred_project": project,
+                    # Part of the key: the family is config-driven, so a change to
+                    # MEM0_PROJECT_GROUPS must not be served from a stale entry.
+                    "scope": strict_scope,
                     "include_obsolete": bool(include_obsolete),
                 },
                 sort_keys=True,
             ).encode()
         ).hexdigest()[:16]
 
+        # The cache holds the unranked CANDIDATE pool (not the final page), so the
+        # ranking below stays group-specific while the expensive retrieval is shared.
         cached_hits = read_cache.get_search(
-            project, query, DEFAULT_SEARCH_TOP_K, filter_hash
+            project, query, DEFAULT_SEARCH_CANDIDATE_K, filter_hash
         )
         if cached_hits is not None:
             SEARCH_CACHE_HIT.inc()
-            results = cached_hits
+            # Copy before ranking: the Redis backend hands back freshly deserialized
+            # objects, but ranking/annotation mutate in place and must not depend on
+            # that — a non-serializing cache backend would otherwise leak one
+            # requester's group-specific ordering into another's.
+            results = [dict(r) for r in cached_hits]
         else:
             SEARCH_CACHE_MISS.inc()
             embed_model = getattr(memory_client.embedding_model, "model", "default")
@@ -414,33 +449,27 @@ async def search_memory(
                         embed_err,
                         "project" if strict_project else "global",
                     )
-                    if strict_project:
-                        points = await anyio.to_thread.run_sync(
-                            lambda: _scroll_project_points(
-                                memory_client,
-                                project,
-                                limit=DEFAULT_SEARCH_TOP_K,
-                                include_obsolete=include_obsolete,
-                            )
+                    scope = project if strict_project else None
+                    points = await anyio.to_thread.run_sync(
+                        lambda: _scroll_project_points(
+                            memory_client,
+                            scope,
+                            limit=DEFAULT_SEARCH_CANDIDATE_K,
+                            include_obsolete=include_obsolete,
                         )
-                        results = [_point_to_memory_result(p) for p in points]
-                    else:
-                        points = await anyio.to_thread.run_sync(
-                            lambda: _scroll_project_points(
-                                memory_client,
-                                None,
-                                limit=DEFAULT_SEARCH_TOP_K,
-                                include_obsolete=include_obsolete,
-                            )
-                        )
-                        results = [_point_to_memory_result(p) for p in points]
+                    )
+                    results = [_point_to_memory_result(p) for p in points]
                     rank_search_results(
                         results,
                         preferred_project=project,
                         requester_group=requester_group,
+                        annotate=True,
                     )
                     return json.dumps(
-                        {"results": results, "degraded": "list_fallback"},
+                        {
+                            "results": results[:DEFAULT_SEARCH_TOP_K],
+                            "degraded": "list_fallback",
+                        },
                         indent=2,
                     )
 
@@ -448,7 +477,7 @@ async def search_memory(
                 lambda: memory_client.vector_store.search(
                     query=query,
                     vectors=embeddings,
-                    top_k=DEFAULT_SEARCH_TOP_K,
+                    top_k=DEFAULT_SEARCH_CANDIDATE_K,
                     filters=search_filters,
                     shard_key_selector=None,
                     include_obsolete=include_obsolete,
@@ -470,14 +499,30 @@ async def search_memory(
                     "state": payload.get("state"),
                 })
             read_cache.set_search(
-                project, query, DEFAULT_SEARCH_TOP_K, filter_hash, results
+                project, query, DEFAULT_SEARCH_CANDIDATE_K, filter_hash, results
             )
 
+        # Reranking (opt-in) refines relevance over the candidate pool before the
+        # boosts are applied, so recency/project/group still have the final say.
+        rerank_status = None
+        if rerank:
+            rerank_status = apply_rerank(query, results)
+
+        # Rank the whole candidate pool, THEN cut the page: recency/project/group
+        # boosts must be able to promote a candidate that missed the raw top-K.
         rank_search_results(
-            results, preferred_project=project, requester_group=requester_group
+            results,
+            preferred_project=project,
+            requester_group=requester_group,
+            annotate=True,
         )
 
-        return json.dumps({"results": results}, indent=2)
+        payload = {"results": results[:DEFAULT_SEARCH_TOP_K]}
+        if rerank_status is not None:
+            # Always report the outcome: asking for rerank and getting it are
+            # different things, and silently ignoring the flag hides misconfiguration.
+            payload["rerank"] = rerank_status
+        return json.dumps(payload, indent=2)
     except Exception as e:
         logging.exception(e)
         return f"Error searching memory: {e}"

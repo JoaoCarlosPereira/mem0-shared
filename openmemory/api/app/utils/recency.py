@@ -73,7 +73,13 @@ def normalize_project_name(name) -> str:
 
 
 def project_match_factor(result_project, preferred_project) -> float:
-    """Small boost for matching project names; never penalizes mismatches."""
+    """Small boost for matching project names; never penalizes mismatches.
+
+    Sibling repositories configured as one family (MEM0_PROJECT_GROUPS) earn the
+    same boost as an exact match: a task that spans the app, the DLL and the
+    database repo is one subject, and the hint should not favour whichever
+    directory the agent happened to be sitting in.
+    """
     if not preferred_project:
         return 1.0
     result_norm = normalize_project_name(result_project)
@@ -81,6 +87,12 @@ def project_match_factor(result_project, preferred_project) -> float:
     if not preferred_norm:
         return 1.0
     if result_norm == preferred_norm:
+        return 1.0 + SEARCH_PROJECT_BOOST_EXACT
+
+    # Imported lazily: project_groups builds on normalize_project_name from here.
+    from app.utils.project_groups import same_project_family
+
+    if same_project_family(result_project, preferred_project):
         return 1.0 + SEARCH_PROJECT_BOOST_EXACT
     if result_norm and (result_norm in preferred_norm or preferred_norm in result_norm):
         return 1.0 + SEARCH_PROJECT_BOOST_FUZZY
@@ -99,7 +111,9 @@ def group_match_factor(author_group, requester_group) -> float:
     return SEARCH_GROUP_BOOST if author_group == requester_group else 1.0
 
 
-def rank_search_results(results, preferred_project=None, requester_group=None):
+def rank_search_results(
+    results, preferred_project=None, requester_group=None, annotate=False
+):
     """Order results by semantic score blended with recency, project and group boost.
 
     Relevance and recency dominate ordering; ``preferred_project`` applies a small
@@ -108,6 +122,11 @@ def rank_search_results(results, preferred_project=None, requester_group=None):
     (ADR-003). The author group is resolved dynamically from each result's ``owner``
     (the author hostname); reads remain global — group only affects ordering. Missing
     project/owner/group never penalizes a result.
+
+    With ``annotate=True`` each result also carries the numbers behind its position
+    (``effective_score`` plus the individual factors). Without it the response shows
+    only the raw semantic ``score`` while the order comes from the blended value —
+    which makes an ordering impossible to explain or calibrate from the outside.
     """
     now = datetime.datetime.now(datetime.timezone.utc)
 
@@ -128,10 +147,18 @@ def rank_search_results(results, preferred_project=None, requester_group=None):
     def key(r):
         score = r.get("score")
         score = score if isinstance(score, (int, float)) else 0.0
-        factor = recency_factor(r, now) ** SEARCH_RECENCY_WEIGHT
-        factor *= project_match_factor(_project_name(r), preferred_project)
-        factor *= group_match_factor(_author_group(r), requester_group)
-        return score * factor
+        recency = recency_factor(r, now) ** SEARCH_RECENCY_WEIGHT
+        project = project_match_factor(_project_name(r), preferred_project)
+        group = group_match_factor(_author_group(r), requester_group)
+        effective = score * recency * project * group
+        if annotate:
+            r["effective_score"] = effective
+            r["ranking_factors"] = {
+                "recency": recency,
+                "project": project,
+                "group": group,
+            }
+        return effective
 
     results.sort(key=key, reverse=True)
     return results
