@@ -232,6 +232,7 @@ class WriteWorker:
                         return
                     self._maybe_dual_write(client, result)
                     self._apply_supersedes(client, job, result)
+                    self._auto_supersede_duplicates(client, job, result)
                     self._catalog_project(job)
                     read_cache.invalidate_search(job.project)
                     self._queue.mark_done(job.id)
@@ -390,6 +391,23 @@ class WriteWorker:
         except Exception:  # noqa: BLE001
             logger.exception(
                 "supersedes apply failed job_id=%s project=%s", job.id, job.project
+            )
+
+    def _auto_supersede_duplicates(self, client, job: WriteJob, result) -> None:
+        """Supersede existing memories that duplicate what was just written.
+
+        Complements ``_apply_supersedes``, which only handles IDs the caller knew
+        about. Off unless MEM0_AUTODEDUP_MODE is set; see app.utils.autodedup.
+        """
+        try:
+            from app.utils.autodedup import autodedup_after_write
+
+            autodedup_after_write(
+                client, result, project=job.project, job_id=job.id
+            )
+        except Exception:  # noqa: BLE001 - dedup must never fail a write
+            logger.exception(
+                "autodedup failed job_id=%s project=%s", job.id, job.project
             )
 
     def _catalog_project(self, job: WriteJob) -> None:
