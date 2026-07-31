@@ -52,6 +52,7 @@ from app.utils.partitioning import bind_active_collection
 from app.utils.permissions import check_memory_access_permissions
 from app.utils.read_cache import read_cache
 from app.utils.recency import rank_search_results
+from app.utils.reranking import apply_rerank
 from app.utils.token_usage_wrapper import usage_attribution
 from app.utils.write_guard import check_write_allowed
 from app.utils.write_queue import WriteJob, write_queue
@@ -359,7 +360,7 @@ async def _fetch_all_memories(memory_client, top_k: int = DEFAULT_LIST_TOP_K) ->
     return [_point_to_memory_result(p) for p in points]
 
 
-@mcp.tool(description="Search stored memories across all projects, ranked by relevance and recency. By default `project` is a soft hint (slight boost for matching names) — wrong or slightly different project names do not exclude results. Pass `strict_project=true` to hard-filter to that exact project name only. Obsolete (superseded) memories are hidden by default; pass `include_obsolete=true` for audit. Memories are shared across all machines on the local network.")
+@mcp.tool(description="Search stored memories across all projects, ranked by relevance and recency. By default `project` is a soft hint (slight boost for matching names) — wrong or slightly different project names do not exclude results. Pass `strict_project=true` to hard-filter to that exact project name only. Obsolete (superseded) memories are hidden by default; pass `include_obsolete=true` for audit. Pass `rerank=true` to refine relevance with a cross-encoder when the server has one configured — the response then carries a `rerank` object reporting whether it was actually applied. Memories are shared across all machines on the local network.")
 async def search_memory(
     query: str,
     project: str,
@@ -483,13 +484,24 @@ async def search_memory(
                 project, query, DEFAULT_SEARCH_CANDIDATE_K, filter_hash, results
             )
 
+        # Reranking (opt-in) refines relevance over the candidate pool before the
+        # boosts are applied, so recency/project/group still have the final say.
+        rerank_status = None
+        if rerank:
+            rerank_status = apply_rerank(query, results)
+
         # Rank the whole candidate pool, THEN cut the page: recency/project/group
         # boosts must be able to promote a candidate that missed the raw top-K.
         rank_search_results(
             results, preferred_project=project, requester_group=requester_group
         )
 
-        return json.dumps({"results": results[:DEFAULT_SEARCH_TOP_K]}, indent=2)
+        payload = {"results": results[:DEFAULT_SEARCH_TOP_K]}
+        if rerank_status is not None:
+            # Always report the outcome: asking for rerank and getting it are
+            # different things, and silently ignoring the flag hides misconfiguration.
+            payload["rerank"] = rerank_status
+        return json.dumps(payload, indent=2)
     except Exception as e:
         logging.exception(e)
         return f"Error searching memory: {e}"
