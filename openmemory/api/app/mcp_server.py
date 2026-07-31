@@ -51,6 +51,7 @@ from app.utils.memory import get_memory_client_safe
 from app.utils.partitioning import bind_active_collection
 from app.utils.permissions import check_memory_access_permissions
 from app.utils.read_cache import read_cache
+from app.utils.project_groups import projects_in_group
 from app.utils.recency import rank_search_results
 from app.utils.reranking import apply_rerank
 from app.utils.token_usage_wrapper import usage_attribution
@@ -385,12 +386,26 @@ async def search_memory(
 
         bind_active_collection(memory_client)
 
-        search_filters = {"project": project} if strict_project else None
+        # strict_project narrows to the project's configured family when there is
+        # one: asking to stay "in this project" means the subject, not the single
+        # repository the session happens to be rooted at.
+        strict_scope = projects_in_group(project) if strict_project else []
+        if strict_project:
+            search_filters = (
+                {"project": {"in": strict_scope}}
+                if len(strict_scope) > 1
+                else {"project": project}
+            )
+        else:
+            search_filters = None
         filter_hash = hashlib.sha256(
             json.dumps(
                 {
                     "mode": "strict" if strict_project else "global",
                     "preferred_project": project,
+                    # Part of the key: the family is config-driven, so a change to
+                    # MEM0_PROJECT_GROUPS must not be served from a stale entry.
+                    "scope": strict_scope,
                     "include_obsolete": bool(include_obsolete),
                 },
                 sort_keys=True,

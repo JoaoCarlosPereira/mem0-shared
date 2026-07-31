@@ -73,7 +73,13 @@ def normalize_project_name(name) -> str:
 
 
 def project_match_factor(result_project, preferred_project) -> float:
-    """Small boost for matching project names; never penalizes mismatches."""
+    """Small boost for matching project names; never penalizes mismatches.
+
+    Sibling repositories configured as one family (MEM0_PROJECT_GROUPS) earn the
+    same boost as an exact match: a task that spans the app, the DLL and the
+    database repo is one subject, and the hint should not favour whichever
+    directory the agent happened to be sitting in.
+    """
     if not preferred_project:
         return 1.0
     result_norm = normalize_project_name(result_project)
@@ -81,6 +87,12 @@ def project_match_factor(result_project, preferred_project) -> float:
     if not preferred_norm:
         return 1.0
     if result_norm == preferred_norm:
+        return 1.0 + SEARCH_PROJECT_BOOST_EXACT
+
+    # Imported lazily: project_groups builds on normalize_project_name from here.
+    from app.utils.project_groups import same_project_family
+
+    if same_project_family(result_project, preferred_project):
         return 1.0 + SEARCH_PROJECT_BOOST_EXACT
     if result_norm and (result_norm in preferred_norm or preferred_norm in result_norm):
         return 1.0 + SEARCH_PROJECT_BOOST_FUZZY
