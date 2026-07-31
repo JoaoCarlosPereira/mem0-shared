@@ -13,7 +13,6 @@ from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
-import pytest
 
 from app.utils import autodedup
 from app.utils.autodedup import autodedup_after_write, find_near_duplicates

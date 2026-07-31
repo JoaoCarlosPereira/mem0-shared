@@ -8,7 +8,7 @@ match what operators see via MCP.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from app.utils.datetime_utc import utc_now_naive

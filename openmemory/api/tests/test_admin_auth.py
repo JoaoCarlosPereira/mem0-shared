@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 
 from app.middleware.team_auth import AuthMiddleware
 from app.utils.admin_auth import require_admin
-from app.utils.logging_context import auth_email_var, auth_method_var
 from app.utils.session_jwt import issue_session_jwt
 
 SECRET = "segredo-de-teste-com-32-bytes-ok!"

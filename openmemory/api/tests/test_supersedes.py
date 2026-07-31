@@ -115,6 +115,9 @@ async def test_worker_applies_supersedes_after_add():
     )
     queue = MagicMock()
     queue.dequeue.return_value = [job]
+    # Preferência do worker pós-timeout: mark_done_if_processing. MagicMock
+    # auto-expõe o atributo; configurar o retorno evita cair no early-return.
+    queue.mark_done_if_processing.return_value = True
     worker = WriteWorker(
         queue=queue,
         client_provider=lambda: client,
@@ -141,5 +144,5 @@ async def test_worker_applies_supersedes_after_add():
     assert add_kwargs["metadata"]["supersedes"] == [
         "725104c0-4cf8-4af3-b21a-2d979b0caca5"
     ]
-    queue.mark_done.assert_called_once_with(job.id)
+    queue.mark_done_if_processing.assert_called_once_with(job.id)
     rc.invalidate_search.assert_called_once_with("sysmovs")
