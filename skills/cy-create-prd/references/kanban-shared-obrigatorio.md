@@ -85,6 +85,48 @@ Tipos de documento SDD: `prd` | `techspec` | `tasks` | **`adrs`**.
 4. Se vou a `concluido`, o card **já esteve** em `revisao_codigo` e depois em `fase_teste` (com evidência de teste)?
 5. Se estou bloqueado, o card está marcado e comentado?
 
+## Limitações da plataforma (verificadas em 31/07/2026)
+
+Três limitações reais do servidor. Não são bugs a contornar com gambiarra — são restrições que o
+fluxo precisa acomodar explicitamente.
+
+### 1. Nenhuma ferramenta lista os cards
+
+`list_spec_workspaces` devolve apenas **contagem por coluna** (`task_counts`), nunca os cards. Não
+existe `list_tasks`, o servidor **não expõe recursos MCP**, e `claim_task` exige um `task_id`.
+
+Consequência: quem não criou os cards **não tem como descobrir** o que puxar do backlog.
+
+Mitigação obrigatória: o `cy-create-tasks` grava o `task_id` de cada card na coluna **`Card ID`** da
+lista mestra (documento `tasks`), que é legível por `read_spec_document`. **Esse documento é o único
+índice de cards que existe.** Se a coluna estiver vazia, o `task_id` só pode vir da UI web ou do
+usuário — nunca adivinhado.
+
+### 2. `search_specs` só vê workspaces concluídos
+
+A indexação semântica acontece na transição para `concluido`. Durante todo o desenvolvimento a spec
+**não aparece** em `search_specs`. Para localizar trabalho em andamento, use
+`list_spec_workspaces(project_id)` com o `project_id` correto.
+
+### 3. Memórias e specs são armazéns separados
+
+`search_memory` nunca devolve specs; `search_specs` nunca devolve memórias. E o `project_id` do mem0
+segue o **nome do diretório de trabalho** — então um agente rodando em outro repositório da mesma
+feature recebe `[]` de `list_spec_workspaces` e conclui, em silêncio, que não há spec.
+
+Mitigação obrigatória: **memória-ponteiro** em cada projeto onde alguém vai trabalhar. Ver
+[`ponteiro-de-spec.md`](ponteiro-de-spec.md).
+
+### Consequência para o handoff
+
+Antes de dizer que uma feature está pronta para outro desenvolvedor assumir, confirme as três:
+
+1. Lista mestra `tasks` com **todos** os `Card ID` preenchidos.
+2. Memória-ponteiro gravada nos projetos dos repositórios envolvidos.
+3. Documentos `prd`, `techspec` e `adrs` gravados no workspace (não em arquivos locais).
+
+Faltando qualquer uma, o repasse depende de alguém explicar por fora — e deixa de ser repasse.
+
 ## Respostas MCP (`kanban`)
 
 Toda resposta bem-sucedida de `create_task`, `claim_task`, `release_task` e `update_task_status` inclui:

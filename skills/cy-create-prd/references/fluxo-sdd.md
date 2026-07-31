@@ -104,9 +104,15 @@ IDEIA
 
 **Por que usar agora:** Porque tarefas bem estruturadas permitem que cada uma seja implementada de forma independente, com escopo claro e critérios de aceite definidos. A decomposição correta evita tarefas gigantes ("mega-tasks") e dependências circulares.
 
-**Artefatos gerados:**
-- `.docs/tasks/<name>/_tasks.md` — lista mestra de tarefas
-- `.docs/tasks/<name>/task_01.md` ... `task_N.md` — especificações individuais de cada tarefa
+**Artefatos gerados (Mem0 Shared via MCP):**
+- Documento `tasks` no SpecWorkspace — lista mestra em tabela, **com a coluna `Card ID`** preenchida
+  após a criação dos cards. Esse documento é o **único índice de cards que existe**: nenhuma
+  ferramenta MCP lista os cards do quadro (ver [`kanban-shared-obrigatorio.md`](kanban-shared-obrigatorio.md),
+  "Limitações da plataforma").
+- Um `TaskCard` por tarefa no Kanban, na coluna `tasks` (backlog), com o corpo enriquecido em
+  `description`.
+- Memória-ponteiro nos projetos dos repositórios envolvidos, se ainda não gravada
+  (ver [`ponteiro-de-spec.md`](ponteiro-de-spec.md)).
 
 ---
 

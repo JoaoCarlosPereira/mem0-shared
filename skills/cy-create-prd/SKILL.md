@@ -82,6 +82,8 @@ Você DEVE criar uma tarefa para cada fase e completá-las em ordem:
    - Se um `_idea.md` foi fornecido como entrada, lê-lo como contexto principal (somente entrada — o PRD em si é persistido via MCP, não em disco).
    - **NÃO criar nenhum diretório `.docs/tasks/<slug>/` nem arquivos locais.** O workspace shared é a única fonte de verdade (ADR-002).
    - Se qualquer ferramenta MCP retornar erro (serviço indisponível, falha de conexão), PARAR e reportar a falha claramente ao usuário — NÃO recorrer a escrever arquivos locais (ADR-002/ADR-007).
+   - **Gravar a memória-ponteiro (obrigatório quando o workspace é criado).** Ver `references/ponteiro-de-spec.md`. Em resumo: `add_memories` com as coordenadas do workspace (`project_id`, `slug`, `workspace_id`) em **cada** projeto mem0 onde alguém vai trabalhar — sobretudo quando a feature toca repositórios cujo nome de diretório é **diferente** do `project_id` do workspace. Sem isso a spec fica indescobrível para quem não a criou, porque `search_memory` e `search_specs` não alcançam workspaces em andamento de outro projeto.
+   - Se a feature for **multi-repositório**, perguntar ao usuário quais repositórios serão tocados antes de gravar os ponteiros (uma pergunta, múltipla escolha com `multiSelect`), e gravar um ponteiro por repositório.
 
 2. Descobrir contexto por meio de pesquisa paralela. Você DEVE executar AMBAS as trilhas antes de fazer qualquer pergunta.
 

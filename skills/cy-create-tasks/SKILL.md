@@ -12,6 +12,7 @@ Decomponha requisitos em arquivos de tarefa detalhados e acionáveis, com enriqu
 **KANBAN:** O quadro SpecWorkspace Shared é a fonte de verdade. Toda tarefa que você criar ou alterar DEVE aparecer no Kanban via MCP (`create_task`, e depois `claim_task` / `update_task_status` durante a execução). Nunca deixe o plano apenas no chat ou em markdown local. Consulte `../cy-create-prd/references/kanban-shared-obrigatorio.md`.
 **PIPELINE:** Cards DEVEM percorrer `tasks` → `em_andamento` → `revisao_codigo` → `fase_teste` → `concluido`. Nunca pule para `concluido` sem passar por revisão de código ou fase de testes.
 **MCP `kanban`:** Após cada create/claim/update, leia `kanban.do_now` na resposta e execute essa coluna antes de avançar.
+**ÍNDICE DE CARDS:** Após criar os cards, regrave o documento `tasks` com o `task_id` de cada um na coluna `Card ID`. Nenhuma ferramenta MCP lista cards — esse documento é o **único índice que existe**, e sem ele a feature não é repassável a outro desenvolvedor.
 NÃO escreva `_tasks.md` / `task_NN.md` locais como registro do sistema.
 </HARD-GATE>
 
@@ -19,7 +20,7 @@ NÃO escreva `_tasks.md` / `task_NN.md` locais como registro do sistema.
 
 Ao usar esta skill e em qualquer execução posterior das tarefas:
 
-1. Cards nascem no backlog com `create_task` (coluna `tasks`) — um card por tarefa aprovada.
+1. Cards nascem no backlog com `create_task` (coluna `tasks`) — um card por tarefa aprovada. Em seguida, os `task_id` retornados vão para a coluna `Card ID` do documento `tasks` (índice obrigatório).
 2. Antes de implementar: `claim_task` → `em_andamento`.
 3. Ao terminar a implementação: `update_task_status` → **`revisao_codigo`** (obrigatório; não pular).
 4. Após review ok: `update_task_status` → **`fase_teste`** (obrigatório; rodar testes nesta fase).
@@ -32,8 +33,9 @@ Lei de ferro 2: **nunca concluir sem ter passado por revisão de código e fase 
 
 ## Entradas Obrigatórias
 
-- Nome da feature identificando o diretório `.docs/tasks/<name>/`.
-- No mínimo, `_prd.md` ou `_techspec.md` nesse diretório.
+- Nome da feature, do qual se deriva o **slug** do `SpecWorkspace` (não um diretório local).
+- `project_id` (nome do projeto/repositório atual; "default" se nenhum estiver claramente definido).
+- No workspace, ao menos um dos documentos `prd` ou `techspec` gravado — lido via `read_spec_document`, **não** de arquivos locais.
 
 ## Fluxo de Trabalho
 
@@ -45,6 +47,9 @@ Lei de ferro 2: **nunca concluir sem ter passado por revisão de código e fase 
 2. Carregar contexto (PRD/TechSpec via MCP — ADR-002).
    - Derivar o slug a partir do nome da feature; determinar o `project_id` (nome do projeto/repositório, "default" se nenhum).
    - Resolver o workspace: `list_spec_workspaces(project_id=<project>)`; se ausente, `create_spec_workspace(project_id, slug, name)`. Manter o `workspace_id`.
+     - **Se você criou o workspace aqui** (não apenas resolveu um existente), gravar a memória-ponteiro conforme `../cy-create-prd/references/ponteiro-de-spec.md`.
+     - Se `list_spec_workspaces` voltar vazio, considere antes de criar que o workspace pode existir sob **outro `project_id`** — o `project_id` segue o nome do diretório de trabalho, e features multi-repositório costumam ter o workspace sob o diretório-mãe. Pergunte ao usuário em vez de criar um workspace duplicado que fragmentaria a spec.
+     - Nesta skill, criar um workspace vazio normalmente indica erro de contexto: sem `prd` nem `techspec` não há o que decompor. Confirme com o usuário antes de seguir.
    - Ler o PRD via `read_spec_document(workspace_id, document_type="prd")` e a TechSpec via `read_spec_document(workspace_id, document_type="techspec")`.
    - Ler ADRs via `read_spec_document(workspace_id, document_type="adrs")` (fonte de verdade). Complementar com seções legadas embutidas no PRD/TechSpec se o doc `adrs` ainda estiver vazio. **NÃO** confiar em `.docs/tasks/<name>/adrs/*.md` local.
    - Se qualquer ferramenta MCP falhar (serviço indisponível), PARAR e reportar claramente — NÃO ler/escrever `_prd.md`/`_techspec.md`/arquivos de tarefa locais como fallback (ADR-002/ADR-007).
@@ -85,11 +90,13 @@ Lei de ferro 2: **nunca concluir sem ter passado por revisão de código e fase 
 
      ## Tarefas
 
-     | # | Título | Status | Complexidade | Dependências |
-     |---|--------|--------|--------------|--------------|
-     | 01 | [Título da tarefa] | pending | [low/medium/high/critical] | [task_NN, ... ou —] |
+     | # | Título | Card ID | Status | Complexidade | Dependências |
+     |---|--------|---------|--------|--------------|--------------|
+     | 01 | [Título da tarefa] | — | pending | [low/medium/high/critical] | [task_NN, ... ou —] |
      ```
+   - A coluna **`Card ID`** nasce com `—` porque os cards só existem após o passo 6. Ela **DEVE** ser preenchida na regravação obrigatória descrita no fim do passo 6 — é o índice que torna os cards descobríveis. Ver "Índice de Card IDs" abaixo.
    - A numeração de tarefas (`task_01`, `task_02`, ...) deve ser sequencial e consistente entre o documento mestre `tasks` e os `TaskCard`s individuais criados no passo 6.
+   - Guardar o `version` retornado por este `write_spec_document` — ele é o `expected_version` da regravação do passo 6.
    - **NÃO escrever nenhum arquivo local `_tasks.md` / `task_NN.md`.** O workspace shared é a única fonte de verdade (ADR-002).
    - **Conflito/indisponibilidade:** em `conflict=true`, reler e reconciliar antes de tentar novamente; em erro de ferramenta, PARAR e reportar — sem fallback local.
 
@@ -116,10 +123,21 @@ Lei de ferro 2: **nunca concluir sem ter passado por revisão de código e fase 
      - `## Critérios de Sucesso`: resultados mensuráveis incluindo "Todos os testes passando" e "Cobertura >= 80%".
    - Reavaliar complexity com base nos achados da exploração antes de criar o card (metadados em `description`).
    - Se o enriquecimento falhar para uma tarefa (problema local de exploração, não erro MCP), reportar e continuar para a próxima; reportar todas essas falhas no final. Um erro MCP/de serviço, por outro lado, PARA a execução com o relatório de estado parcial acima.
+   - **Guardar o `id` que cada `create_task` retorna**, associado ao número da tarefa (`task_01` → `<uuid>`). Sem isso o passo abaixo é impossível.
+
+   **Índice de Card IDs (obrigatório — não pular).**
+
+   Após criar **todos** os cards, regravar o documento `tasks` com a coluna `Card ID` preenchida:
+   `write_spec_document(workspace_id, document_type="tasks", content=<tabela com os ids>, expected_version=<version do passo 5>)`.
+
+   *Por que isso é obrigatório:* **nenhuma ferramenta MCP lista os cards do quadro.** O `list_spec_workspaces` devolve apenas contagem por coluna (`task_counts`), não os cards; não há `list_tasks`; o servidor não expõe recursos MCP; e `claim_task` exige um `task_id`. Ou seja, quem não criou os cards não tem como descobrir o que puxar — e o passo 1 do `cy-execute-task` ("escolher um card no backlog") fica inexecutável. O documento `tasks` é legível por qualquer agente via `read_spec_document`, então **ele é o único índice de cards que existe**. Deixar a coluna com `—` quebra o repasse da feature para outro desenvolvedor.
+
+   Se a regravação retornar `conflict=true`, reler o documento, mesclar os ids na versão atual e gravar de novo — nunca abandonar o índice.
 
 7. Validar o plano.
    - As verificações anti-ciclo e de independência rodam no passo 3, antes de qualquer card ser criado (não há arquivos locais para lint com `compozy tasks validate`, que opera em `.docs/tasks/`).
    - Após a criação, confirmar o quadro via `list_spec_workspaces(project_id)` e/ou `read_spec_document(workspace_id, document_type="tasks")`: a contagem de cards corresponde à lista mestra e a ordem de dependência é consistente.
+   - **Conferir o índice:** reler o documento `tasks` e verificar que **nenhuma** linha ficou com `Card ID` = `—`. Se ficou, o índice está incompleto e a feature não é repassável — corrigir antes de reportar.
    - Chamar `update_spec_workspace_status(workspace_id, "ativo")` para que o painel do projeto mostre entrega ativa.
    - Reportar ao usuário (PT-BR) o workspace shared (project + slug), quantos `TaskCard`s foram criados, e lembrar que **toda** implementação deve seguir no quadro: `claim_task` → `em_andamento` → `revisao_codigo` → `fase_teste` → `concluido` (sem pular etapas; consulte `../cy-create-prd/references/kanban-shared-obrigatorio.md`).
 
