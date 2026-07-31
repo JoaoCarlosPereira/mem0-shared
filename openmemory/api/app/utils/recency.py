@@ -99,7 +99,9 @@ def group_match_factor(author_group, requester_group) -> float:
     return SEARCH_GROUP_BOOST if author_group == requester_group else 1.0
 
 
-def rank_search_results(results, preferred_project=None, requester_group=None):
+def rank_search_results(
+    results, preferred_project=None, requester_group=None, annotate=False
+):
     """Order results by semantic score blended with recency, project and group boost.
 
     Relevance and recency dominate ordering; ``preferred_project`` applies a small
@@ -108,6 +110,11 @@ def rank_search_results(results, preferred_project=None, requester_group=None):
     (ADR-003). The author group is resolved dynamically from each result's ``owner``
     (the author hostname); reads remain global — group only affects ordering. Missing
     project/owner/group never penalizes a result.
+
+    With ``annotate=True`` each result also carries the numbers behind its position
+    (``effective_score`` plus the individual factors). Without it the response shows
+    only the raw semantic ``score`` while the order comes from the blended value —
+    which makes an ordering impossible to explain or calibrate from the outside.
     """
     now = datetime.datetime.now(datetime.timezone.utc)
 
@@ -128,10 +135,18 @@ def rank_search_results(results, preferred_project=None, requester_group=None):
     def key(r):
         score = r.get("score")
         score = score if isinstance(score, (int, float)) else 0.0
-        factor = recency_factor(r, now) ** SEARCH_RECENCY_WEIGHT
-        factor *= project_match_factor(_project_name(r), preferred_project)
-        factor *= group_match_factor(_author_group(r), requester_group)
-        return score * factor
+        recency = recency_factor(r, now) ** SEARCH_RECENCY_WEIGHT
+        project = project_match_factor(_project_name(r), preferred_project)
+        group = group_match_factor(_author_group(r), requester_group)
+        effective = score * recency * project * group
+        if annotate:
+            r["effective_score"] = effective
+            r["ranking_factors"] = {
+                "recency": recency,
+                "project": project,
+                "group": group,
+            }
+        return effective
 
     results.sort(key=key, reverse=True)
     return results

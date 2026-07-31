@@ -195,6 +195,40 @@ class TestSearchMemoryProjectScope:
         assert returned[0] == "fresh"
 
     @pytest.mark.asyncio
+    async def test_results_expose_the_score_that_decided_the_order(
+        self, patched_client
+    ):
+        """Raw ``score`` alone cannot explain the order; the blend must be visible.
+
+        Without this, a result ranked by recency/project/group looks out of order
+        to anyone reading the response, and the ranking cannot be calibrated.
+        """
+        client, _ = patched_client
+        now = datetime.now(timezone.utc).isoformat()
+        client.vector_store.search.return_value = [
+            _hit("old", "old", "A", score=0.95, updated_at="2020-01-01T00:00:00+00:00"),
+            _hit("new", "new", "A", score=0.80, updated_at=now),
+        ]
+
+        data = json.loads(await search_memory("q", project="A"))
+        by_id = {r["id"]: r for r in data["results"]}
+
+        # Raw score is untouched; the effective one explains the inversion.
+        assert by_id["old"]["score"] == 0.95
+        assert by_id["new"]["score"] == 0.80
+        assert by_id["new"]["effective_score"] > by_id["old"]["effective_score"]
+
+        factors = by_id["new"]["ranking_factors"]
+        assert set(factors) == {"recency", "project", "group"}
+        # project="A" matches exactly → the documented exact-match boost.
+        assert factors["project"] == pytest.approx(1.0 + recency.SEARCH_PROJECT_BOOST_EXACT)
+        assert by_id["new"]["effective_score"] == pytest.approx(
+            0.80 * factors["recency"] * factors["project"] * factors["group"]
+        )
+        # A fact updated years ago must be discounted against one updated today.
+        assert factors["recency"] > by_id["old"]["ranking_factors"]["recency"]
+
+    @pytest.mark.asyncio
     async def test_search_orders_by_score_without_timestamps(self, patched_client):
         client, _ = patched_client
         # With no timestamps, recency is neutral and order falls back to score.

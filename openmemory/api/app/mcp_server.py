@@ -404,9 +404,11 @@ async def search_memory(
         )
         if cached_hits is not None:
             SEARCH_CACHE_HIT.inc()
-            # Shallow copy: rank_search_results sorts in place and must not reorder
-            # the shared cached pool for other requesters.
-            results = list(cached_hits)
+            # Copy before ranking: the Redis backend hands back freshly deserialized
+            # objects, but ranking/annotation mutate in place and must not depend on
+            # that — a non-serializing cache backend would otherwise leak one
+            # requester's group-specific ordering into another's.
+            results = [dict(r) for r in cached_hits]
         else:
             SEARCH_CACHE_MISS.inc()
             embed_model = getattr(memory_client.embedding_model, "model", "default")
@@ -446,6 +448,7 @@ async def search_memory(
                         results,
                         preferred_project=project,
                         requester_group=requester_group,
+                        annotate=True,
                     )
                     return json.dumps(
                         {
@@ -493,7 +496,10 @@ async def search_memory(
         # Rank the whole candidate pool, THEN cut the page: recency/project/group
         # boosts must be able to promote a candidate that missed the raw top-K.
         rank_search_results(
-            results, preferred_project=project, requester_group=requester_group
+            results,
+            preferred_project=project,
+            requester_group=requester_group,
+            annotate=True,
         )
 
         payload = {"results": results[:DEFAULT_SEARCH_TOP_K]}
