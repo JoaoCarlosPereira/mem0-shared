@@ -43,9 +43,9 @@ Depois que o usuário tiver respondido às perguntas de esclarecimento técnico 
 
 ## Entradas Obrigatórias
 
-- Nome da feature identificando o diretório `.docs/tasks/<name>/`.
-- Opcional: `_prd.md` existente como entrada principal.
-- Opcional: `_techspec.md` existente para modo de atualização.
+- Nome da feature, do qual se deriva o **slug** do `SpecWorkspace` (não um diretório local).
+- `project_id` (nome do projeto/repositório atual; "default" se nenhum estiver claramente definido).
+- O PRD e a TechSpec vêm do workspace via `read_spec_document` — **não** de arquivos locais. O modo de atualização é detectado pela existência do documento `techspec` no workspace, não por um `_techspec.md` em disco.
 
 ## Checklist
 
@@ -63,6 +63,8 @@ Você DEVE criar uma tarefa para cada fase e completá-las em ordem:
 1. Coletar contexto (PRD/TechSpec via MCP — ADR-002).
    - Derivar o slug a partir do nome da feature; determinar o `project_id` (nome do projeto/repositório, "default" se nenhum).
    - Chamar `list_spec_workspaces(project_id=<project>)` para resolver o workspace deste slug. Se não existir, chamar `create_spec_workspace(project_id, slug, name)` e manter o `workspace_id`.
+     - **Se você criou o workspace aqui** (não apenas resolveu um existente), gravar a memória-ponteiro conforme `../cy-create-prd/references/ponteiro-de-spec.md`. Um workspace criado sem ponteiro é indescobrível para quem trabalha em outro repositório da mesma feature.
+     - Se `list_spec_workspaces` voltar vazio, considere antes de criar que o workspace pode existir sob **outro `project_id`** — o `project_id` segue o nome do diretório de trabalho, e features multi-repositório costumam ter o workspace sob o diretório-mãe. Pergunte ao usuário em vez de criar um workspace duplicado que fragmentaria a spec.
    - Ler o PRD via `read_spec_document(workspace_id, document_type="prd")`.
      - Se um PRD for encontrado, usá-lo como entrada principal.
      - **Modo standalone:** se nenhum PRD for encontrado (`found=false`), perguntar ao usuário uma descrição do que precisa de especificação técnica — NÃO falhar.

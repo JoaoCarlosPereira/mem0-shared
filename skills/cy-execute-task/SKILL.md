@@ -24,7 +24,10 @@ Execute uma `TaskCard` Shared do claim até `concluido`, respeitando o pipeline 
 
 1. Resolver contexto Shared (MCP).
    - Resolver workspace: `list_spec_workspaces(project_id)` / quadro; manter `workspace_id`.
-   - Identificar a `TaskCard` (`task_id`, `version`, `status`, `description`). Prefira um `task_id` explícito; caso contrário, escolha um card desbloqueado em `tasks` cujas dependências estejam concluídas.
+   - Identificar a `TaskCard` (`task_id`, `version`, `status`, `description`). Prefira um `task_id` explícito.
+   - **Como descobrir o `task_id` quando ele não foi informado:** leia `read_spec_document(workspace_id, document_type="tasks")` e use a coluna **`Card ID`** da lista mestra — esse documento é o **único índice de cards que existe**. Escolha uma linha desbloqueada cujas dependências estejam concluídas.
+     - Atenção: **não** existe ferramenta MCP que liste os cards. `list_spec_workspaces` devolve apenas contagem por coluna (`task_counts`), nunca ids; não há `list_tasks`; o servidor não expõe recursos MCP.
+     - Se a lista mestra não tiver a coluna `Card ID` preenchida (tarefas criadas por uma versão antiga do `cy-create-tasks`), **pare e peça o `task_id` ao usuário**, que pode obtê-lo na UI web do Kanban Shared. Não tente adivinhar id, não invente card e não implemente sem claim.
    - Ler PRD / TechSpec / tasks master / **adrs** via `read_spec_document` (`prd`, `techspec`, `tasks`, `adrs`). **Não** confie em `adrs/*.md` local.
    - Após a leitura, verifique conflitos entre a descrição do card, TechSpec e ADRs. Se os requisitos se contradizerem, pare e reporte — não adivinhe.
    - Se mem0 / workflow-memory estiver disponível, carregue contexto durável antes de editar (veja `cy-workflow-memory`).
