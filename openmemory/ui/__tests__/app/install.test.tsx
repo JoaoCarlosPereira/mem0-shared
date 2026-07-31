@@ -4,22 +4,17 @@
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-jest.mock("axios");
-import axios from "axios";
-const mockedAxios = axios as jest.Mocked<typeof axios>;
-
 const mockToastApi = { toast: jest.fn() };
 jest.mock("@/hooks/use-toast", () => ({
   useToast: () => mockToastApi,
 }));
 
-let mockSession: any = null;
-let mockStatus = "loading";
-jest.mock("next-auth/react", () => ({
-  useSession: () => ({ data: mockSession, status: mockStatus }),
+jest.mock("@/hooks/useImmutableAgentToken", () => ({
+  useImmutableAgentToken: jest.fn(),
 }));
 
 import AgentTokenPage from "@/app/admin/settings/install/page";
+import { useImmutableAgentToken } from "@/hooks/useImmutableAgentToken";
 
 const TOKEN = {
   token: "omtk_valorfixo123",
@@ -28,44 +23,38 @@ const TOKEN = {
   last_used_at: null,
 };
 
+const mockedHook = useImmutableAgentToken as jest.MockedFunction<
+  typeof useImmutableAgentToken
+>;
+
 describe("AgentTokenPage", () => {
   beforeEach(() => {
-    mockedAxios.post.mockReset();
-    mockSession = null;
-    mockStatus = "loading";
+    mockToastApi.toast.mockClear();
     Object.assign(navigator, {
       clipboard: { writeText: jest.fn().mockResolvedValue(undefined) },
     });
   });
 
   it("get-or-create exibe o token permanentemente", async () => {
-    mockStatus = "authenticated";
-    mockSession = { apiAccessToken: "jwt-sessao" };
-    mockedAxios.post.mockResolvedValue({ data: TOKEN });
-    render(<AgentTokenPage />);
-
-    await waitFor(() => {
-      expect(mockedAxios.post).toHaveBeenCalledWith(
-        expect.stringContaining("/api/v1/agent-token"),
-        undefined,
-        expect.objectContaining({
-          headers: { Authorization: "Bearer jwt-sessao" },
-        }),
-      );
-      expect(screen.getByTestId("raw-token").textContent).toBe(
-        "omtk_valorfixo123",
-      );
+    mockedHook.mockReturnValue({
+      rawToken: TOKEN.token,
+      tokenInfo: TOKEN,
+      error: false,
+      loading: false,
     });
+    render(<AgentTokenPage />);
+    expect(screen.getByTestId("raw-token").textContent).toBe("omtk_valorfixo123");
   });
 
   it("copiar coloca o token no clipboard", async () => {
-    mockStatus = "authenticated";
-    mockSession = { apiAccessToken: "jwt-sessao" };
-    mockedAxios.post.mockResolvedValue({ data: TOKEN });
+    mockedHook.mockReturnValue({
+      rawToken: TOKEN.token,
+      tokenInfo: TOKEN,
+      error: false,
+      loading: false,
+    });
     render(<AgentTokenPage />);
-    await waitFor(() => screen.getByTestId("raw-token"));
-
-    fireEvent.click(screen.getByRole("button", { name: /copiar token/i }));
+    fireEvent.click(screen.getByRole("button", { name: /copiar/i }));
     await waitFor(() => {
       expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
         "omtk_valorfixo123",
@@ -74,12 +63,13 @@ describe("AgentTokenPage", () => {
   });
 
   it("falha de carregamento mostra erro", async () => {
-    mockStatus = "authenticated";
-    mockSession = { apiAccessToken: "jwt-sessao" };
-    mockedAxios.post.mockRejectedValue({ response: { status: 500 } });
-    render(<AgentTokenPage />);
-    await waitFor(() => {
-      expect(screen.getByRole("alert").textContent).toMatch(/não foi possível/i);
+    mockedHook.mockReturnValue({
+      rawToken: null,
+      tokenInfo: null,
+      error: true,
+      loading: false,
     });
+    render(<AgentTokenPage />);
+    expect(screen.getByRole("alert").textContent).toMatch(/não foi possível/i);
   });
 });

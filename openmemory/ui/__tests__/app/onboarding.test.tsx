@@ -49,12 +49,18 @@ function renderPage() {
 }
 
 async function selectGroup(name = "Equipe Fiscal") {
+  await waitFor(() => {
+    expect(screen.getByRole("option", { name })).toBeInTheDocument();
+  });
   fireEvent.change(screen.getByLabelText(/grupo \/ equipe/i), {
     target: { value: name },
   });
 }
 
 async function fillAndSubmit(hostname = "S0281") {
+  await waitFor(() => {
+    expect(screen.getByRole("option", { name: "Equipe Fiscal" })).toBeInTheDocument();
+  });
   fireEvent.change(screen.getByLabelText(/nome da máquina/i), {
     target: { value: hostname },
   });
@@ -129,13 +135,21 @@ describe("OnboardingPage", () => {
       },
     });
     renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "Equipe Fiscal" })).toBeInTheDocument();
+    });
     fireEvent.change(screen.getByLabelText(/grupo \/ equipe/i), {
       target: { value: "__novo__" },
     });
     fireEvent.change(screen.getByLabelText(/nome do novo grupo/i), {
       target: { value: "Time Novo" },
     });
-    await fillAndSubmit();
+    fireEvent.change(screen.getByLabelText(/nome da máquina/i), {
+      target: { value: "S0281" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /vincular máquina e continuar/i }),
+    );
 
     await waitFor(() => {
       expect(mockedAxios.post).toHaveBeenCalledWith(

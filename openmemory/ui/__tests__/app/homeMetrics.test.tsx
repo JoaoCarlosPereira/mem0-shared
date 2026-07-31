@@ -29,6 +29,7 @@ jest.mock("@/app/memories/components/MemoriesSection", () => ({
 
 import adminReducer, { setAdminOverview } from "@/store/adminSlice";
 import queuesReducer from "@/store/queuesSlice";
+import profileReducer from "@/store/profileSlice";
 import DashboardPage from "@/app/page";
 import type { AdminOverview } from "@/types/admin";
 
@@ -48,7 +49,11 @@ const baseOverview: AdminOverview = {
 
 function renderHome(overview: AdminOverview | null) {
   const store = configureStore({
-    reducer: { admin: adminReducer, queues: queuesReducer },
+    reducer: {
+      admin: adminReducer,
+      queues: queuesReducer,
+      profile: profileReducer,
+    },
   });
   if (overview) store.dispatch(setAdminOverview(overview));
   return render(

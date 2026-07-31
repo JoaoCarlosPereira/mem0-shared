@@ -60,4 +60,16 @@ describe("MarkdownViewer", () => {
       "adr-007",
     );
   });
+
+  it("chama onAdrLink ao clicar em adrs/*.md", () => {
+    const onAdrLink = jest.fn();
+    render(
+      <MarkdownViewer
+        content={`[ADR-007](adrs/adr-007.md)`}
+        onAdrLink={onAdrLink}
+      />,
+    );
+    screen.getByRole("link", { name: /ADR-007/i }).click();
+    expect(onAdrLink).toHaveBeenCalledWith("adr-007");
+  });
 });

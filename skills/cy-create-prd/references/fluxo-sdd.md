@@ -4,44 +4,49 @@ Documentação do fluxo de trabalho Spec-Driven Development (SDD) usando as skil
 
 ---
 
+## Regra obrigatória — Quadro Kanban Shared
+
+**Iron law:** a cada atividade (criar workspace, gravar PRD/TechSpec/tasks, claim, bloqueio, mudança de coluna, conclusão), o agente **DEVE** atualizar o quadro/workspace no Mem0 Shared via MCP **na mesma interação**. Chat e arquivos locais não substituem o Kanban.
+
+**Pipeline de card (sem pular):** `tasks` → `em_andamento` → `revisao_codigo` → `fase_teste` → `concluido`. Proibido concluir sem revisão de código e fase de testes no quadro.
+
+Ferramentas: `create_spec_workspace`, `update_spec_workspace_status`, `create_task`, `claim_task`, `release_task`, `update_task_status`, `add_spec_comment`.
+
+Detalhes e anti-padrões: [`kanban-shared-obrigatorio.md`](kanban-shared-obrigatorio.md).
+
+---
+
 ## Visão Geral do Fluxo
 
 ```
 IDEIA
   │
   ▼
-[1] cy-create-prd ─────────────────────────────► _prd.md + ADRs
-     (O QUÊ e POR QUÊ — foco no produto/negócio)
+[1] cy-create-prd ─────────────────────────────► SpecDocument prd (+ ADRs embutidos) no Shared
+     (O QUÊ e POR QUÊ — foco no produto/negócio)  + status workspace
   │
   ▼
-[2] cy-create-techspec ────────────────────────► _techspec.md + ADRs
-     (O COMO — foco técnico, arquitetura, design)
+[2] cy-create-techspec ────────────────────────► SpecDocument techspec (+ ADRs) no Shared
+     (O COMO — foco técnico, arquitetura, design) + workspace ativo
   │
   ▼
-[3] cy-create-tasks ───────────────────────────► _tasks.md + task_01.md ...
-     (Decomposição em tarefas executáveis independentes)
+[3] cy-create-tasks ───────────────────────────► SpecDocument tasks + TaskCards no Kanban
+     (Decomposição em tarefas executáveis)         (coluna backlog)
   │
   ▼
-[4] cy-execute-task ───────────────────────────► Código implementado
-     (Implementação de cada tarefa individualmente)
+[4] cy-execute-task ───────────────────────────► Código + pipeline Kanban MCP
+     claim → em_andamento → revisao_codigo → fase_teste → concluido
      │
-     ├── [4a] cy-workflow-memory ───────────────► MEMORY.md + memory/*.md
-     │    (Persiste decisões e aprendizados entre tarefas)
+     ├── [4a] cy-workflow-memory / mem0 ───────► decisões duráveis
      │
-     └── [4b] cy-final-verify ─────────────────► Relatório de verificação
-          (Prova que o código está correto antes de concluir)
+     ├── [4b] cy-final-verify (em fase_teste) ─► evidência → só então concluido
+     │
+     ├── [5] cy-review-round ──────────────────► cards em revisao_codigo + comments
+     │
+     └── [6] cy-fix-reviews ────────────────────► em_andamento → pipeline de novo
   │
   ▼
-[5] cy-review-round ───────────────────────────► reviews-NNN/issue_*.md
-     (Auditoria de qualidade da implementação completa)
-  │
-  ▼
-[6] cy-fix-reviews ────────────────────────────► Issues corrigidos
-     (Correção em lote dos problemas encontrados na review)
-  │
-  ▼
-[7] cy-final-verify ───────────────────────────► Relatório final
-     (Verificação pós-correções antes do merge/PR)
+[7] encerramento ──────────────────────────────► update_spec_workspace_status concluido
 ```
 
 ---
@@ -105,59 +110,51 @@ IDEIA
 
 ---
 
-### [4] cy-execute-task — Task Execution
+### [4] cy-execute-task — Execução + Kanban MCP
 
-**Quando usar:** Para cada tarefa listada em `_tasks.md`, executada sequencialmente (respeitando dependências).
+**Quando usar:** Para cada `TaskCard` no quadro Shared, respeitando dependências.
 
-**O que faz:**
-1. **Ground in context** — Lê task spec, PRD, TechSpec, ADRs e verifica conflitos
-2. **Build checklist** — Extrai entregáveis e critérios de aceite em checklist numerado
-3. **Implement** — Implementa a tarefa mantendo escopo rigoroso
-4. **Validate** — Roda testes e validações da tarefa + executa `cy-final-verify`
-5. **Update tracking** — Atualiza checkboxes e status no task file e `_tasks.md`
-6. **Commit** — Cria commit local (se auto-commit habilitado) ou deixa diff pronto
+**Pipeline obrigatório de colunas (não pular):**
 
-**Por que executar assim:** Porque cada tarefa é implementada de forma autônoma, mas com contexto completo do PRD/TechSpec. O checklist garante que nada é esquecido e a verificação obrigatória evita claims de conclusão sem prova.
+`tasks` → `claim_task` → `em_andamento` → `revisao_codigo` → `fase_teste` → `concluido`
 
-**Artefatos atualizados:**
-- `task_*.md` — status atualizado para "completed"
-- `_tasks.md` — tabela de status atualizada
-- `memory/*.md` e `MEMORY.md` — via `cy-workflow-memory`
+**O que faz (sincronizar o quadro a CADA passo):**
+1. **Ler quadro** — `list_spec_workspaces` / board do workspace; escolher card no backlog
+2. **Claim** — `claim_task(task_id)` → `em_andamento` **antes** de editar código
+3. **Implementar** — escopo do card; card permanece em `em_andamento`
+4. **Revisão de código** — ao terminar a implementação, `update_task_status` → **`revisao_codigo`**; fazer self-review (ou peer); anotar achados com `add_spec_comment`. **Proibido** ir para `concluido` daqui.
+5. **Fase de testes** — após review ok, `update_task_status` → **`fase_teste`**; executar testes/lint relevantes **nesta** coluna; registrar evidência (comando + exit code). **Proibido** concluir sem esta fase.
+6. **Concluir** — só com evidência APROVADA em `fase_teste`: `update_task_status` → **`concluido`**
+7. **Bloqueio / retrabalho** — se review ou teste falhar: voltar a `em_andamento` ou marcar `is_blocked` + comentário; **não** saltar para `concluido`
+8. **Release** — se abandonar: `release_task` (volta ao backlog)
 
----
+**Por que assim:** review e teste são colunas visíveis do contrato da equipe. Concluir direto de `em_andamento` esconde risco e quebra o Kanban.
 
-### [4a] cy-workflow-memory — Workflow Memory
-
-**Quando usar:** Automaticamente durante `cy-execute-task`, antes de editar código e antes de concluir.
-
-**O que faz:**
-- Mantém **memória compartilhada** (`MEMORY.md`) — decisões e aprendizados duráveis que afetam múltiplas tarefas
-- Mantém **memória da tarefa** (`memory/<task>.md`) — detalhes operacionais locais de cada execução
-- Promove fatos da tarefa para memória compartilhada apenas se: (1) outra tarefa precisa, (2) é durável, (3) não é óbvio do repositório
-- Compacta arquivos quando necessário para manter clareza
-
-**Por que usar:** Porque o contexto de desenvolvimento se acumula entre tarefas. Sem memória, a próxima execução da tarefa repetiria os mesmos erros ou redescobriria as mesmas decisões. A separação shared vs. task-local mantém o contexto organizado.
-
-**Artefatos gerenciados:**
-- `memory/MEMORY.md` — memória compartilhada entre tarefas
-- `memory/<task>.md` — memória específica de cada tarefa
+**Artefatos:**
+- `TaskCard` no Mem0 Shared (coluna e bloqueio atualizados em cada transição)
+- Comentários via `add_spec_comment` (review notes + evidência de teste)
+- Código no repositório; memórias duráveis via mem0 MCP (não substituem o quadro)
 
 ---
 
-### [4b] cy-final-verify — Verificação Antes da Conclusão
+### [4a] cy-workflow-memory — Memória (mem0 Shared)
 
-**Quando usar:** Antes de qualquer claim de conclusão, commit, PR ou handoff. É usada dentro do `cy-execute-task` e no final do fluxo.
+**Quando usar:** Durante a execução, ao tomar decisões duráveis ou aprender algo reutilizável.
+
+**O que faz:**
+- Grava decisões/aprendizados no OpenMemory local (MCP mem0), com `project` adequado
+- **Não** substitui atualização do Kanban — memória e quadro são ortogonais
+
+---
+
+### [4b] cy-final-verify — Verificação antes da conclusão
+
+**Quando usar:** Antes de qualquer claim de conclusão no quadro (`concluido`), commit, PR ou handoff. O card **deve** já estar em `fase_teste`.
 
 **O que faz:**
 - Exige evidência fresca de verificação — nunca confia em "deveria funcionar"
-- Roda o pipeline completo de verificação (formatting, linting, tests, build)
-- Exige que a verificação seja proporcional ao claim (narrow claim = narrow verify; broad claim = full pipeline)
-- Gera relatório estruturado em PT-BR com: Afirmação, Comando executado, Exit code, Resumo, Veredito APROVADO/REPROVADO
-
-**Por que usar:** Porque a iron law do fluxo é clara: "NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE". Claims sem verificação são dishonesty, não efficiency. O relatório estruturado garante que toda conclusão é auditável.
-
-**Artefatos gerados:**
-- Relatório de verificação citado na resposta (em PT-BR)
+- Só após APROVADO **e** card em `fase_teste`: `update_task_status(..., "concluido")` no Shared
+- Claims de conclusão no chat **sem** ter passado por `revisao_codigo` + `fase_teste` = proibido
 
 ---
 

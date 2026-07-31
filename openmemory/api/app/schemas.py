@@ -94,6 +94,8 @@ class PaginatedWriteQueueResponse(BaseModel):
     page: int
     pages: int
     failed_count: int  # total de failed (sem filtro de página)
+    write_worker_stalled: bool = False
+    write_worker_heartbeat_age_sec: Optional[float] = None
 
 
 class GovernanceJobResponse(BaseModel):
@@ -154,6 +156,9 @@ class AdminOverviewResponse(BaseModel):
     governance_queue_queued: int
     governance_queue_processing: int
     governance_queue_failed: int
+    write_worker_alive: bool = True
+    write_worker_stalled: bool = False
+    write_worker_heartbeat_age_sec: Optional[float] = None
 
 
 # --------------------------------------------------------------------------- #

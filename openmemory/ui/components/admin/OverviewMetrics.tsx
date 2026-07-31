@@ -8,10 +8,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { FolderKanban, Layers, Clock3, PenLine, Scale } from "lucide-react";
 
 /**
- * Heurística de "worker ativo" no MVP: o overview não expõe heartbeat do worker.
- * Inferimos atividade pela presença de jobs em `processing`.
+ * Status do write-worker: heartbeat da API tem prioridade; senão heurística
+ * por jobs em processing/queued.
  */
-export function workerHint(processing: number, queued: number): string {
+export function workerHint(
+  processing: number,
+  queued: number,
+  opts?: { stalled?: boolean; alive?: boolean },
+): string {
+  if (opts?.stalled) return "Worker parado (sem heartbeat) — reprocessar falhas";
+  if (opts?.alive === false) return "Worker sem sinal";
   if (processing > 0) return "Worker ativo (processando)";
   if (queued > 0) return "Aguardando — jobs na fila";
   return "Ocioso";
@@ -92,6 +98,12 @@ export function OverviewMetrics({ onRetry, className }: OverviewMetricsProps) {
     unacknowledged.governance,
   );
 
+  const writeWorkerOpts = {
+    stalled: overview.write_worker_stalled === true,
+    alive: overview.write_worker_alive !== false,
+  };
+  const writeAlert = writeFailed > 0 || writeWorkerOpts.stalled;
+
   return (
     <div
       id="metrics-panel"
@@ -120,13 +132,14 @@ export function OverviewMetrics({ onRetry, className }: OverviewMetricsProps) {
         value={writeDepth}
         icon={PenLine}
         accent="emerald"
-        alert={writeFailed > 0}
+        alert={writeAlert}
         hint={
           writeFailed > 0
-            ? `${writeFailed} com falha · ${workerHint(overview.write_queue_processing, overview.write_queue_queued)}`
+            ? `${writeFailed} com falha · ${workerHint(overview.write_queue_processing, overview.write_queue_queued, writeWorkerOpts)}`
             : workerHint(
                 overview.write_queue_processing,
                 overview.write_queue_queued,
+                writeWorkerOpts,
               )
         }
       />

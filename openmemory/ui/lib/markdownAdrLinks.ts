@@ -1,7 +1,7 @@
 /**
  * Helpers for ADR links/anchors in shared Spec markdown.
- * Relative `adrs/adr-NNN.md` paths are legacy (local-only files) and must not
- * navigate to Next.js routes that 404 under `/docs/...`.
+ * Relative `adrs/adr-NNN.md` paths open the shared document_type=adrs
+ * (or scroll to #adr-NNN when already viewing that doc).
  */
 
 const ADR_FILE_HREF =

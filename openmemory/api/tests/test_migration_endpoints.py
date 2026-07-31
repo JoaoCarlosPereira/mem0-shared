@@ -29,7 +29,8 @@ _spec.loader.exec_module(_admin)
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -49,24 +50,30 @@ def client():
     engine.dispose()
 
 
+ADMIN_HEADERS = {"x-admin-token": "test-admin-token"}
+
+
 def test_full_cycle_start_flip_rollback(client):
     tc, resolver = client
 
-    r = tc.post("/admin/migration/start",
-                json={"source_collection": "blue", "target_collection": "green"})
+    r = tc.post(
+        "/admin/migration/start",
+        json={"source_collection": "blue", "target_collection": "green"},
+        headers=ADMIN_HEADERS,
+    )
     assert r.status_code == 200
     assert r.json()["active_collection"] == "blue"
     assert r.json()["dual_write_enabled"] is True
 
-    r = tc.post("/admin/migration/validate")
+    r = tc.post("/admin/migration/validate", headers=ADMIN_HEADERS)
     assert r.status_code == 200 and r.json()["ok"] is True
 
-    r = tc.post("/admin/migration/flip")
+    r = tc.post("/admin/migration/flip", headers=ADMIN_HEADERS)
     assert r.status_code == 200
     assert r.json()["active_collection"] == "green"
     assert resolver.active_collection() == "green"
 
-    r = tc.post("/admin/migration/rollback")
+    r = tc.post("/admin/migration/rollback", headers=ADMIN_HEADERS)
     assert r.status_code == 200
     assert r.json()["active_collection"] == "blue"
     assert resolver.active_collection() == "blue"
@@ -74,16 +81,22 @@ def test_full_cycle_start_flip_rollback(client):
 
 def test_flip_is_idempotent(client):
     tc, _ = client
-    tc.post("/admin/migration/start",
-            json={"source_collection": "blue", "target_collection": "green"})
-    first = tc.post("/admin/migration/flip")
-    second = tc.post("/admin/migration/flip")
+    tc.post(
+        "/admin/migration/start",
+        json={"source_collection": "blue", "target_collection": "green"},
+        headers=ADMIN_HEADERS,
+    )
+    first = tc.post("/admin/migration/flip", headers=ADMIN_HEADERS)
+    second = tc.post("/admin/migration/flip", headers=ADMIN_HEADERS)
     assert first.status_code == 200 and second.status_code == 200
     assert second.json()["active_collection"] == "green"
 
 
 def test_start_rejects_same_collections(client):
     tc, _ = client
-    r = tc.post("/admin/migration/start",
-                json={"source_collection": "x", "target_collection": "x"})
+    r = tc.post(
+        "/admin/migration/start",
+        json={"source_collection": "x", "target_collection": "x"},
+        headers=ADMIN_HEADERS,
+    )
     assert r.status_code == 400

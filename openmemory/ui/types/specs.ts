@@ -14,7 +14,7 @@ export type TaskCardStatus =
   | "fase_teste"
   | "concluido";
 
-export type DocumentType = "prd" | "techspec" | "tasks";
+export type DocumentType = "prd" | "techspec" | "tasks" | "adrs";
 
 export type CommentTargetType = "workspace" | "document" | "task";
 

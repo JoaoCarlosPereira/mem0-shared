@@ -97,7 +97,12 @@ class WriteQueue:
         On PostgreSQL, ``FOR UPDATE SKIP LOCKED`` guarantees each job is
         delivered to at most one concurrent worker (ADR-003). On SQLite the
         lock clause is omitted (no-op) so dev mode keeps working.
+
+        ``updated_at`` is bumped on claim so stale-processing age is measured
+        from when the worker took the job (not from enqueue).
         """
+        from app.utils.datetime_utc import utc_now_naive
+
         db = self._session()
         try:
             query = (
@@ -109,8 +114,10 @@ class WriteQueue:
                 query = query.with_for_update(skip_locked=True)
             rows = query.limit(limit).all()
             jobs = []
+            now = utc_now_naive()
             for row in rows:
                 row.status = WriteQueueStatus.processing
+                row.updated_at = now
                 jobs.append(_to_job(row))
             db.commit()
             return jobs
@@ -120,6 +127,28 @@ class WriteQueue:
     def mark_done(self, job_id: str) -> None:
         """Transition a job to ``done``."""
         self._set_status(job_id, WriteQueueStatus.done)
+
+    def mark_done_if_processing(self, job_id: str) -> bool:
+        """Mark ``done`` only if the job is still ``processing``.
+
+        Used after a job-level timeout: a hung ``asyncio.to_thread(add)`` may
+        still finish later; we must not overwrite a terminal ``failed`` status.
+        """
+        db = self._session()
+        try:
+            row = (
+                db.query(WriteQueueModel)
+                .filter(WriteQueueModel.id == uuid.UUID(str(job_id)))
+                .first()
+            )
+            if row is None or row.status != WriteQueueStatus.processing:
+                return False
+            row.status = WriteQueueStatus.done
+            row.error = None
+            db.commit()
+            return True
+        finally:
+            db.close()
 
     def mark_skipped(self, job_id: str, reason: str) -> None:
         """Transition a job to ``skipped`` (processed, but nothing new to persist)."""
@@ -240,6 +269,78 @@ class WriteQueue:
                 row.error = (
                     f"auto-recovered after {older_than_minutes}m cooldown"
                 )
+            if rows:
+                db.commit()
+            return len(rows)
+        finally:
+            db.close()
+
+    def fail_stale_processing(
+        self,
+        older_than_minutes: int,
+        error: str,
+    ) -> int:
+        """Mark orphaned ``processing`` jobs as terminal ``failed``.
+
+        Used when a job exceeded the per-job timeout (or the worker died while
+        holding the claim). Materializes a failure the admin UI can show and
+        reprocess via retry-failed — instead of leaving jobs stuck forever.
+        """
+        from app.utils.datetime_utc import utc_now_naive
+
+        if older_than_minutes <= 0:
+            return 0
+        db = self._session()
+        try:
+            cutoff = utc_now_naive() - timedelta(minutes=older_than_minutes)
+            rows = (
+                db.query(WriteQueueModel)
+                .filter(
+                    WriteQueueModel.status == WriteQueueStatus.processing,
+                    WriteQueueModel.updated_at <= cutoff,
+                )
+                .all()
+            )
+            for row in rows:
+                row.status = WriteQueueStatus.failed
+                row.error = error
+                row.attempts = max(row.attempts or 0, 1)
+            if rows:
+                db.commit()
+            return len(rows)
+        finally:
+            db.close()
+
+    def fail_stalled_queued(
+        self,
+        older_than_minutes: int,
+        error: str,
+    ) -> int:
+        """Mark old ``queued`` jobs as ``failed`` (worker-dead stall only).
+
+        Must not be called while the worker is healthy: a slow FIFO backlog is
+        legitimate on limited hardware. Call only when the heartbeat says the
+        consumer is stalled/dead.
+        """
+        from app.utils.datetime_utc import utc_now_naive
+
+        if older_than_minutes <= 0:
+            return 0
+        db = self._session()
+        try:
+            cutoff = utc_now_naive() - timedelta(minutes=older_than_minutes)
+            rows = (
+                db.query(WriteQueueModel)
+                .filter(
+                    WriteQueueModel.status == WriteQueueStatus.queued,
+                    WriteQueueModel.created_at <= cutoff,
+                )
+                .all()
+            )
+            for row in rows:
+                row.status = WriteQueueStatus.failed
+                row.error = error
+                row.attempts = max(row.attempts or 0, 1)
             if rows:
                 db.commit()
             return len(rows)
