@@ -606,3 +606,26 @@ class TestStopCancellation:
 
         await worker.stop()  # must not raise
         assert worker._task is None
+
+
+class TestJobTimeout:
+    @pytest.mark.asyncio
+    async def test_timeout_marks_job_failed(self, queue, db_path):
+        client = MagicMock()
+
+        async def _hang(text, **kwargs):
+            await asyncio.sleep(60)
+            return {"results": [{"id": "x", "event": "ADD"}]}
+
+        client.add = MagicMock(side_effect=_hang)
+        worker = WriteWorker(
+            queue=queue,
+            client_provider=lambda: client,
+            upsert_project=lambda *a, **k: None,
+            job_timeout_sec=0.05,
+        )
+        job_id = queue.enqueue(_job(text="slow"))
+        assert await worker.process_once() == 1
+        row = _status(db_path, job_id)
+        assert row.status == WriteQueueStatus.failed
+        assert "Timeout" in (row.error or "")

@@ -76,6 +76,9 @@ export type AdminOverview = {
   governance_queue_queued: number;
   governance_queue_processing: number;
   governance_queue_failed: number;
+  write_worker_alive?: boolean;
+  write_worker_stalled?: boolean;
+  write_worker_heartbeat_age_sec?: number | null;
 };
 
 // Espelha PaginatedWriteQueueResponse
@@ -85,6 +88,8 @@ export type PaginatedWriteQueue = {
   page: number;
   pages: number;
   failed_count: number;
+  write_worker_stalled?: boolean;
+  write_worker_heartbeat_age_sec?: number | null;
 };
 
 // Espelha PaginatedGovernanceJobResponse

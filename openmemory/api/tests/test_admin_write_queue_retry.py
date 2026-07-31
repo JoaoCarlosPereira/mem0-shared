@@ -148,3 +148,73 @@ def test_retry_failed_empty_returns_zero(factory):
     resp = client.post("/admin/write-queue/retry-failed", headers=ADMIN_HEADERS)
     assert resp.status_code == 200
     assert resp.json() == {"requeued": 0, "projects": []}
+
+
+def test_fail_stalled_force_marks_old_queued(factory, monkeypatch):
+    from datetime import timedelta
+
+    from app.utils.datetime_utc import utc_now_naive
+    from app.utils.write_queue import WriteQueue
+
+    db = factory()
+    job = WriteQueueJob(
+        project="proj-stall",
+        hostname="host1",
+        client_name="cli",
+        text="stuck",
+        status=WriteQueueStatus.queued,
+        attempts=0,
+    )
+    db.add(job)
+    db.commit()
+    job_id = job.id
+    job.created_at = utc_now_naive() - timedelta(minutes=30)
+    db.commit()
+    db.close()
+
+    q = WriteQueue(session_factory=factory)
+
+    def _fail(**kwargs):
+        from app.utils.write_queue_stall import fail_stalled_jobs as _impl
+
+        return _impl(
+            queue=q,
+            force=True,
+            queued_fail_minutes=10,
+            processing_fail_minutes=40,
+        )
+
+    monkeypatch.setattr(_router_mod, "fail_stalled_jobs", _fail)
+
+    client = make_client(factory)
+    resp = client.post(
+        "/admin/write-queue/fail-stalled",
+        params={"force": "true"},
+        headers=ADMIN_HEADERS,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["failed_queued"] == 1
+
+    db = factory()
+    row = db.query(WriteQueueJob).filter(WriteQueueJob.id == job_id).one()
+    db.close()
+    assert row.status == WriteQueueStatus.failed
+
+
+def test_worker_status_endpoint(factory, monkeypatch):
+    monkeypatch.setattr(
+        _router_mod,
+        "worker_status",
+        lambda: {
+            "alive": False,
+            "stalled": True,
+            "last_heartbeat_age_sec": 120.0,
+            "stale_after_sec": 90,
+        },
+    )
+    client = make_client(factory)
+    resp = client.get("/admin/write-queue/worker-status", headers=ADMIN_HEADERS)
+    assert resp.status_code == 200
+    assert resp.json()["stalled"] is True
+    assert resp.json()["last_heartbeat_age_sec"] == 120.0

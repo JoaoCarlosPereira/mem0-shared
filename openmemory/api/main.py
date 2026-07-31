@@ -46,6 +46,7 @@ from app.utils.logging_context import install_structured_logging
 from app.utils.tracing import configure_tracing
 from app.utils.deletion_guard import deletion_guard_status, log_deletion_guard_startup
 from app.utils.write_guard import log_write_guard_startup
+from app.utils.write_queue_stall import write_queue_stall_watchdog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_pagination import add_pagination
@@ -195,6 +196,8 @@ async def _start_write_worker():
     # Liberação automática de tasks travadas por timeout (task_05 / ADR-007),
     # iniciada no mesmo startup do write_worker (não como serviço Docker próprio).
     spec_task_timeout_worker.start()
+    # Materializa falha na UI quando o write-worker morre/trava (heartbeat).
+    write_queue_stall_watchdog.start()
 
 
 @app.on_event("shutdown")
@@ -202,3 +205,4 @@ async def _stop_write_worker():
     if embedded_worker_enabled():
         await write_worker.stop()
     await spec_task_timeout_worker.stop()
+    await write_queue_stall_watchdog.stop()

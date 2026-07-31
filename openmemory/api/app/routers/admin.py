@@ -396,6 +396,9 @@ def admin_overview(db: Session = Depends(get_db)) -> AdminOverviewResponse:
     total_memories = count_collection_memories()
     memories_last_24h = count_memories_last_24h()
 
+    from app.utils.write_worker_heartbeat import worker_status
+
+    ww = worker_status()
     return AdminOverviewResponse(
         total_projects=total_projects,
         total_memories=total_memories,
@@ -408,6 +411,9 @@ def admin_overview(db: Session = Depends(get_db)) -> AdminOverviewResponse:
         governance_queue_queued=_gq(GovernanceJobStatus.queued),
         governance_queue_processing=_gq(GovernanceJobStatus.processing),
         governance_queue_failed=_gq(GovernanceJobStatus.failed),
+        write_worker_alive=bool(ww.get("alive", True)),
+        write_worker_stalled=bool(ww.get("stalled", False)),
+        write_worker_heartbeat_age_sec=ww.get("last_heartbeat_age_sec"),
     )
 
 
@@ -475,12 +481,17 @@ def write_queue(
     items = [WriteQueueJobResponse(**item) for item in raw_items]
 
     pages = math.ceil(total / page_size) if total else 0
+    from app.utils.write_worker_heartbeat import worker_status
+
+    ww = worker_status()
     return PaginatedWriteQueueResponse(
         items=items,
         total=total,
         page=page,
         pages=pages,
         failed_count=failed_count,
+        write_worker_stalled=bool(ww.get("stalled", False)),
+        write_worker_heartbeat_age_sec=ww.get("last_heartbeat_age_sec"),
     )
 
 

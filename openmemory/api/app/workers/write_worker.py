@@ -42,6 +42,7 @@ from app.utils.read_cache import read_cache
 from app.utils.token_usage_wrapper import usage_attribution
 from app.utils.write_queue import WriteJob
 from app.utils.write_queue import write_queue as _default_write_queue
+from app.utils.write_worker_heartbeat import beat as _heartbeat_beat
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,11 @@ EXTRACTION_FAILED_MSG = (
 
 LLM_INFRA_ERROR_MSG = (
     "LLM indisponível ou modelo inválido — job será reprocessado quando o backend estiver OK"
+)
+
+JOB_TIMEOUT_ERROR_FMT = (
+    "Timeout do job após {timeout:.0f}s (LLM/embed lento ou travado) — "
+    "use Reprocessar Falhas na UI"
 )
 
 # Default bound on concurrent LLM inferences. Kept small so the local LLM is not
@@ -74,6 +80,16 @@ DEFAULT_IDLE_SLEEP = 1.0
 
 # Re-queue terminal ``failed`` jobs after this many minutes (0 = disabled).
 DEFAULT_FAILED_RETRY_AFTER_MINUTES = 15
+
+# Per-job wall-clock limit (slow HW: ~5–6 min/job is normal; 30 min is generous).
+# Prevents a hung ``add()`` from locking the consumer forever without a UI failure.
+DEFAULT_JOB_TIMEOUT_SEC = 1800.0
+
+# Redis heartbeat so the API can detect a frozen/dead worker.
+DEFAULT_HEARTBEAT_INTERVAL_SEC = 15.0
+
+# How often the side recovery/heartbeat loop runs (independent of process_once).
+DEFAULT_SIDE_LOOP_INTERVAL_SEC = 15.0
 
 
 
@@ -171,6 +187,8 @@ class WriteWorker:
         idle_sleep: float = DEFAULT_IDLE_SLEEP,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         failed_retry_after_minutes: int = DEFAULT_FAILED_RETRY_AFTER_MINUTES,
+        job_timeout_sec: float = DEFAULT_JOB_TIMEOUT_SEC,
+        heartbeat_interval_sec: float = DEFAULT_HEARTBEAT_INTERVAL_SEC,
     ):
         self._queue = queue if queue is not None else _default_write_queue
         self._client_provider = client_provider or _default_client_provider
@@ -180,6 +198,8 @@ class WriteWorker:
         self._idle_sleep = idle_sleep
         self._max_attempts = max(1, int(max_attempts))
         self._failed_retry_after_minutes = max(0, int(failed_retry_after_minutes))
+        self._job_timeout_sec = max(0.0, float(job_timeout_sec))
+        self._heartbeat_interval_sec = max(1.0, float(heartbeat_interval_sec))
 
         self._semaphore = asyncio.Semaphore(self._max_concurrency)
         # Projects already cataloged in this process; avoids a redundant DB
@@ -188,7 +208,9 @@ class WriteWorker:
         self._cataloged_projects: set = set()
 
         self._task: Optional[asyncio.Task] = None
+        self._side_task: Optional[asyncio.Task] = None
         self._stopped = asyncio.Event()
+        self._current_job_id: Optional[str] = None
 
     # --------------------------------------------------------------------- #
     # Single-pass processing (testable seam)
@@ -214,33 +236,78 @@ class WriteWorker:
         is retried — re-queued with an incremented ``attempts`` count — until the
         configured ceiling is reached, at which point it is marked terminally
         ``failed``. Either way the job is never lost: it stays in the table.
+
+        A per-job wall-clock timeout marks the job ``failed`` so a hung LLM call
+        cannot leave the queue silently locked; late thread completion cannot
+        overwrite that failure (``mark_done_if_processing``).
         """
         job_token = job_id_var.set(job.id)
+        self._current_job_id = job.id
         try:
             async with self._semaphore:
                 try:
-                    client = self._client_provider()
-                    if client is None:
-                        raise RuntimeError(
-                            "memory client unavailable (LLM/backend down)"
+                    if self._job_timeout_sec > 0:
+                        await asyncio.wait_for(
+                            self._process_job_body(job),
+                            timeout=self._job_timeout_sec,
                         )
-
-                    result = await self._run_add_with_extraction_policy(client, job)
-                    if _persisted_result_count(result) == 0:
-                        self._queue.mark_skipped(job.id, SKIPPED_NO_MEMORIES_REASON)
-                        WRITE_WORKER_SUCCESS.inc()
-                        return
-                    self._maybe_dual_write(client, result)
-                    self._apply_supersedes(client, job, result)
-                    self._catalog_project(job)
-                    read_cache.invalidate_search(job.project)
-                    self._queue.mark_done(job.id)
-                    WRITE_WORKER_SUCCESS.inc()
+                    else:
+                        await self._process_job_body(job)
+                except asyncio.TimeoutError:
+                    WRITE_WORKER_ERRORS.inc()
+                    msg = JOB_TIMEOUT_ERROR_FMT.format(
+                        timeout=self._job_timeout_sec
+                    )
+                    logger.error(
+                        "write job timed out job_id=%s project=%s after %.0fs",
+                        job.id,
+                        job.project,
+                        self._job_timeout_sec,
+                    )
+                    try:
+                        self._queue.mark_failed(
+                            job.id, msg, attempts=job.attempts + 1
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            "could not mark timed-out job %s as failed", job.id
+                        )
                 except Exception as e:  # noqa: BLE001 - background isolation
                     WRITE_WORKER_ERRORS.inc()
                     self._handle_failure(job, e)
         finally:
+            if self._current_job_id == job.id:
+                self._current_job_id = None
             job_id_var.reset(job_token)
+
+    async def _process_job_body(self, job: WriteJob) -> None:
+        """Inner job work (timeout-wrapped by :meth:`_process_job`)."""
+        client = self._client_provider()
+        if client is None:
+            raise RuntimeError("memory client unavailable (LLM/backend down)")
+
+        result = await self._run_add_with_extraction_policy(client, job)
+        if _persisted_result_count(result) == 0:
+            self._queue.mark_skipped(job.id, SKIPPED_NO_MEMORIES_REASON)
+            WRITE_WORKER_SUCCESS.inc()
+            return
+        self._maybe_dual_write(client, result)
+        self._apply_supersedes(client, job, result)
+        self._catalog_project(job)
+        read_cache.invalidate_search(job.project)
+        # Prefer conditional done: a concurrent timeout/stall watchdog may have
+        # already marked the job failed while the thread was still finishing.
+        if hasattr(self._queue, "mark_done_if_processing"):
+            if not self._queue.mark_done_if_processing(job.id):
+                logger.warning(
+                    "write job finished after terminal status; not marking done "
+                    "job_id=%s",
+                    job.id,
+                )
+                return
+        else:
+            self._queue.mark_done(job.id)
+        WRITE_WORKER_SUCCESS.inc()
 
     def _handle_failure(self, job: WriteJob, error: Exception) -> None:
         """Re-queue the job for another attempt, or fail it terminally.
@@ -428,10 +495,15 @@ class WriteWorker:
         self._recover_failed_jobs()
         self._log_llm_startup_status()
         logger.info(
-            "write worker started (max_concurrency=%s, batch_size=%s)",
+            "write worker started (max_concurrency=%s, batch_size=%s, "
+            "job_timeout_sec=%s)",
             self._max_concurrency,
             self._batch_size,
+            self._job_timeout_sec,
         )
+        # Heartbeat + recovery run on a side task so a hung process_once
+        # (blocked on a job) cannot silence health signals forever.
+        _heartbeat_beat({"phase": "started", "job_id": None})
         # NOTE: the stop event is (re)cleared in start() *before* the task is
         # scheduled — never here. Clearing it inside run() races with stop():
         # if stop() runs before this coroutine body executes, it would wipe the
@@ -455,7 +527,55 @@ class WriteWorker:
                     pass
         logger.info("write worker stopped")
 
+    async def _side_loop(self) -> None:
+        """Heartbeat + fail stuck processing even while a job is in flight."""
+        interval = min(self._heartbeat_interval_sec, DEFAULT_SIDE_LOOP_INTERVAL_SEC)
+        while not self._stopped.is_set():
+            try:
+                _heartbeat_beat(
+                    {
+                        "phase": "running",
+                        "job_id": self._current_job_id,
+                        "depth": self._queue.depth(),
+                    }
+                )
+                self._fail_stale_processing_jobs()
+            except Exception:  # noqa: BLE001
+                logger.exception("write worker side loop errored; continuing")
+            try:
+                await asyncio.wait_for(self._stopped.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                pass
+
+    def _fail_stale_processing_jobs(self) -> None:
+        """Mark processing jobs that exceeded the job timeout as failed.
+
+        Complements asyncio.wait_for: if the event loop itself is wedged on a
+        single job, this still runs on the side task. Minutes are derived from
+        job_timeout so slow HW (30 min timeout) is not failed prematurely.
+        """
+        if self._job_timeout_sec <= 0:
+            return
+        # Slightly above the asyncio timeout so the wait_for path usually wins.
+        minutes = max(1, int(self._job_timeout_sec / 60) + 5)
+        error = JOB_TIMEOUT_ERROR_FMT.format(timeout=self._job_timeout_sec)
+        try:
+            failed = self._queue.fail_stale_processing(minutes, error)
+        except Exception:  # noqa: BLE001
+            logger.exception("fail-stale-processing pass errored; continuing")
+            return
+        if failed:
+            logger.warning(
+                "marked %s stale processing jobs as failed (age>=%sm)",
+                failed,
+                minutes,
+            )
+
     def _recover_stale_processing(self) -> None:
+        # With per-job timeout + side-loop fail_stale, idle requeue races a
+        # still-running ``add()`` thread. Startup still recovers all processing.
+        if self._job_timeout_sec > 0:
+            return
         minutes = _env_int("WRITE_WORKER_STALE_PROCESSING_MINUTES", 15)
         if minutes <= 0:
             return
@@ -542,18 +662,20 @@ class WriteWorker:
             # stop() issued right after start() cannot be erased by run().
             self._stopped.clear()
             self._task = asyncio.create_task(self.run())
+            self._side_task = asyncio.create_task(self._side_loop())
         return self._task
 
     async def stop(self) -> None:
         """Signal the loop to stop and await the background task."""
         self._stopped.set()
-        if self._task is not None:
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            finally:
-                self._task = None
+        for task in (self._task, self._side_task):
+            if task is not None:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        self._task = None
+        self._side_task = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -577,6 +699,12 @@ def worker_from_env() -> WriteWorker:
         batch_size=_env_int("WRITE_WORKER_BATCH_SIZE", DEFAULT_BATCH_SIZE),
         idle_sleep=_env_float("WRITE_WORKER_IDLE_SLEEP", DEFAULT_IDLE_SLEEP),
         max_attempts=_env_int("WRITE_WORKER_MAX_ATTEMPTS", DEFAULT_MAX_ATTEMPTS),
+        job_timeout_sec=_env_float(
+            "WRITE_WORKER_JOB_TIMEOUT_SEC", DEFAULT_JOB_TIMEOUT_SEC
+        ),
+        heartbeat_interval_sec=_env_float(
+            "WRITE_WORKER_HEARTBEAT_INTERVAL_SEC", DEFAULT_HEARTBEAT_INTERVAL_SEC
+        ),
     )
 
 

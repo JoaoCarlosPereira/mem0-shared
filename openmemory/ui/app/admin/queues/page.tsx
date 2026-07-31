@@ -89,6 +89,9 @@ export default function QueuesPage() {
   const unacknowledged = useSelector(selectUnacknowledgedFailedByKind);
   useAcknowledgeQueueFailuresOnMount();
 
+  const workerStalled =
+    overview?.write_worker_stalled === true ||
+    writeQueue?.write_worker_stalled === true;
   const hideWriteCompleted = useMemo(
     () => isHideCompleted("write"),
     [uiPrefsVersion],
@@ -268,6 +271,16 @@ export default function QueuesPage() {
         </TabsList>
 
         <TabsContent value="write" className="mt-4">
+          {workerStalled ? (
+            <div
+              role="alert"
+              className="mb-3 rounded-md border border-red-800/60 bg-red-950/40 px-3 py-2 text-sm text-red-200"
+            >
+              Worker da fila de escrita parado (sem heartbeat). Jobs travados
+              passam a <strong>failed</strong> automaticamente — use
+              &quot;Reprocessar Falhas&quot; depois de reiniciar o worker.
+            </div>
+          ) : null}
           <StatusCounters
             queued={overview?.write_queue_queued ?? 0}
             processing={overview?.write_queue_processing ?? 0}
