@@ -1,8 +1,12 @@
 # Configuração de lint do openmemory/api (task_01 — gate de CI).
-# Mantém os checks padrão E/F do ruff. Ignora E402 porque vários módulos e
-# testes intencionalmente definem variáveis de ambiente (ex.: OPENAI_API_KEY)
-# antes dos imports — padrão necessário para a configuração do cliente mem0.
+# Fixa o conjunto clássico E4/E7/E9/F (padrão do ruff até 0.15.x).
+# O ruff 0.16+ passou a habilitar ~413 regras por padrão; sem `select`
+# explícito o CI com `pip install ruff` (sem pin) explode em milhares
+# de apontamentos fora do escopo deste gate.
+# Ignora E402 porque vários módulos e testes intencionalmente definem
+# variáveis de ambiente (ex.: OPENAI_API_KEY) antes dos imports.
 line-length = 120
 
 [lint]
+select = ["E4", "E7", "E9", "F"]
 ignore = ["E402"]

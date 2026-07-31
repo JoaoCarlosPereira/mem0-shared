@@ -11,7 +11,7 @@ Persistence is SQLite-backed through the existing SQLAlchemy stack
 """
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 from dataclasses import dataclass
 from typing import List, Optional
 
