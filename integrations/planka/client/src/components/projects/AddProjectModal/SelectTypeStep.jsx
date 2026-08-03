@@ -42,7 +42,8 @@ const SelectTypeStep = React.memo(({ value, onSelect, onClose }) => {
       </Popup.Header>
       <Popup.Content>
         <Menu secondary vertical className={styles.menu}>
-          {[ProjectTypes.PRIVATE, ProjectTypes.SHARED].map((type) => (
+          {/* Mem0 Shared: only team-based projects (Equipe), no personal/Meus. */}
+          {[ProjectTypes.SHARED].map((type) => (
             <Menu.Item
               key={type}
               value={type}

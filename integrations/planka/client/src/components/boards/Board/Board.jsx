@@ -22,21 +22,18 @@ const Board = React.memo(() => {
   const isCardModalOpened = useSelector((state) => !!selectors.selectPath(state).cardId);
 
   let Content;
-  if (board.view === BoardViews.KANBAN) {
+  // Archive/Trash are list/grid contexts — never keep Kanban columns when
+  // switching via "Ações do quadro → Arquivar/Lixeira" (Mem0: was a no-op
+  // while view stayed on kanban).
+  if (
+    board.context === BoardContexts.ARCHIVE ||
+    board.context === BoardContexts.TRASH
+  ) {
+    Content = EndlessContent;
+  } else if (board.view === BoardViews.KANBAN) {
     Content = KanbanContent;
   } else {
-    switch (board.context) {
-      case BoardContexts.BOARD:
-        Content = FiniteContent;
-
-        break;
-      case BoardContexts.ARCHIVE:
-      case BoardContexts.TRASH:
-        Content = EndlessContent;
-
-        break;
-      default:
-    }
+    Content = FiniteContent;
   }
 
   let modalNode = null;

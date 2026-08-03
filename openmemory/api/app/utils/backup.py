@@ -26,6 +26,10 @@ from datetime import UTC, datetime
 from typing import Callable, List, Optional
 
 from app.database import DATABASE_URL, is_postgresql
+from app.utils.backup_attachments import (
+    apply_attachment_archive,
+    collect_attachment_archives,
+)
 from app.utils.metrics import (
     BACKUP_DURATION_SECONDS,
     BACKUP_ERRORS_TOTAL,
@@ -78,6 +82,9 @@ class BackupService:
         qdrant_client_provider: Optional[Callable] = None,
         pg_dump_runner: Callable[[str], bytes] = _default_pg_dump,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        attachment_roots: Optional[dict] = None,
+        attachment_collector: Optional[Callable] = None,
+        attachment_applier: Optional[Callable] = None,
     ):
         self._s3 = s3_client
         self._bucket = bucket
@@ -85,6 +92,9 @@ class BackupService:
         self._qdrant_provider = qdrant_client_provider
         self._pg_dump = pg_dump_runner
         self._clock = clock
+        self._attachment_roots = attachment_roots
+        self._attachment_collector = attachment_collector or collect_attachment_archives
+        self._attachment_applier = attachment_applier or apply_attachment_archive
 
     # -- helpers -----------------------------------------------------------
     def _s3_client(self):
@@ -123,6 +133,18 @@ class BackupService:
         if not is_postgresql(self._db_url):
             return None
         return self._pg_dump(self._db_url)
+
+    def collect_attachment_archives(self) -> "dict[str, bytes]":
+        """``attachments/spec.tar.gz`` + ``attachments/planka.tar.gz`` (volumes FS)."""
+        if self._attachment_roots is not None:
+            return self._attachment_collector(roots=self._attachment_roots)
+        return self._attachment_collector()
+
+    def apply_attachment_archive(self, arcname: str, data: bytes) -> str:
+        """Restaura um tarball de anexos na raiz correspondente."""
+        if self._attachment_roots is not None:
+            return self._attachment_applier(arcname, data, roots=self._attachment_roots)
+        return self._attachment_applier(arcname, data)
 
     def qdrant_points_count(self, qc=None) -> Optional[int]:
         """Total de pontos somando as coleções (best-effort; ``None`` se indisponível)."""

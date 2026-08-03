@@ -20,8 +20,8 @@ const TITLE_BY_GROUP = {
   [ProjectGroups.OTHERS]: 'common.others',
 };
 
+// Mem0 Shared: only team (Equipe) projects — hide personal "Meus" create/section.
 const DEFAULT_TYPE_BY_GROUP = {
-  [ProjectGroups.MY_OWN]: ProjectTypes.PRIVATE,
   [ProjectGroups.TEAM]: ProjectTypes.SHARED,
 };
 
@@ -44,7 +44,7 @@ const GroupedProjectsView = React.memo(() => {
 
   return (
     <>
-      {[ProjectGroups.MY_OWN, ProjectGroups.TEAM].map(
+      {[ProjectGroups.TEAM].map(
         (group) =>
           (projectIdsByGroup[group].length > 0 || canAdd) && (
             <Projects

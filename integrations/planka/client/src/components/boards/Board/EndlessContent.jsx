@@ -14,7 +14,7 @@ import ListView from './ListView';
 
 const EndlessContent = React.memo(() => {
   const board = useSelector(selectors.selectCurrentBoard);
-  const { isCardsFetching, isAllCardsFetched } = useSelector(selectors.selectCurrentList);
+  const currentList = useSelector(selectors.selectCurrentList);
   const cardIds = useSelector(selectors.selectFilteredCardIdsForCurrentList);
 
   const dispatch = useDispatch();
@@ -33,6 +33,13 @@ const EndlessContent = React.memo(() => {
   const handleCardPaste = useCallback(() => {
     dispatch(entryActions.pasteCardInCurrentList());
   }, [dispatch]);
+
+  // Archive/trash list may not be hydrated yet — avoid crash on destructure.
+  if (!currentList) {
+    return null;
+  }
+
+  const { isCardsFetching, isAllCardsFetched } = currentList;
 
   const viewProps = {
     cardIds,
@@ -54,6 +61,8 @@ const EndlessContent = React.memo(() => {
 
       break;
     default:
+      // Context switch from Kanban may leave view briefly as kanban; list is correct.
+      View = ListView;
   }
 
   return <View {...viewProps} />; // eslint-disable-line react/jsx-props-no-spreading

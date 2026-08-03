@@ -62,7 +62,10 @@ const ActionsStep = React.memo(({ onClose }) => {
   }, [onClose, board.isSubscribed, dispatch]);
 
   const handleSelectContextClick = useCallback(
-    (_, { value: context }) => {
+    (context) => {
+      if (!context) {
+        return;
+      }
       dispatch(entryActions.updateContextInCurrentBoard(context));
       onClose();
     },
@@ -158,7 +161,7 @@ const ActionsStep = React.memo(({ onClose }) => {
                 value={context}
                 active={context === board.context}
                 className={styles.menuItem}
-                onClick={handleSelectContextClick}
+                onClick={() => handleSelectContextClick(context)}
               >
                 <Icon name={BoardContextIcons[context]} className={styles.menuItemIcon} />
                 {t(`common.${context}`)}

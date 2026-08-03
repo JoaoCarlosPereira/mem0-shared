@@ -221,7 +221,12 @@ export default class extends BaseModel {
 
         boardModel.update({
           context: payload.value,
-          view: payload.value === BoardContexts.BOARD ? boardModel.defaultView : BoardViews.LIST,
+          // Always leave Kanban when opening archive/trash so Board.jsx
+          // renders EndlessContent (list/grid of archived/trashed cards).
+          view:
+            payload.value === BoardContexts.BOARD
+              ? boardModel.defaultView || BoardViews.KANBAN
+              : BoardViews.LIST,
         });
 
         break;

@@ -59,6 +59,37 @@ async function main() {
       $$ LANGUAGE PLPGSQL;
     `);
 
+
+    // Waterline/Knex often omit search_path=planka; expose auto-updatable
+    // public views for tables hit by card update / assignee sync.
+    // Table names match Knex/Waterline (User model → user_account).
+    const mirrorTables = [
+      'notification',
+      'action',
+      'card_membership',
+      'card_subscription',
+      'board_membership',
+      'card',
+      'list',
+      'user_account',
+    ];
+    for (const table of mirrorTables) {
+      const q = quoteIdent(table);
+      const exists = await client.query(
+        `SELECT 1 FROM information_schema.tables
+          WHERE table_schema = $1 AND table_name = $2`,
+        [schema, table],
+      );
+      if (!exists.rowCount) {
+        console.warn(`ensure-schema: skip missing ${schema}.${table}`);
+        continue;
+      }
+      await client.query(
+        `CREATE OR REPLACE VIEW public.${q} AS SELECT * FROM ${ident}.${q}`,
+      );
+    }
+    console.log(`ensure-schema: public views mirrored for planka tables`);
+
     console.log(`ensure-schema: schema ${schema} ready`);
   } finally {
     await client.end();

@@ -8,6 +8,7 @@ import { useDispatch, useSelector } from 'react-redux';
 
 import selectors from '../../../selectors';
 import entryActions from '../../../entry-actions';
+import { ProjectTypes } from '../../../constants/Enums';
 import Projects from './Projects';
 
 const GridProjectsView = React.memo(() => {
@@ -16,7 +17,8 @@ const GridProjectsView = React.memo(() => {
   const dispatch = useDispatch();
 
   const handleAdd = useCallback(() => {
-    dispatch(entryActions.openAddProjectModal());
+    // Mem0 Shared: create as team (Equipe) only.
+    dispatch(entryActions.openAddProjectModal(ProjectTypes.SHARED));
   }, [dispatch]);
 
   return <Projects ids={projectIds} onAdd={handleAdd} />;

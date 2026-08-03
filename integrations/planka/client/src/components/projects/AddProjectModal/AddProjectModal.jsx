@@ -34,11 +34,12 @@ const AddProjectModal = React.memo(() => {
   const [data, handleFieldChange, setData] = useForm(() => ({
     name: '',
     description: '',
-    type: ProjectTypes.PRIVATE,
     ...defaultData,
-    ...(defaultType && {
-      type: defaultType,
-    }),
+    // Mem0 Shared: team projects only (no personal / "Meus").
+    type:
+      defaultType && defaultType !== ProjectTypes.PRIVATE
+        ? defaultType
+        : ProjectTypes.SHARED,
   }));
 
   const [nameFieldRef, handleNameFieldRef] = useNestedRef('inputRef');
