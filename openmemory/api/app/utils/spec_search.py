@@ -28,6 +28,7 @@ from app.models import SpecDocument, SpecWorkspace, SpecWorkspaceStatus, get_cur
 from app.utils.datetime_format import format_utc_iso
 from app.utils.groups import group_of_hostname
 from app.utils.memory import get_memory_client_safe
+from app.utils.project_groups import projects_in_group
 from app.utils.recency import normalize_project_name, rank_search_results
 from sqlalchemy.orm import Session
 
@@ -301,7 +302,8 @@ def search_specs(
     """Busca semântica em specs, ordenada por relevância.
 
     Aplica os mesmos boosts de grupo/projeto de ``rank_search_results``.
-    ``project_id`` filtra por projeto (Qdrant + pós-filtro normalizado).
+    ``project_id`` filtra por projeto — pela FAMÍLIA inteira quando há uma
+    configurada em ``MEM0_PROJECT_GROUPS``, senão pelo nome exato.
     ``accessible_workspace_ids`` restringe hits ao ACL do solicitante (``None`` =
     sem restrição / aberto).
 
@@ -318,13 +320,34 @@ def search_specs(
 
     wanted_statuses = _normalize_statuses(statuses)
 
+    # Escopo do filtro de projeto: a FAMÍLIA de ``project_id`` quando há uma
+    # configurada (MEM0_PROJECT_GROUPS), senão o nome exato. Sem isto, uma feature
+    # que atravessa repositórios ficava invisível a partir dos repos irmãos — o
+    # ``project_id`` segue o diretório de trabalho, então quem buscasse de
+    # ``sysmovs`` não achava a spec gravada sob ``sysmos1-modular``.
+    #
+    # O escopo precisa valer nos DOIS pontos: no filtro do Qdrant (senão o irmão
+    # nem volta) e no pós-filtro (senão volta e é descartado). O boost de família
+    # de ``rank_search_results`` roda depois e, sozinho, não alcançava nada — o
+    # descarte acontecia antes dele.
+    familia = projects_in_group(project_id) if project_id else []
+    if project_id:
+        if len(familia) > 1:
+            qdrant_filters = {"project_id": {"in": familia}}
+            projetos_aceitos = {normalize_project_name(p) for p in familia}
+        else:
+            qdrant_filters = {"project_id": project_id}
+            projetos_aceitos = {normalize_project_name(project_id)}
+    else:
+        qdrant_filters = None
+        projetos_aceitos = None
+
     # Over-fetch quando há filtros pós-busca (projeto / ACL / status) para não
     # truncar matches relevantes antes do filtro.
     needs_post_filter = (
         bool(project_id) or accessible_workspace_ids is not None or wanted_statuses is not None
     )
     fetch_k = top_k * 5 if needs_post_filter else top_k
-    qdrant_filters = {"project_id": project_id} if project_id else None
 
     results = semantic_search(
         embedder,
@@ -335,9 +358,10 @@ def search_specs(
         filters=qdrant_filters,
     )
 
-    if project_id:
-        target = normalize_project_name(project_id)
-        results = [r for r in results if normalize_project_name(r.get("project")) == target]
+    if projetos_aceitos is not None:
+        results = [
+            r for r in results if normalize_project_name(r.get("project")) in projetos_aceitos
+        ]
 
     if wanted_statuses is not None:
         results = [
