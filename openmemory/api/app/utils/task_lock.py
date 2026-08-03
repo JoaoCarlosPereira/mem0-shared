@@ -21,15 +21,21 @@ from app.models import (
     TaskStatusHistory,
     get_current_utc_time,
 )
+from app.utils.claim_lease import claim_expires_at
 from app.utils.kanban_pipeline import KanbanSkipError, assert_no_forward_skip
 
 
 @dataclass
 class ClaimTaskResult:
-    """Resultado de ``claim_task``/``release_task`` (ver TechSpec — Interfaces)."""
+    """Resultado de ``claim_task``/``release_task`` (ver TechSpec — Interfaces).
+
+    ``expires_at`` é o prazo do lease do claim (ver ``app.utils.claim_lease``);
+    ``None`` quando não se aplica — release, falha de claim ou expiração desligada.
+    """
     claimed: bool
     current_assignee: str | None
     version: int
+    expires_at: object | None = None
 
 
 @dataclass
@@ -105,23 +111,51 @@ def _assert_status_policy(
 
 
 def claim_task(db: Session, task_id: uuid.UUID, claimant: str) -> ClaimTaskResult:
-    """Reivindica uma task disponível (coluna ``tasks``), movendo-a para ``em_andamento``.
+    """Reivindica uma task, movendo-a para ``em_andamento``.
 
-    Falha (``claimed=False``), sem alterar o registro, se a task não estiver na
-    coluna ``tasks`` — o que inclui o caso de já estar ``em_andamento`` com outro
-    ``assignee``. Retorna o ``assignee`` vigente para o chamador reconciliar.
+    Dois caminhos, ambos terminando em ``em_andamento`` com o chamador como
+    assignee:
+
+    1. **Task livre** (coluna ``tasks``): claim normal.
+    2. **Task que já é do chamador**, em qualquer coluna: idempotente. Reassume o
+       card e renova o lease. É o que permite (a) devolver a ``em_andamento`` um
+       card cuja verificação reprovou em ``revisao_codigo``/``fase_teste`` — o
+       fluxo que o próprio bloco ``kanban`` instrui — e (b) renovar um claim antes
+       que o timeout o devolva ao backlog. Antes, ambos eram impossíveis: o
+       ``UPDATE`` exigia ``status == tasks``, então o assignee recebia
+       ``claimed: false`` apontando ele mesmo como "outro responsável", e as
+       únicas saídas eram ``release_task`` (que perde a atribuição e faz o card
+       parecer abandonado) ou mentir sobre a coluna com ``is_blocked``.
+
+    Falha (``claimed=False``) apenas quando a task está ativa com assignee
+    DIFERENTE — a exclusividade para terceiros continua intacta. Retorna o
+    ``assignee`` vigente para o chamador reconciliar.
     """
     task = db.get(TaskCard, task_id)
     if task is None:
         raise ValueError(f"TaskCard {task_id} não encontrada")
 
     now = get_current_utc_time()
-    result = db.execute(
-        sa.update(TaskCard)
-        .where(
+    old_status = task.status
+    # Reassunção do próprio card: qualquer coluna serve como origem, desde que o
+    # assignee gravado seja o chamador. A guarda vai no WHERE (não num if sobre o
+    # objeto lido) para manter a atomicidade — entre o SELECT e o UPDATE outro
+    # processo pode ter liberado ou reatribuído a task.
+    is_reclaim = task.assignee == claimant and old_status != TaskCardStatus.tasks
+    if is_reclaim:
+        guard = sa.and_(
+            TaskCard.id == task_id,
+            TaskCard.assignee == claimant,
+        )
+    else:
+        guard = sa.and_(
             TaskCard.id == task_id,
             TaskCard.status == TaskCardStatus.tasks,
         )
+
+    result = db.execute(
+        sa.update(TaskCard)
+        .where(guard)
         .values(
             assignee=claimant,
             status=TaskCardStatus.em_andamento,
@@ -140,20 +174,21 @@ def claim_task(db: Session, task_id: uuid.UUID, claimant: str) -> ClaimTaskResul
             version=fresh.version,
         )
 
-    db.add(
-        TaskStatusHistory(
-            task_id=task_id,
-            old_status=TaskCardStatus.tasks,
-            new_status=TaskCardStatus.em_andamento,
-            changed_by=claimant,
+    if old_status != TaskCardStatus.em_andamento:
+        db.add(
+            TaskStatusHistory(
+                task_id=task_id,
+                old_status=old_status,
+                new_status=TaskCardStatus.em_andamento,
+                changed_by=claimant,
+            )
         )
-    )
     db.add(
         SpecAuditLog(
             workspace_id=task.workspace_id,
             actor=claimant,
-            action="claim_task",
-            detail={"task_id": str(task_id)},
+            action="reclaim_task" if is_reclaim else "claim_task",
+            detail={"task_id": str(task_id), "from_status": old_status.value},
         )
     )
     db.commit()
@@ -167,6 +202,7 @@ def claim_task(db: Session, task_id: uuid.UUID, claimant: str) -> ClaimTaskResul
         claimed=True,
         current_assignee=claimant,
         version=fresh.version,
+        expires_at=claim_expires_at(fresh.last_activity_at),
     )
 
 

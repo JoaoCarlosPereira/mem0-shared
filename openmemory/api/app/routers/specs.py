@@ -38,6 +38,7 @@ from app.utils.creator_identity import (
 from app.utils.permissions import get_accessible_spec_workspace_ids
 from app.utils.projects import upsert_project
 from app.utils.spec_auth import resolve_spec_actor, resolve_spec_subject
+from app.utils.claim_lease import TIMEOUT_ACTOR, claim_expires_at
 from app.utils.spec_search import (
     index_completed_workspace,
     index_document_now,
@@ -133,6 +134,9 @@ class TaskResponse(BaseModel):
     assignee_avatar_url: Optional[str] = None
     version: int
     last_activity_at: Optional[datetime] = None
+    # Prazo do lease do claim. Preenchido só em ``em_andamento``; ``None`` nas
+    # demais colunas, sem atividade registrada, ou com a expiração desligada.
+    claim_expires_at: Optional[datetime] = None
     branch_ref: Optional[str] = None
     due_at: Optional[datetime] = None
     position: float = 65536.0
@@ -144,6 +148,23 @@ class TaskResponse(BaseModel):
     attachment_count: int = 0
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+class TaskHistoryResponse(BaseModel):
+    """Uma mudança de coluna do card.
+
+    ``by_timeout`` é derivado de ``changed_by`` e existe para o cliente não
+    precisar conhecer o sentinela ``system:timeout``.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    old_status: TaskCardStatus
+    new_status: TaskCardStatus
+    changed_by: Optional[str] = None
+    changed_at: Optional[datetime] = None
+    by_timeout: bool = False
 
 
 class WorkspaceBoardResponse(BaseModel):
@@ -387,6 +408,9 @@ def _task_response(
         data.checklist_total = checklist_total
     if attachment_count is not None:
         data.attachment_count = attachment_count
+    # Só faz sentido para card ativo: nas demais colunas não há lease correndo.
+    if task.status == TaskCardStatus.em_andamento:
+        data.claim_expires_at = claim_expires_at(task.last_activity_at)
     return data
 
 
@@ -1093,6 +1117,41 @@ def get_task(
     task = _get_task_or_404(db, task_id)
     _assert_access(db, task.workspace_id)
     return _enrich_task(db, task)
+
+
+@router.get("/tasks/{task_id}/history", response_model=list[TaskHistoryResponse])
+def list_task_history(
+    task_id: UUID,
+    db: Session = Depends(get_db),
+) -> list[TaskHistoryResponse]:
+    """Histórico de mudanças de coluna do card, em ordem cronológica.
+
+    Torna observável a liberação automática por inatividade: ela grava
+    ``changed_by`` = ``system:timeout``, enquanto um ``release_task`` manual grava
+    o ator humano. Sem esta leitura, um card que voltou sozinho ao backlog era
+    indistinguível de um que alguém devolveu — o assignee só descobria ao tentar
+    avançar e receber ``use_claim``.
+    """
+    task = _get_task_or_404(db, task_id)
+    _assert_access(db, task.workspace_id)
+
+    rows = (
+        db.query(TaskStatusHistory)
+        .filter(TaskStatusHistory.task_id == task_id)
+        .order_by(TaskStatusHistory.changed_at.asc())
+        .all()
+    )
+    return [
+        TaskHistoryResponse(
+            id=r.id,
+            old_status=r.old_status,
+            new_status=r.new_status,
+            changed_by=r.changed_by,
+            changed_at=r.changed_at,
+            by_timeout=(r.changed_by == TIMEOUT_ACTOR),
+        )
+        for r in rows
+    ]
 
 
 @router.get("/workspaces/{workspace_id}/tasks", response_model=list[TaskResponse])
