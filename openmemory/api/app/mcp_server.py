@@ -94,6 +94,22 @@ DEFAULT_LIST_PAGE_SIZE = 256
 # raw top-20 could never be recovered by any boost. We therefore retrieve a wider
 # candidate pool, rank it, and only then cut to DEFAULT_SEARCH_TOP_K.
 # Tunable via MEM0_SEARCH_CANDIDATE_K (clamped to at least DEFAULT_SEARCH_TOP_K).
+#
+# 150 is a MEASURED value, not a guess. Timed inside the API container against the
+# production Qdrant (host s0215, 2026-08-03), 5 distinct queries per row:
+#
+#     top_k   qdrant p50   payload
+#        20       7.6 ms     25 KB
+#        60      11.0 ms     87 KB
+#       150      15.1 ms    298 KB   <- current
+#       300      67.2 ms    589 KB
+#       500      48.3 ms    859 KB
+#
+# Put that against the rest of a search: embedding the query costs ~88 ms p50 and
+# ranking the pool ~6 ms, so widening 20 -> 150 adds ~7 ms to a ~110 ms call —
+# under 7%, for the recall it buys. The cliff is past 150: 300 already quadruples
+# the retrieval time. Raise this only with a fresh measurement; the number depends
+# on payload size, and this store holds memories of several KB.
 DEFAULT_SEARCH_CANDIDATE_K = max(
     DEFAULT_SEARCH_TOP_K,
     int(os.getenv("MEM0_SEARCH_CANDIDATE_K", "150")),
