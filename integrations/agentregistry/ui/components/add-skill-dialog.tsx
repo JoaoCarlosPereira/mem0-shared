@@ -1,0 +1,184 @@
+"use client"
+
+import { useState } from "react"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { createSkillV0, type SkillJson } from "@/lib/admin-api"
+import { isValidDNSSubdomain, DNS_SUBDOMAIN_HELP } from "@/lib/validators"
+
+interface AddSkillDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onSkillAdded: () => void
+}
+
+export function AddSkillDialog({ open, onOpenChange, onSkillAdded }: AddSkillDialogProps) {
+  const [name, setName] = useState("")
+  const [description, setDescription] = useState("")
+  const [tag, setTag] = useState("latest")
+  const [repositoryUrl, setRepositoryUrl] = useState("")
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    setLoading(true)
+
+    try {
+      // Validate required fields
+      if (!name.trim()) {
+        throw new Error("Skill name is required")
+      }
+      if (!isValidDNSSubdomain(name.trim())) {
+        throw new Error("Skill name must be DNS-1123 subdomain: lowercase alphanumeric, hyphens, and dots; max 253 chars; each dot-separated segment must start and end with alphanumeric")
+      }
+      if (!description.trim()) {
+        throw new Error("Description is required")
+      }
+      if (!tag.trim()) {
+        throw new Error("Tag is required")
+      }
+      const trimmedRepositoryUrl = repositoryUrl.trim()
+      if (!trimmedRepositoryUrl) {
+        throw new Error("Repository URL is required")
+      }
+
+      // Construct the SkillJSON object
+      const skillData: SkillJson = {
+        name: name.trim(),
+        description: description.trim(),
+        tag: tag.trim(),
+        source: {
+          repository: {
+            url: trimmedRepositoryUrl,
+          },
+        },
+      }
+
+      // Create the skill
+      await createSkillV0({ body: skillData, throwOnError: true })
+
+      // Reset form
+      setName("")
+      setDescription("")
+      setTag("latest")
+      setRepositoryUrl("")
+
+      // Notify parent and close dialog
+      onSkillAdded()
+      onOpenChange(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add skill")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleCancel = () => {
+    setName("")
+    setDescription("")
+    setTag("latest")
+    setRepositoryUrl("")
+    setError(null)
+    onOpenChange(false)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Add Skill</DialogTitle>
+          <DialogDescription>
+            Add a new skill to the registry
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="space-y-4 py-4">
+          <div className="space-y-2">
+            <Label htmlFor="name">
+              Skill Name <span className="text-red-500">*</span>
+            </Label>
+            <Input
+              id="name"
+              placeholder="my-skill"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              disabled={loading}
+              required
+            />
+            <p className="text-xs text-muted-foreground">{DNS_SUBDOMAIN_HELP}</p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="description">
+              Description <span className="text-red-500">*</span>
+            </Label>
+            <Textarea
+              id="description"
+              placeholder="A description of what this skill does"
+              rows={3}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              disabled={loading}
+              required
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="tag">
+              Tag <span className="text-red-500">*</span>
+            </Label>
+            <Input
+              id="tag"
+              placeholder="latest"
+              value={tag}
+              onChange={(e) => setTag(e.target.value)}
+              disabled={loading}
+              required
+            />
+            <p className="text-xs text-muted-foreground">
+              e.g., &quot;latest&quot;, &quot;1.0.0&quot;, &quot;v2.3.1&quot;
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="repositoryUrl">
+              Repository URL <span className="text-red-500">*</span>
+            </Label>
+            <Input
+              id="repositoryUrl"
+              placeholder="https://github.com/username/repo"
+              value={repositoryUrl}
+              onChange={(e) => setRepositoryUrl(e.target.value)}
+              disabled={loading}
+              type="url"
+              required
+            />
+            <p className="text-xs text-muted-foreground">
+              Link to the skill&apos;s Git repository (GitHub, GitLab, Bitbucket, etc.)
+            </p>
+          </div>
+
+          {error && (
+            <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">
+              {error}
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={handleCancel} disabled={loading}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={loading}>
+              {loading ? "Adding..." : "Add Skill"}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}

@@ -1,0 +1,38 @@
+package manifest
+
+import (
+	"fmt"
+
+	"github.com/agentregistry-dev/agentregistry/pkg/api/v1alpha1"
+)
+
+// loadFromEnvelope decodes declarative envelope YAML into a *ProjectManifest.
+// Only fields with a direct counterpart are populated; framework-specific
+// fields (Framework, Tools, Secrets, Transport, RuntimeArgs) are left at
+// zero-value and filled in by kind-specific code paths where needed. The
+// strict validator used by the flat-manifest path is intentionally skipped
+// here because envelope files produced by `arctl init mcp` do not carry a
+// Framework field.
+func loadFromEnvelope(data []byte) (*ProjectManifest, error) {
+	var server v1alpha1.MCPServer
+	if err := v1alpha1.Default.DecodeInto(data, &server); err != nil {
+		return nil, fmt.Errorf("parsing envelope mcp.yaml: %w", err)
+	}
+	out := &ProjectManifest{
+		Name:        server.Metadata.Name,
+		Version:     server.Metadata.Tag,
+		Description: server.Spec.Description,
+	}
+	// Extract the runtime hint from the bundled OCI package's Launch
+	// command, if present. OCI-only because NPM/PyPI packages use
+	// universal runners (npx/uvx) whose Launch.Command isn't a
+	// project-level runtime hint — it's the wrapper itself. Only OCI's
+	// Launch.Command names the actual binary that runs inside the image.
+	if server.Spec.Source != nil && server.Spec.Source.Package != nil {
+		p := server.Spec.Source.Package
+		if p.Origin.OCI != nil && p.Launch != nil {
+			out.RuntimeHint = p.Launch.Command
+		}
+	}
+	return out, nil
+}

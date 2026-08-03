@@ -1,0 +1,240 @@
+package common
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"maps"
+	"strings"
+	"time"
+
+	"github.com/agentregistry-dev/agentregistry/internal/client"
+	"github.com/agentregistry-dev/agentregistry/pkg/api/v1alpha1"
+)
+
+const runtimeMetadataPrefix = "runtimes.agentregistry.solo.io/"
+const deploymentOriginManaged = "managed"
+
+// DeploymentRecord is the CLI-friendly projection of a v1alpha1 Deployment.
+type DeploymentRecord struct {
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+	ID        string `json:"id"`
+
+	TargetName        string            `json:"serverName"`
+	TargetTag         string            `json:"targetTag,omitempty"`
+	ResourceType      string            `json:"resourceType"`
+	RuntimeID         string            `json:"runtimeId,omitempty"`
+	Status            string            `json:"status"`
+	Origin            string            `json:"origin"`
+	Env               map[string]string `json:"env,omitempty"`
+	RuntimeConfig     map[string]any    `json:"runtimeConfig,omitempty"`
+	RuntimeMetadata   map[string]any    `json:"runtimeMetadata,omitempty"`
+	Error             string            `json:"error,omitempty"`
+	CreatedAt         time.Time         `json:"deployedAt,omitempty"`
+	UpdatedAt         time.Time         `json:"updatedAt,omitempty"`
+	DeletionTimestamp *time.Time        `json:"deletionTimestamp,omitempty"`
+
+	// Conditions is the raw v1alpha1.Status.Conditions list as reported by
+	// reconcilers. Surfaced alongside the derived Status phase so YAML/JSON
+	// consumers can see fine-grained state without losing the compact view.
+	Conditions []v1alpha1.Condition `json:"conditions,omitempty"`
+
+	// Details is the opaque adapter-owned status map (see v1alpha1.Status.Details).
+	Details json.RawMessage `json:"details,omitempty"`
+}
+
+// ListDeployments returns managed Deployment rows visible from the default namespace.
+func ListDeployments(ctx context.Context, c *client.Client) ([]*DeploymentRecord, error) {
+	deployments, err := client.ListAllTyped(
+		ctx,
+		c,
+		v1alpha1.KindDeployment,
+		client.ListOpts{
+			Namespace:          v1alpha1.DefaultNamespace,
+			IncludeTerminating: true,
+			Limit:              200,
+			Origin:             deploymentOriginManaged,
+		},
+		func() *v1alpha1.Deployment { return &v1alpha1.Deployment{} },
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]*DeploymentRecord, 0, len(deployments))
+	for _, dep := range deployments {
+		out = append(out, DeploymentRecordFromObject(dep))
+	}
+	return out, nil
+}
+
+// FindDeploymentByIDPrefix resolves a deployment identity by exact or prefix match.
+func FindDeploymentByIDPrefix(ctx context.Context, c *client.Client, prefix string) (*DeploymentRecord, error) {
+	deployments, err := ListDeployments(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+
+	var matches []*DeploymentRecord
+	for _, dep := range deployments {
+		if dep != nil && strings.HasPrefix(dep.ID, prefix) {
+			matches = append(matches, dep)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return nil, fmt.Errorf("deployment not found: %s", prefix)
+	case 1:
+		return matches[0], nil
+	default:
+		return nil, fmt.Errorf("ambiguous deployment ID prefix %q matches %d deployments", prefix, len(matches))
+	}
+}
+
+// DeploymentRecordFromObject projects a v1alpha1 Deployment into the CLI view.
+func DeploymentRecordFromObject(dep *v1alpha1.Deployment) *DeploymentRecord {
+	if dep == nil {
+		return nil
+	}
+	return &DeploymentRecord{
+		Namespace:         dep.Metadata.NamespaceOrDefault(),
+		Name:              dep.Metadata.Name,
+		ID:                DeploymentID(dep.Metadata.NamespaceOrDefault(), dep.Metadata.Name),
+		TargetName:        dep.Spec.TargetRef.Name,
+		TargetTag:         dep.Spec.TargetRef.Tag,
+		ResourceType:      deploymentResourceType(dep.Spec.TargetRef.Kind),
+		RuntimeID:         dep.Spec.RuntimeRef.Name,
+		Status:            DeploymentStatus(dep),
+		Origin:            "managed",
+		Env:               cloneStringMap(dep.Spec.Env),
+		RuntimeConfig:     cloneAnyMap(dep.Spec.RuntimeConfig),
+		RuntimeMetadata:   deploymentRuntimeMetadata(dep.Metadata.Annotations),
+		Error:             deploymentError(dep.Status),
+		CreatedAt:         dep.Metadata.CreatedAt,
+		UpdatedAt:         dep.Metadata.UpdatedAt,
+		DeletionTimestamp: dep.Metadata.DeletionTimestamp,
+		Conditions:        cloneConditions(dep.Status.Conditions),
+		Details:           cloneDetails(dep.Status.Details),
+	}
+}
+
+func cloneConditions(in []v1alpha1.Condition) []v1alpha1.Condition {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]v1alpha1.Condition, len(in))
+	copy(out, in)
+	return out
+}
+
+func cloneDetails(in json.RawMessage) json.RawMessage {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(json.RawMessage, len(in))
+	copy(out, in)
+	return out
+}
+
+// DeploymentID is the display identity used by imperative deployment commands.
+func DeploymentID(namespace, name string) string {
+	return fmt.Sprintf("%s/%s", namespace, name)
+}
+
+// DeploymentResourceName returns the generated metadata.name used by imperative
+// deployment create flows for a (target, runtime) pair.
+func DeploymentResourceName(targetName, runtimeID string) string {
+	name := strings.ReplaceAll(targetName, "/", "-")
+	if runtimeID == "" {
+		return name
+	}
+	return fmt.Sprintf("%s-%s", name, runtimeID)
+}
+
+// DeploymentStatus derives the old CLI phase strings from v1alpha1 conditions.
+func DeploymentStatus(dep *v1alpha1.Deployment) string {
+	if dep == nil {
+		return "unknown"
+	}
+	if dep.Metadata.DeletionTimestamp != nil {
+		return "terminating"
+	}
+	if dep.Status.IsConditionTrue("Ready") {
+		return "deployed"
+	}
+	if c := dep.Status.GetCondition("Degraded"); c != nil && c.Status == v1alpha1.ConditionTrue {
+		return "failed"
+	}
+	if dep.Spec.DesiredState == v1alpha1.DesiredStateUndeployed {
+		return "undeployed"
+	}
+	if c := dep.Status.GetCondition("Progressing"); c != nil && c.Status != v1alpha1.ConditionFalse {
+		return "deploying"
+	}
+	if c := dep.Status.GetCondition("RuntimeConfigured"); c != nil && c.Status == v1alpha1.ConditionTrue {
+		return "deploying"
+	}
+	return "pending"
+}
+
+func deploymentError(status v1alpha1.Status) string {
+	for _, conditionType := range []string{"Degraded", "Ready", "Progressing"} {
+		if c := status.GetCondition(conditionType); c != nil && c.Message != "" && c.Status != v1alpha1.ConditionTrue {
+			return c.Message
+		}
+	}
+	return ""
+}
+
+func deploymentRuntimeMetadata(annotations map[string]string) map[string]any {
+	if len(annotations) == 0 {
+		return nil
+	}
+
+	out := map[string]any{}
+	shortKeys := map[string]bool{}
+	for key, value := range annotations {
+		if !strings.HasPrefix(key, runtimeMetadataPrefix) {
+			continue
+		}
+		shortKey := key[strings.LastIndex(key, "/")+1:]
+		if shortKey == "" || shortKeys[shortKey] {
+			out[key] = value
+			continue
+		}
+		shortKeys[shortKey] = true
+		out[shortKey] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func deploymentResourceType(kind string) string {
+	switch kind {
+	case v1alpha1.KindMCPServer:
+		return "mcp"
+	default:
+		return strings.ToLower(kind)
+	}
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	maps.Copy(out, in)
+	return out
+}
+
+func cloneAnyMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	maps.Copy(out, in)
+	return out
+}

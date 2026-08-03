@@ -8,6 +8,7 @@
 - **MinIO** (object store S3-compatível) — destino dos backups. Serviço `minio` em `compose/backup.yml`.
 - **Rotina de backup** — `app.scripts.run_backup` (serviço `backup`, profile `backup`), snapshot nativo do Qdrant + `pg_dump` do PostgreSQL.
 - **Endpoints** — `POST /admin/backup/run`, `GET /admin/backup/status`, `POST /admin/backup/restore`.
+- **Schema `agentregistry`** — o catálogo da loja interna (serviço Compose `agentregistry` / `mem0registry`) vive no **mesmo** PostgreSQL OpenMemory, schema isolado `agentregistry` (skills, mcp_servers, prompts, etc.). O `pg_dump` do banco `openmemory` **já inclui** esse schema; não é necessário dump separado. Restaurar o dump restaura o catálogo junto com metadados/fila. **Não** confundir com o volume Qdrant `mem0_storage` (vetores de memória).
 
 Convenção de chave no bucket:
 ```

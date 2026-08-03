@@ -1,0 +1,217 @@
+package registries_test
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/agentregistry-dev/agentregistry/pkg/api/v1alpha1"
+	"github.com/agentregistry-dev/agentregistry/pkg/api/v1alpha1/registries"
+)
+
+// ociOrigin is a small fixture helper: every OCI origin in this file
+// shares the same Type and (almost always) a stub OCI sub-struct. Tests
+// vary the identifier and the validator's expected ServerName argument.
+func ociOrigin(identifier string) v1alpha1.MCPPackageOrigin {
+	return v1alpha1.MCPPackageOrigin{
+		Type:       v1alpha1.MCPPackageOriginTypeOCI,
+		Identifier: identifier,
+		OCI:        &v1alpha1.MCPPackageOriginOCI{},
+	}
+}
+
+func TestValidateOCI_RegistryAllowlist(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name        string
+		identifier  string
+		expectError bool
+		errorMsg    string
+	}{
+		// Allowed registries - use real public images that exist
+		// These should fail with "missing required annotation" (no MCP label)
+		// NOT with "unsupported registry", "does not exist", or "is private" errors
+		{
+			name:        "Docker Hub should be allowed",
+			identifier:  "docker.io/library/alpine:latest",
+			expectError: true,
+			errorMsg:    "missing required annotation",
+		},
+		{
+			name:        "Docker Hub without explicit registry should default and be allowed",
+			identifier:  "library/hello-world:latest",
+			expectError: true,
+			errorMsg:    "missing required annotation",
+		},
+		{
+			name:        "GHCR should be allowed",
+			identifier:  "ghcr.io/containerbase/base:latest",
+			expectError: true,
+			errorMsg:    "missing required annotation",
+		},
+		{
+			name:        "Artifact Registry regional should be allowed",
+			identifier:  "us-central1-docker.pkg.dev/database-toolbox/toolbox/toolbox:latest",
+			expectError: true,
+			// This image has an annotation but with a different value, so it will fail with ownership validation
+			// Either error is acceptable as long as it's not "unsupported registry", "does not exist", or "is private"
+			errorMsg: "ownership validation failed",
+		},
+		{
+			name:        "Artifact Registry multi-region should be allowed",
+			identifier:  "us-docker.pkg.dev/berglas/berglas/berglas:latest",
+			expectError: true,
+			errorMsg:    "missing required annotation",
+		},
+
+		// Disallowed registries
+		{
+			name:        "GCR should be rejected",
+			identifier:  "gcr.io/test/image:latest",
+			expectError: true,
+			errorMsg:    "unsupported OCI registry",
+		},
+		{
+			name:        "Quay.io should be rejected",
+			identifier:  "quay.io/test/image:latest",
+			expectError: true,
+			errorMsg:    "unsupported OCI registry",
+		},
+		{
+			name:        "ECR Public should be rejected",
+			identifier:  "public.ecr.aws/test/image:latest",
+			expectError: true,
+			errorMsg:    "unsupported OCI registry",
+		},
+		{
+			name:        "GitLab registry should be rejected",
+			identifier:  "registry.gitlab.com/test/image:latest",
+			expectError: true,
+			errorMsg:    "unsupported OCI registry",
+		},
+		{
+			name:        "Custom registry should be rejected",
+			identifier:  "custom-registry.com/test/image:latest",
+			expectError: true,
+			errorMsg:    "unsupported OCI registry",
+		},
+		{
+			name:        "Harbor registry should be rejected",
+			identifier:  "harbor.example.com/test/image:latest",
+			expectError: true,
+			errorMsg:    "unsupported OCI registry",
+		},
+
+		// Private / dev registries are exempt: allowlist check + network
+		// validation are both skipped. `arctl build --push` defaults to
+		// localhost:5001 on the developer's machine.
+		{
+			name:        "localhost with port should pass (validation skipped)",
+			identifier:  "localhost:5001/my/mcp:1.0.0",
+			expectError: false,
+		},
+		{
+			name:        "127.0.0.1 with port should pass (validation skipped)",
+			identifier:  "127.0.0.1:5001/my/mcp:1.0.0",
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := registries.ValidateOCI(ctx, ociOrigin(tt.identifier), "com.example/test")
+
+			if tt.expectError {
+				require.Error(t, err)
+				// Should contain the specific error message
+				assert.Contains(t, err.Error(), tt.errorMsg)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestValidateOCI_RejectsBareIdentifier asserts the new tag-or-digest
+// invariant: an OCI Identifier without an explicit tag (`:<tag>`) or
+// digest (`@sha256:...`) is rejected up-front. Bare refs would
+// otherwise silently resolve `:latest` at pull time, breaking
+// reproducibility.
+func TestValidateOCI_RejectsBareIdentifier(t *testing.T) {
+	ctx := context.Background()
+
+	bare := []string{
+		"ghcr.io/foo/bar",          // no tag, no digest
+		"docker.io/library/alpine", // no tag, no digest
+		"library/hello-world",      // implicit docker.io, still no tag
+	}
+	for _, id := range bare {
+		t.Run(id, func(t *testing.T) {
+			err := registries.ValidateOCI(ctx, ociOrigin(id), "com.example/test")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "must include an explicit tag")
+		})
+	}
+}
+
+func TestValidateOCI_InvalidReferences(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name       string
+		identifier string
+	}{
+		{
+			name:       "invalid characters in reference",
+			identifier: "docker.io/test/image:INVALID SPACE",
+		},
+		{
+			name:       "malformed reference",
+			identifier: "not-a-valid-reference::::",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := registries.ValidateOCI(ctx, ociOrigin(tt.identifier), "com.example/test")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "invalid OCI reference")
+		})
+	}
+}
+
+func TestValidateOCI_EmptyIdentifier(t *testing.T) {
+	ctx := context.Background()
+
+	err := registries.ValidateOCI(ctx, ociOrigin(""), "com.example/test")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "package identifier is required")
+}
+
+func TestValidateOCI_SuccessfulValidation(t *testing.T) {
+	ctx := context.Background()
+
+	// Test with a real MCP server image that has the correct label
+	err := registries.ValidateOCI(ctx,
+		ociOrigin("ghcr.io/github/github-mcp-server:latest"),
+		"io.github.github/github-mcp-server",
+	)
+	require.NoError(t, err)
+}
+
+func TestValidateOCI_LabelMismatch(t *testing.T) {
+	ctx := context.Background()
+
+	// Test with a real MCP server image but wrong expected server name
+	// This should fail because the label doesn't match
+	err := registries.ValidateOCI(ctx,
+		ociOrigin("ghcr.io/github/github-mcp-server:latest"),
+		"io.github.github/github-mcp-server-mismatch",
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ownership validation failed")
+	assert.Contains(t, err.Error(), "Expected annotation")
+}

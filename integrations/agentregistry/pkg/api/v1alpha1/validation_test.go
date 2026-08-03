@@ -1,0 +1,1152 @@
+package v1alpha1
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// Helper: extract field paths from a Validate() result so tests can
+// assert on "which fields failed" rather than on full error messages.
+func failedFields(t *testing.T, err error) []string {
+	t.Helper()
+	if err == nil {
+		return nil
+	}
+	var fe FieldErrors
+	require.ErrorAs(t, err, &fe, "expected FieldErrors, got %T: %v", err, err)
+	paths := make([]string, len(fe))
+	for i, e := range fe {
+		paths[i] = e.Path
+	}
+	return paths
+}
+
+// -----------------------------------------------------------------------------
+// ObjectMeta
+// -----------------------------------------------------------------------------
+
+func TestValidateObjectMeta_OK(t *testing.T) {
+	m := ObjectMeta{Namespace: "default", Name: "alice"}
+	require.Empty(t, ValidateObjectMeta(m))
+}
+
+func TestValidateObjectMeta_RejectsMissing(t *testing.T) {
+	errs := ValidateObjectMeta(ObjectMeta{})
+	paths := make([]string, len(errs))
+	for i, e := range errs {
+		paths[i] = e.Path
+	}
+	require.Contains(t, paths, "metadata.namespace")
+	require.Contains(t, paths, "metadata.name")
+}
+
+func TestValidateObjectMeta_RejectsBadNamespace(t *testing.T) {
+	for _, bad := range []string{"UPPER", "has spaces", "has_underscore", "ai.exa/exa", "-leading", "trailing-"} {
+		errs := ValidateObjectMeta(ObjectMeta{Namespace: bad, Name: "x"})
+		require.NotEmpty(t, errs, "namespace %q should be invalid", bad)
+	}
+}
+
+func TestValidateObjectMeta_RejectsNonDNSSubdomainName(t *testing.T) {
+	// metadata.name across every kind must be DNS-1123 subdomain form.
+	for _, bad := range []string{"ai.exa/exa", "UPPER", "has_underscore", "name with space", "-leading", "trailing-", "..double-dot", "trailing-dot."} {
+		errs := ValidateObjectMeta(ObjectMeta{Namespace: "default", Name: bad})
+		require.NotEmpty(t, errs, "name %q should be invalid", bad)
+	}
+}
+
+func TestValidateObjectMeta_AcceptsDottedName(t *testing.T) {
+	// DNS-1123 subdomain allows dot-separated segments (reverse-DNS style).
+	for _, ok := range []string{"a", "foo", "foo-bar", "io.example", "io.example.app", "mcp.fetch.v1"} {
+		errs := ValidateObjectMeta(ObjectMeta{Namespace: "default", Name: ok})
+		require.Empty(t, errs, "name %q should be valid: %v", ok, errs)
+	}
+}
+
+func TestValidateObjectMeta_RejectsBadLabelKey(t *testing.T) {
+	errs := ValidateObjectMeta(ObjectMeta{
+		Namespace: "default", Name: "x",
+		Labels: map[string]string{"has spaces": "v"},
+	})
+	require.NotEmpty(t, errs)
+}
+
+// -----------------------------------------------------------------------------
+// AgentSpec
+// -----------------------------------------------------------------------------
+
+func TestAgentValidate_OK(t *testing.T) {
+	a := &Agent{
+		TypeMeta: TypeMeta{APIVersion: GroupVersion, Kind: KindAgent},
+		Metadata: ObjectMeta{Namespace: "default", Name: "alice"},
+		Spec: AgentSpec{
+			Title: "Alice",
+			MCPServers: []ResourceRef{
+				{Kind: KindMCPServer, Name: "tools", Tag: "v1"},
+			},
+		},
+	}
+	require.NoError(t, a.Validate())
+}
+
+func TestAgentValidate_RejectsWrongRefKind(t *testing.T) {
+	a := &Agent{
+		Metadata: ObjectMeta{Namespace: "default", Name: "a"},
+		Spec: AgentSpec{
+			MCPServers: []ResourceRef{{Kind: KindSkill, Name: "wrong", Tag: "v1"}},
+		},
+	}
+	paths := failedFields(t, a.Validate())
+	require.Contains(t, paths, "spec.mcpServers[0].kind")
+}
+
+func TestAgentValidate_AcceptsBlankOptionalFields(t *testing.T) {
+	a := &Agent{
+		Metadata: ObjectMeta{Namespace: "default", Name: "minimal"},
+		Spec:     AgentSpec{}, // everything blank
+	}
+	require.NoError(t, a.Validate())
+}
+
+func TestAgentValidate_AccumulatesErrors(t *testing.T) {
+	a := &Agent{
+		Metadata: ObjectMeta{Namespace: "default", Name: "a"},
+		Spec: AgentSpec{
+			Title: "   ", // whitespace only
+		},
+	}
+	paths := failedFields(t, a.Validate())
+	require.Contains(t, paths, "spec.title")
+}
+
+func TestAgentValidate_AcceptsRepositoryWithBranchAndCommit(t *testing.T) {
+	a := &Agent{
+		Metadata: ObjectMeta{Namespace: "default", Name: "a"},
+		Spec: AgentSpec{
+			Source: &AgentSource{
+				Repository: &Repository{
+					URL:    "https://github.com/example/repo",
+					Branch: "feature/x",
+					Commit: "abc1234def",
+				},
+			},
+		},
+	}
+	require.NoError(t, a.Validate())
+}
+
+func TestAgentValidate_RejectsBranchOrCommitWithoutURL(t *testing.T) {
+	cases := []struct {
+		name string
+		repo Repository
+		want string
+	}{
+		{"branch without url", Repository{Branch: "feature/x"}, "spec.source.repository.branch"},
+		{"commit without url", Repository{Commit: "abc1234"}, "spec.source.repository.commit"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &Agent{
+				Metadata: ObjectMeta{Namespace: "default", Name: "a"},
+				Spec: AgentSpec{
+					Source: &AgentSource{Repository: &tc.repo},
+				},
+			}
+			paths := failedFields(t, a.Validate())
+			require.Contains(t, paths, tc.want)
+		})
+	}
+}
+
+func TestAgentResolveRefs_OK(t *testing.T) {
+	resolver := func(ctx context.Context, ref ResourceRef) error { return nil }
+	a := &Agent{
+		Metadata: ObjectMeta{Namespace: "default", Name: "a"},
+		Spec: AgentSpec{
+			MCPServers: []ResourceRef{{Kind: KindMCPServer, Name: "tools", Tag: "v1"}},
+		},
+	}
+	require.NoError(t, a.ResolveRefs(context.Background(), resolver))
+}
+
+func TestAgentResolveRefs_ReportsDangling(t *testing.T) {
+	resolver := func(ctx context.Context, ref ResourceRef) error {
+		if ref.Name == "missing" {
+			return ErrDanglingRef
+		}
+		return nil
+	}
+	a := &Agent{
+		Metadata: ObjectMeta{Namespace: "default", Name: "a", Tag: "v1"},
+		Spec: AgentSpec{
+			MCPServers: []ResourceRef{
+				{Kind: KindMCPServer, Name: "tools", Tag: "v1"},
+				{Kind: KindMCPServer, Name: "missing", Tag: "v1"},
+			},
+		},
+	}
+	err := a.ResolveRefs(context.Background(), resolver)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "spec.mcpServers[1]")
+}
+
+func TestAgentResolveRefs_InheritsNamespace(t *testing.T) {
+	var seen []ResourceRef
+	resolver := func(ctx context.Context, ref ResourceRef) error {
+		seen = append(seen, ref)
+		return nil
+	}
+	a := &Agent{
+		Metadata: ObjectMeta{Namespace: "team-a", Name: "a", Tag: "v1"},
+		Spec: AgentSpec{
+			MCPServers: []ResourceRef{
+				// blank namespace should inherit Agent's "team-a"
+				{Kind: KindMCPServer, Name: "local-tools", Tag: "v1"},
+				// explicit namespace sticks
+				{Kind: KindMCPServer, Namespace: "shared", Name: "common", Tag: "v1"},
+			},
+		},
+	}
+	require.NoError(t, a.ResolveRefs(context.Background(), resolver))
+	require.Len(t, seen, 2)
+	require.Equal(t, "team-a", seen[0].Namespace)
+	require.Equal(t, "shared", seen[1].Namespace)
+}
+
+func TestAgentResolveRefs_NilResolverIsNoOp(t *testing.T) {
+	a := &Agent{Metadata: ObjectMeta{Namespace: "default", Name: "a"}}
+	require.NoError(t, a.ResolveRefs(context.Background(), nil))
+}
+
+// -----------------------------------------------------------------------------
+// DeploymentSpec
+// -----------------------------------------------------------------------------
+
+func TestDeploymentValidate_OK(t *testing.T) {
+	d := &Deployment{
+		Metadata: ObjectMeta{Namespace: "default", Name: "prod"},
+		Spec: DeploymentSpec{
+			TargetRef:    ResourceRef{Kind: KindAgent, Name: "alice", Tag: "stable"},
+			RuntimeRef:   ResourceRef{Kind: KindRuntime, Name: "local"},
+			DesiredState: DesiredStateDeployed,
+		},
+	}
+	require.NoError(t, d.Validate())
+}
+
+func TestDeploymentValidate_HarnessSelectionDefaultsModelRef(t *testing.T) {
+	d := &Deployment{
+		Metadata: ObjectMeta{Namespace: "default", Name: "prod"},
+		Spec: DeploymentSpec{
+			TargetRef:  ResourceRef{Kind: KindAgent, Name: "alice", Tag: "stable"},
+			RuntimeRef: ResourceRef{Kind: KindRuntime, Name: "agentcore"},
+			Harness: &DeploymentHarness{
+				Type:           "claude-code",
+				PermissionMode: "acceptEdits",
+			},
+		},
+	}
+	require.NoError(t, d.Validate())
+	require.Equal(t, &ModelRef{Name: DefaultModelName}, d.Spec.ModelRef)
+}
+
+func TestDeploymentValidate_ModelRef(t *testing.T) {
+	tests := []struct {
+		name       string
+		targetKind string
+		modelRef   *ModelRef
+		harness    *DeploymentHarness
+		wantFields []string
+	}{
+		{
+			name: "omitted",
+		},
+		{
+			name:    "omitted for harness deployment defaults",
+			harness: &DeploymentHarness{Type: "claude-code"},
+		},
+		{
+			name:       "omitted for MCPServer deployment",
+			targetKind: KindMCPServer,
+		},
+		{
+			name:       "supplied for MCPServer deployment",
+			targetKind: KindMCPServer,
+			modelRef:   &ModelRef{Name: "claude-opus-4-8"},
+		},
+		{
+			name:     "same namespace",
+			modelRef: &ModelRef{Name: "claude-opus-4-8"},
+		},
+		{
+			name:     "explicit namespace",
+			modelRef: &ModelRef{Namespace: "models", Name: "claude-opus-4-8"},
+		},
+		{
+			name:     "pinned tag",
+			modelRef: &ModelRef{Name: "claude-opus-4-8", Tag: "approved-v1"},
+		},
+		{
+			name:       "missing name",
+			modelRef:   &ModelRef{Namespace: "models"},
+			wantFields: []string{"spec.modelRef.name"},
+		},
+		{
+			name:       "invalid name",
+			modelRef:   &ModelRef{Name: "Not Valid"},
+			wantFields: []string{"spec.modelRef.name"},
+		},
+		{
+			name:       "invalid namespace",
+			modelRef:   &ModelRef{Namespace: "Bad Namespace", Name: "claude-opus-4-8"},
+			wantFields: []string{"spec.modelRef.namespace"},
+		},
+		{
+			name:       "invalid tag",
+			modelRef:   &ModelRef{Name: "claude-opus-4-8", Tag: "not a tag"},
+			wantFields: []string{"spec.modelRef.tag"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			targetKind := tt.targetKind
+			if targetKind == "" {
+				targetKind = KindAgent
+			}
+			d := &Deployment{
+				Metadata: ObjectMeta{Namespace: "default", Name: "prod"},
+				Spec: DeploymentSpec{
+					TargetRef:  ResourceRef{Kind: targetKind, Name: "alice", Tag: "stable"},
+					RuntimeRef: ResourceRef{Kind: KindRuntime, Name: "agentcore"},
+					ModelRef:   tt.modelRef,
+					Harness:    tt.harness,
+				},
+			}
+			require.ElementsMatch(t, tt.wantFields, failedFields(t, d.Validate()))
+		})
+	}
+}
+
+func TestDeploymentValidate_EnvFrom(t *testing.T) {
+	tests := []struct {
+		name       string
+		targetKind string
+		envFrom    []EnvFromSource
+		wantFields []string
+	}{
+		{
+			name:       "omitted",
+			targetKind: KindMCPServer,
+		},
+		{
+			name:       "single secretRef",
+			targetKind: KindMCPServer,
+			envFrom:    []EnvFromSource{{SecretRef: &SecretEnvSource{Name: "mcp-secrets"}}},
+		},
+		{
+			name:       "multiple secretRefs",
+			targetKind: KindMCPServer,
+			envFrom: []EnvFromSource{
+				{SecretRef: &SecretEnvSource{Name: "mcp-secrets"}},
+				{SecretRef: &SecretEnvSource{Name: "shared-tokens"}},
+			},
+		},
+		{
+			name:       "rejected for Agent target",
+			targetKind: KindAgent,
+			envFrom:    []EnvFromSource{{SecretRef: &SecretEnvSource{Name: "mcp-secrets"}}},
+			wantFields: []string{"spec.envFrom"},
+		},
+		{
+			name:       "missing secretRef",
+			targetKind: KindMCPServer,
+			envFrom:    []EnvFromSource{{}},
+			wantFields: []string{"spec.envFrom[0].secretRef"},
+		},
+		{
+			name:       "inner missing secretRef",
+			targetKind: KindMCPServer,
+			envFrom: []EnvFromSource{
+				{SecretRef: &SecretEnvSource{Name: "mcp-secrets"}},
+				{},
+			},
+			wantFields: []string{"spec.envFrom[1].secretRef"},
+		},
+		{
+			name:       "multiple field errors",
+			targetKind: KindMCPServer,
+			envFrom: []EnvFromSource{
+				{SecretRef: &SecretEnvSource{Name: "mcp-secrets"}},
+				{SecretRef: &SecretEnvSource{Name: "Invalid Name"}},
+				{},
+			},
+			wantFields: []string{"spec.envFrom[1].secretRef.name", "spec.envFrom[2].secretRef"},
+		},
+		{
+			name:       "empty secret name",
+			targetKind: KindMCPServer,
+			envFrom:    []EnvFromSource{{SecretRef: &SecretEnvSource{}}},
+			wantFields: []string{"spec.envFrom[0].secretRef.name"},
+		},
+		{
+			name:       "invalid secret name",
+			targetKind: KindMCPServer,
+			envFrom: []EnvFromSource{
+				{SecretRef: &SecretEnvSource{Name: "mcp-secrets"}},
+				{SecretRef: &SecretEnvSource{Name: "Not Valid"}},
+			},
+			wantFields: []string{"spec.envFrom[1].secretRef.name"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := &Deployment{
+				Metadata: ObjectMeta{Namespace: "default", Name: "prod"},
+				Spec: DeploymentSpec{
+					TargetRef:  ResourceRef{Kind: tt.targetKind, Name: "weather", Tag: "stable"},
+					RuntimeRef: ResourceRef{Kind: KindRuntime, Name: "kagent"},
+					EnvFrom:    tt.envFrom,
+				},
+			}
+			require.ElementsMatch(t, tt.wantFields, failedFields(t, d.Validate()))
+		})
+	}
+}
+
+func TestDeploymentValidate_RejectsHarnessSelectionWithoutType(t *testing.T) {
+	d := &Deployment{
+		Metadata: ObjectMeta{Namespace: "default", Name: "prod"},
+		Spec: DeploymentSpec{
+			TargetRef:  ResourceRef{Kind: KindAgent, Name: "alice", Tag: "stable"},
+			RuntimeRef: ResourceRef{Kind: KindRuntime, Name: "agentcore"},
+			ModelRef:   &ModelRef{Name: "claude-opus-4-8"},
+			Harness:    &DeploymentHarness{},
+		},
+	}
+	paths := failedFields(t, d.Validate())
+	require.Contains(t, paths, "spec.harness.type")
+}
+
+func TestDeploymentValidate_RejectsHarnessSelectionForMCPServer(t *testing.T) {
+	d := &Deployment{
+		Metadata: ObjectMeta{Namespace: "default", Name: "prod"},
+		Spec: DeploymentSpec{
+			TargetRef:  ResourceRef{Kind: KindMCPServer, Name: "weather", Tag: "stable"},
+			RuntimeRef: ResourceRef{Kind: KindRuntime, Name: "agentcore"},
+			Harness:    &DeploymentHarness{Type: "claude-code"},
+		},
+	}
+	paths := failedFields(t, d.Validate())
+	require.Contains(t, paths, "spec.harness")
+}
+
+func TestDeploymentValidate_RejectsBadTargetKind(t *testing.T) {
+	d := &Deployment{
+		Metadata: ObjectMeta{Namespace: "default", Name: "prod"},
+		Spec: DeploymentSpec{
+			TargetRef:  ResourceRef{Kind: KindSkill, Name: "skill", Tag: "stable"},
+			RuntimeRef: ResourceRef{Kind: KindRuntime, Name: "local"},
+		},
+	}
+	paths := failedFields(t, d.Validate())
+	require.Contains(t, paths, "spec.targetRef.kind")
+}
+
+func TestDeploymentValidate_RejectsBadRuntimeKind(t *testing.T) {
+	d := &Deployment{
+		Metadata: ObjectMeta{Namespace: "default", Name: "prod"},
+		Spec: DeploymentSpec{
+			TargetRef:  ResourceRef{Kind: KindAgent, Name: "alice", Tag: "stable"},
+			RuntimeRef: ResourceRef{Kind: KindAgent, Name: "nope"},
+		},
+	}
+	paths := failedFields(t, d.Validate())
+	require.Contains(t, paths, "spec.runtimeRef.kind")
+}
+
+func TestDeploymentValidate_RejectsBadDesiredState(t *testing.T) {
+	d := &Deployment{
+		Metadata: ObjectMeta{Namespace: "default", Name: "prod"},
+		Spec: DeploymentSpec{
+			TargetRef:    ResourceRef{Kind: KindAgent, Name: "alice", Tag: "stable"},
+			RuntimeRef:   ResourceRef{Kind: KindRuntime, Name: "local"},
+			DesiredState: "running",
+		},
+	}
+	paths := failedFields(t, d.Validate())
+	require.Contains(t, paths, "spec.desiredState")
+}
+
+func TestDeploymentValidate_DeploymentRefsOK(t *testing.T) {
+	d := &Deployment{
+		Metadata: ObjectMeta{Namespace: "default", Name: "agent-prod"},
+		Spec: DeploymentSpec{
+			TargetRef:    ResourceRef{Kind: KindAgent, Name: "alice", Tag: "stable"},
+			RuntimeRef:   ResourceRef{Kind: KindRuntime, Name: "local"},
+			DesiredState: DesiredStateDeployed,
+			DeploymentRefs: []DeploymentRef{
+				{Name: "weather-mcp-prod"},
+				{Namespace: "tools", Name: "fs-mcp-prod"},
+			},
+		},
+	}
+	require.NoError(t, d.Validate())
+}
+
+func TestDeploymentValidate_DeploymentRefsRejectMissingName(t *testing.T) {
+	d := &Deployment{
+		Metadata: ObjectMeta{Namespace: "default", Name: "agent-prod"},
+		Spec: DeploymentSpec{
+			TargetRef:      ResourceRef{Kind: KindAgent, Name: "alice", Tag: "stable"},
+			RuntimeRef:     ResourceRef{Kind: KindRuntime, Name: "local"},
+			DeploymentRefs: []DeploymentRef{{Namespace: "tools"}}, // missing Name
+		},
+	}
+	paths := failedFields(t, d.Validate())
+	require.Contains(t, paths, "spec.deploymentRefs[0].name")
+}
+
+func TestDeploymentValidate_DeploymentRefsRejectBadNamespace(t *testing.T) {
+	d := &Deployment{
+		Metadata: ObjectMeta{Namespace: "default", Name: "agent-prod"},
+		Spec: DeploymentSpec{
+			TargetRef:      ResourceRef{Kind: KindAgent, Name: "alice", Tag: "stable"},
+			RuntimeRef:     ResourceRef{Kind: KindRuntime, Name: "local"},
+			DeploymentRefs: []DeploymentRef{{Namespace: "Bad NS", Name: "ok"}},
+		},
+	}
+	paths := failedFields(t, d.Validate())
+	require.Contains(t, paths, "spec.deploymentRefs[0].namespace")
+}
+
+// Deployment.spec.targetRef may omit tag; reference resolution treats blank as
+// the literal "latest" tag.
+func TestDeploymentValidate_AllowsEmptyTargetRefTag(t *testing.T) {
+	d := &Deployment{
+		Metadata: ObjectMeta{Namespace: "default", Name: "prod"},
+		Spec: DeploymentSpec{
+			TargetRef:  ResourceRef{Kind: KindAgent, Name: "alice"},
+			RuntimeRef: ResourceRef{Kind: KindRuntime, Name: "local"},
+		},
+	}
+	require.NoError(t, d.Validate())
+}
+
+func TestDeploymentValidate_RejectsBadTargetRefTag(t *testing.T) {
+	d := &Deployment{
+		Metadata: ObjectMeta{Namespace: "default", Name: "prod"},
+		Spec: DeploymentSpec{
+			TargetRef:  ResourceRef{Kind: KindAgent, Name: "alice", Tag: "bad tag"},
+			RuntimeRef: ResourceRef{Kind: KindRuntime, Name: "local"},
+		},
+	}
+	paths := failedFields(t, d.Validate())
+	require.Contains(t, paths, "spec.targetRef.tag")
+}
+
+func TestDeploymentResolveRefs_InheritsNamespace(t *testing.T) {
+	var seen []ResourceRef
+	resolver := func(ctx context.Context, ref ResourceRef) error {
+		seen = append(seen, ref)
+		return nil
+	}
+	d := &Deployment{
+		Metadata: ObjectMeta{Namespace: "team-b", Name: "prod"},
+		Spec: DeploymentSpec{
+			TargetRef:  ResourceRef{Kind: KindAgent, Name: "alice", Tag: "stable"},
+			RuntimeRef: ResourceRef{Kind: KindRuntime, Name: "local"},
+		},
+	}
+	require.NoError(t, d.ResolveRefs(context.Background(), resolver))
+	require.Len(t, seen, 2)
+	require.Equal(t, "team-b", seen[0].Namespace)
+	require.Equal(t, "team-b", seen[1].Namespace)
+}
+
+func TestDeploymentResolveRefs_ModelRef(t *testing.T) {
+	tests := []struct {
+		name          string
+		modelRef      ModelRef
+		wantNamespace string
+		wantTag       string
+	}{
+		{
+			name:          "inherits deployment namespace",
+			modelRef:      ModelRef{Name: "claude-opus-4-8"},
+			wantNamespace: "team-b",
+		},
+		{
+			name:          "preserves explicit namespace",
+			modelRef:      ModelRef{Namespace: "models", Name: "claude-opus-4-8"},
+			wantNamespace: "models",
+		},
+		{
+			name:          "preserves pinned tag",
+			modelRef:      ModelRef{Name: "claude-opus-4-8", Tag: "approved-v1"},
+			wantNamespace: "team-b",
+			wantTag:       "approved-v1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var seen []ResourceRef
+			resolver := func(_ context.Context, ref ResourceRef) error {
+				seen = append(seen, ref)
+				return nil
+			}
+			d := &Deployment{
+				Metadata: ObjectMeta{Namespace: "team-b", Name: "prod"},
+				Spec: DeploymentSpec{
+					TargetRef:  ResourceRef{Kind: KindAgent, Name: "alice", Tag: "stable"},
+					RuntimeRef: ResourceRef{Kind: KindRuntime, Name: "local"},
+					ModelRef:   &tt.modelRef,
+				},
+			}
+
+			require.NoError(t, d.ResolveRefs(context.Background(), resolver))
+			require.Len(t, seen, 3)
+			require.Equal(t, ResourceRef{
+				Kind:      KindModel,
+				Namespace: tt.wantNamespace,
+				Name:      "claude-opus-4-8",
+				Tag:       tt.wantTag,
+			}, seen[2])
+		})
+	}
+}
+
+func TestDeploymentResolveRefs_UsesDefaultHarnessModel(t *testing.T) {
+	var seen []ResourceRef
+	resolver := func(_ context.Context, ref ResourceRef) error {
+		seen = append(seen, ref)
+		return nil
+	}
+	d := &Deployment{
+		Metadata: ObjectMeta{Namespace: "team-b", Name: "prod"},
+		Spec: DeploymentSpec{
+			TargetRef:  ResourceRef{Kind: KindAgent, Name: "alice", Tag: "stable"},
+			RuntimeRef: ResourceRef{Kind: KindRuntime, Name: "local"},
+			Harness:    &DeploymentHarness{Type: "claude-code"},
+		},
+	}
+
+	require.NoError(t, d.ResolveRefs(context.Background(), resolver))
+	require.Len(t, seen, 3)
+	require.Equal(t, ResourceRef{
+		Kind:      KindModel,
+		Namespace: "team-b",
+		Name:      DefaultModelName,
+	}, seen[2])
+}
+
+func TestDeploymentResolveRefs_ReportsDanglingModelRef(t *testing.T) {
+	resolver := func(_ context.Context, ref ResourceRef) error {
+		if ref.Kind == KindModel {
+			return ErrDanglingRef
+		}
+		return nil
+	}
+	d := &Deployment{
+		Metadata: ObjectMeta{Namespace: "default", Name: "prod"},
+		Spec: DeploymentSpec{
+			TargetRef:  ResourceRef{Kind: KindAgent, Name: "alice", Tag: "stable"},
+			RuntimeRef: ResourceRef{Kind: KindRuntime, Name: "local"},
+			ModelRef:   &ModelRef{Name: "missing"},
+		},
+	}
+
+	err := d.ResolveRefs(context.Background(), resolver)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "spec.modelRef")
+}
+
+func TestDeploymentResolveRefs_ReportsDanglingDefaultHarnessModel(t *testing.T) {
+	resolver := func(_ context.Context, ref ResourceRef) error {
+		if ref.Kind == KindModel && ref.Name == DefaultModelName {
+			return ErrDanglingRef
+		}
+		return nil
+	}
+	d := &Deployment{
+		Metadata: ObjectMeta{Namespace: "default", Name: "prod"},
+		Spec: DeploymentSpec{
+			TargetRef:  ResourceRef{Kind: KindAgent, Name: "alice", Tag: "stable"},
+			RuntimeRef: ResourceRef{Kind: KindRuntime, Name: "local"},
+			Harness:    &DeploymentHarness{Type: "claude-code"},
+		},
+	}
+
+	err := d.ResolveRefs(context.Background(), resolver)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "spec.modelRef")
+}
+
+// -----------------------------------------------------------------------------
+// Runtime
+// -----------------------------------------------------------------------------
+
+func TestRuntimeValidate_OK(t *testing.T) {
+	r := &Runtime{
+		Metadata: ObjectMeta{Namespace: "default", Name: "local"},
+		Spec:     RuntimeSpec{Type: TypeLocal},
+	}
+	require.NoError(t, r.Validate())
+}
+
+func TestRuntimeValidate_RejectsUnknownType(t *testing.T) {
+	r := &Runtime{
+		Metadata: ObjectMeta{Namespace: "default", Name: "custom"},
+		Spec:     RuntimeSpec{Type: "heroku"},
+	}
+	err := r.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "heroku")
+}
+
+// TestRuntimeValidate_CanonicalizesType ensures Validate rewrites
+// Spec.Type to its canonical CamelCase form regardless of input casing.
+// Downstream adapter dispatch relies on exact-match equality, so the
+// case-insensitive normalization MUST land at admission.
+func TestRuntimeValidate_CanonicalizesType(t *testing.T) {
+	for _, input := range []string{"local", "LOCAL", "Local", " Local "} {
+		r := &Runtime{
+			Metadata: ObjectMeta{Namespace: "default", Name: "x"},
+			Spec:     RuntimeSpec{Type: input},
+		}
+		require.NoError(t, r.Validate(), "input %q should validate", input)
+		require.Equal(t, TypeLocal, r.Spec.Type,
+			"input %q should canonicalize to %q, got %q", input, TypeLocal, r.Spec.Type)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// MCPServer
+// -----------------------------------------------------------------------------
+
+func TestMCPServerValidate_OK(t *testing.T) {
+	m := &MCPServer{
+		Metadata: ObjectMeta{Namespace: "default", Name: "tools", Tag: "v1"},
+		Spec: MCPServerSpec{
+			Title: "Tools",
+			Source: &MCPServerSource{
+				Package: &MCPPackage{
+					Origin: MCPPackageOrigin{
+						Type:       MCPPackageOriginTypeOCI,
+						Identifier: "ghcr.io/example/mcp-tools:1.0.0",
+						OCI:        &MCPPackageOriginOCI{ServerName: "io.example/mcp-tools"},
+					},
+					Transport: MCPTransport{Type: "stdio"},
+				},
+			},
+		},
+	}
+	require.NoError(t, m.Validate())
+}
+
+func TestMCPServerValidate_RejectsBadRemote(t *testing.T) {
+	r := &MCPServer{
+		Metadata: ObjectMeta{Namespace: "default", Name: "tools", Tag: "v1"},
+		Spec: MCPServerSpec{
+			Remote: &MCPRemote{Type: "streamable-http"}, // missing URL
+		},
+	}
+	paths := failedFields(t, r.Validate())
+	require.Contains(t, paths, "spec.remote.url")
+}
+
+func TestMCPServerValidate_RemoteAndSourceMutuallyExclusive(t *testing.T) {
+	m := &MCPServer{
+		Metadata: ObjectMeta{Namespace: "default", Name: "tools", Tag: "v1"},
+		Spec: MCPServerSpec{
+			Source: &MCPServerSource{
+				Package: &MCPPackage{
+					Origin: MCPPackageOrigin{
+						Type:       MCPPackageOriginTypeOCI,
+						Identifier: "ghcr.io/example/mcp-tools:1.0.0",
+						OCI:        &MCPPackageOriginOCI{ServerName: "io.example/mcp-tools"},
+					},
+					Transport: MCPTransport{Type: "stdio"},
+				},
+			},
+			Remote: &MCPRemote{Type: "streamable-http", URL: "https://example.test/mcp"},
+		},
+	}
+	paths := failedFields(t, m.Validate())
+	require.Contains(t, paths, "spec")
+}
+
+func TestMCPServerValidate_RequiresSourceOrRemote(t *testing.T) {
+	m := &MCPServer{
+		Metadata: ObjectMeta{Namespace: "default", Name: "tools", Tag: "v1"},
+		Spec:     MCPServerSpec{},
+	}
+	paths := failedFields(t, m.Validate())
+	require.Contains(t, paths, "spec")
+}
+
+func TestMCPServerValidate_HTTPPortRange(t *testing.T) {
+	mk := func(port uint16) *MCPServer {
+		return &MCPServer{
+			Metadata: ObjectMeta{Name: "x"},
+			Spec: MCPServerSpec{
+				Source: &MCPServerSource{
+					Package: &MCPPackage{
+						Origin: MCPPackageOrigin{
+							Type:       MCPPackageOriginTypeOCI,
+							Identifier: "ghcr.io/example/img:latest",
+							OCI:        &MCPPackageOriginOCI{ServerName: "io.example/x"},
+						},
+						Transport: MCPTransport{Type: "http", Port: port},
+					},
+				},
+			},
+		}
+	}
+	const portPath = "spec.source.package.transport.port"
+	require.Contains(t, failedFields(t, mk(0).Validate()), portPath, "http with port 0 must fail")
+	require.NotContains(t, failedFields(t, mk(8080).Validate()), portPath, "http with a valid port must pass the port check")
+}
+
+// TestMCPServerValidate_TransportTypeClosedSet asserts the transport type
+// is restricted to {stdio, http}. The resolver in
+// internal/registry/runtimes/utils/deployment_adapter_utils.go has a
+// default→http switch, so a typo like "sse" would silently route to HTTP
+// if the validator didn't gate it here.
+func TestMCPServerValidate_TransportTypeClosedSet(t *testing.T) {
+	m := &MCPServer{
+		Metadata: ObjectMeta{Namespace: "default", Name: "tools", Tag: "v1"},
+		Spec: MCPServerSpec{
+			Source: &MCPServerSource{
+				Package: &MCPPackage{
+					Origin: MCPPackageOrigin{
+						Type:       MCPPackageOriginTypeOCI,
+						Identifier: "ghcr.io/example/mcp-tools:1.0.0",
+						OCI:        &MCPPackageOriginOCI{ServerName: "io.example/mcp-tools"},
+					},
+					Transport: MCPTransport{Type: "sse"}, // not in the closed set
+				},
+			},
+		},
+	}
+	err := m.Validate()
+	require.Error(t, err)
+	require.Contains(t, failedFields(t, err), "spec.source.package.transport.type")
+	require.Contains(t, err.Error(), "sse", "error message should name the rejected value")
+	require.Contains(t, err.Error(), ErrInvalidRef.Error(), "error should wrap ErrInvalidRef")
+}
+
+func TestValidateNameField(t *testing.T) {
+	maxLabelLen := strings.Repeat("a", 63) // single segment at max label length
+	tooLongSegment := strings.Repeat("a", 64)
+	// 253-char dotted subdomain at the upper bound (4 segments of 63 + 3 dots = 255 → 3 segments of 63 + 1 of 61 + 3 dots = 253)
+	maxSubdomain := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61)
+	tooLongSubdomain := maxSubdomain + "x"
+
+	testCases := []struct {
+		label     string
+		name      string
+		expectErr bool
+	}{
+		// positives
+		{"single char", "a", false},
+		{"lowercase only", "myserver", false},
+		{"contains hyphen", "my-server", false},
+		{"single dot-separated segment at label max", maxLabelLen, false},
+		{"dotted (reverse-DNS)", "io.example", false},
+		{"deeply dotted", "mcp.fetch.v1", false},
+		{"hyphen plus dot", "my-server.io", false},
+		{"max-length subdomain", maxSubdomain, false},
+
+		// negatives
+		{"empty", "", true},
+		{"contains uppercase", "MyServer", true},
+		{"contains underscore", "my_server", true},
+		{"contains slash", "example/server", true},
+		{"leading hyphen", "-server", true},
+		{"trailing hyphen", "server-", true},
+		{"leading dot", ".server", true},
+		{"trailing dot", "server.", true},
+		{"double dot", "foo..bar", true},
+		{"segment longer than 63 chars", tooLongSegment, true},
+		{"total longer than 253 chars", tooLongSubdomain, true},
+		{"single hyphen", "-", true},
+		{"non-ascii", "café", true},
+		{"contains space", "my server", true},
+	}
+	for _, c := range testCases {
+		t.Run(c.label, func(t *testing.T) {
+			err := validateNameField(c.name)
+			if c.expectErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateNameField_ErrorMessage(t *testing.T) {
+	// Format errors should mention DNS-1123 so operators can self-diagnose.
+	err := validateNameField("io.example/foo")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrInvalidFormat)
+	assert.Contains(t, err.Error(), "DNS-1123 subdomain")
+
+	// Required-field errors should be the standard sentinel.
+	err = validateNameField("")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrRequiredField)
+}
+
+func TestValidateMCPPackageName(t *testing.T) {
+	maxLenStr := strings.Repeat("a", 100) + "/" + strings.Repeat("b", 99)   // 200 chars, exact max
+	longLenStr := strings.Repeat("a", 100) + "/" + strings.Repeat("b", 101) // 202 chars
+
+	testCases := []struct {
+		label     string
+		name      string
+		expectErr bool
+	}{
+		{"empty (caught by required check elsewhere)", "", false},
+		{"single segment", "my-mcp", false},
+		{"dotted single segment", "io.example.mcp", false},
+		{"underscore in single segment", "my_mcp", false},
+		{"multi-period dns name", "io.github.user/server", false},
+		{"follows dns naming scheme", "com.example/foo", false},
+		{"contains multiple special ascii chars", "foo.bar-baz/my_server", false},
+		{"multiple slashes", "a/b/c", false},
+		{"within max len", maxLenStr, false},
+		{"single char", "a", false},
+		{"too long", longLenStr, true},
+		{"non-ascii", "café/foo", true},
+		{"contains space", "io.example/my server", true},
+		{"contains colon", "io.example:foo", true},
+		{"contains exclamation", "foo!bar", true},
+	}
+	for _, c := range testCases {
+		t.Run(c.label, func(t *testing.T) {
+			err := validateMCPPackageName(c.name)
+			if c.expectErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestMCPServerValidate_MCPPackageName_RejectsBadFormat(t *testing.T) {
+	m := &MCPServer{
+		TypeMeta: TypeMeta{APIVersion: "ar.dev/v1alpha1", Kind: KindMCPServer},
+		Metadata: ObjectMeta{Namespace: "default", Name: "my-server"},
+		Spec: MCPServerSpec{
+			Source: &MCPServerSource{
+				Package: &MCPPackage{
+					Origin: MCPPackageOrigin{
+						Type:       MCPPackageOriginTypeNPM,
+						Identifier: "my-pkg",
+						NPM: &MCPPackageOriginNPM{
+							Version:    "1.0.0",
+							ServerName: "has space", // invalid: spaces not allowed
+						},
+					},
+					Transport: MCPTransport{Type: "stdio"},
+				},
+			},
+		},
+	}
+	err := m.Validate()
+	require.Error(t, err)
+	paths := failedFields(t, err)
+	require.Contains(t, paths, "spec.source.package.origin.npm.serverName")
+}
+
+func TestMCPServerValidate_MCPPackageName_AcceptsValid(t *testing.T) {
+	m := &MCPServer{
+		TypeMeta: TypeMeta{APIVersion: "ar.dev/v1alpha1", Kind: KindMCPServer},
+		Metadata: ObjectMeta{Namespace: "default", Name: "my-server"},
+		Spec: MCPServerSpec{
+			Source: &MCPServerSource{
+				Package: &MCPPackage{
+					Origin: MCPPackageOrigin{
+						Type:       MCPPackageOriginTypePyPI,
+						Identifier: "mcp-server-fetch",
+						PyPI: &MCPPackageOriginPyPI{
+							Version:    "1.0.0",
+							ServerName: "io.github.modelcontextprotocol/server-fetch",
+						},
+					},
+					Transport: MCPTransport{Type: "stdio"},
+				},
+			},
+		},
+	}
+	require.NoError(t, m.Validate())
+}
+
+// TestMCPServerValidate_ServerName_RequiredPerType asserts the new
+// invariant: ServerName lives on whichever per-type sub-struct is set
+// (NPM/PyPI/OCI), and is always required there. The error path is now
+// per-type (e.g. spec.source.package.origin.npm.serverName) rather than
+// the old flat spec.source.package.serverName.
+func TestMCPServerValidate_ServerName_RequiredPerType(t *testing.T) {
+	cases := []struct {
+		name   string
+		pkg    *MCPPackage
+		expect string
+	}{
+		{
+			name: "npm",
+			pkg: &MCPPackage{
+				Origin: MCPPackageOrigin{
+					Type:       MCPPackageOriginTypeNPM,
+					Identifier: "my-pkg",
+					NPM:        &MCPPackageOriginNPM{Version: "1.0.0"}, // ServerName missing
+				},
+				Transport: MCPTransport{Type: "stdio"},
+			},
+			expect: "spec.source.package.origin.npm.serverName",
+		},
+		{
+			name: "pypi",
+			pkg: &MCPPackage{
+				Origin: MCPPackageOrigin{
+					Type:       MCPPackageOriginTypePyPI,
+					Identifier: "my-pkg",
+					PyPI:       &MCPPackageOriginPyPI{Version: "1.0.0"}, // ServerName missing
+				},
+				Transport: MCPTransport{Type: "stdio"},
+			},
+			expect: "spec.source.package.origin.pypi.serverName",
+		},
+		{
+			name: "oci",
+			pkg: &MCPPackage{
+				Origin: MCPPackageOrigin{
+					Type:       MCPPackageOriginTypeOCI,
+					Identifier: "ghcr.io/example/my-pkg:1.0.0",
+					OCI:        &MCPPackageOriginOCI{}, // ServerName missing
+				},
+				Transport: MCPTransport{Type: "stdio"},
+			},
+			expect: "spec.source.package.origin.oci.serverName",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &MCPServer{
+				TypeMeta: TypeMeta{APIVersion: "ar.dev/v1alpha1", Kind: KindMCPServer},
+				Metadata: ObjectMeta{Namespace: "default", Name: "my-server"},
+				Spec:     MCPServerSpec{Source: &MCPServerSource{Package: tc.pkg}},
+			}
+			err := m.Validate()
+			require.Error(t, err)
+			paths := failedFields(t, err)
+			require.Contains(t, paths, tc.expect)
+		})
+	}
+}
+
+// TestMCPServerValidate_OriginPolymorphism covers the new discriminated-
+// union invariant: exactly one of NPM/PyPI/OCI must be non-nil, and the
+// sub-struct must match Origin.Type.
+func TestMCPServerValidate_OriginPolymorphism(t *testing.T) {
+	mk := func(o MCPPackageOrigin) *MCPServer {
+		return &MCPServer{
+			TypeMeta: TypeMeta{APIVersion: "ar.dev/v1alpha1", Kind: KindMCPServer},
+			Metadata: ObjectMeta{Namespace: "default", Name: "my-server"},
+			Spec: MCPServerSpec{Source: &MCPServerSource{Package: &MCPPackage{
+				Origin:    o,
+				Transport: MCPTransport{Type: "stdio"},
+			}}},
+		}
+	}
+
+	t.Run("zero sub-structs set is rejected", func(t *testing.T) {
+		paths := failedFields(t, mk(MCPPackageOrigin{
+			Type:       MCPPackageOriginTypeNPM,
+			Identifier: "my-pkg",
+		}).Validate())
+		require.Contains(t, paths, "spec.source.package.origin")
+	})
+
+	t.Run("multiple sub-structs set is rejected", func(t *testing.T) {
+		paths := failedFields(t, mk(MCPPackageOrigin{
+			Type:       MCPPackageOriginTypeNPM,
+			Identifier: "my-pkg",
+			NPM:        &MCPPackageOriginNPM{Version: "1.0.0", ServerName: "io.example/x"},
+			PyPI:       &MCPPackageOriginPyPI{Version: "1.0.0", ServerName: "io.example/x"},
+		}).Validate())
+		require.Contains(t, paths, "spec.source.package.origin")
+	})
+
+	t.Run("type mismatched with sub-struct is rejected", func(t *testing.T) {
+		// Type=npm but only PyPI sub-struct is set.
+		paths := failedFields(t, mk(MCPPackageOrigin{
+			Type:       MCPPackageOriginTypeNPM,
+			Identifier: "my-pkg",
+			PyPI:       &MCPPackageOriginPyPI{Version: "1.0.0", ServerName: "io.example/x"},
+		}).Validate())
+		require.Contains(t, paths, "spec.source.package.origin.npm")
+	})
+
+	t.Run("unsupported type is rejected", func(t *testing.T) {
+		paths := failedFields(t, mk(MCPPackageOrigin{
+			Type:       "bogus",
+			Identifier: "my-pkg",
+			NPM:        &MCPPackageOriginNPM{Version: "1.0.0", ServerName: "io.example/x"},
+		}).Validate())
+		require.Contains(t, paths, "spec.source.package.origin.type")
+	})
+}
+
+// TestMCPServerValidate_OriginTypeRequired asserts the field-path
+// rename from `registryType` to `origin.type` (required when Source.Package
+// is set).
+func TestMCPServerValidate_OriginTypeRequired(t *testing.T) {
+	m := &MCPServer{
+		TypeMeta: TypeMeta{APIVersion: "ar.dev/v1alpha1", Kind: KindMCPServer},
+		Metadata: ObjectMeta{Namespace: "default", Name: "my-server"},
+		Spec: MCPServerSpec{Source: &MCPServerSource{Package: &MCPPackage{
+			Origin: MCPPackageOrigin{
+				// Type intentionally omitted; Identifier present
+				Identifier: "my-pkg",
+				NPM:        &MCPPackageOriginNPM{Version: "1.0.0", ServerName: "io.example/x"},
+			},
+			Transport: MCPTransport{Type: "stdio"},
+		}}},
+	}
+	paths := failedFields(t, m.Validate())
+	require.Contains(t, paths, "spec.source.package.origin.type")
+}
+
+func TestMCPServerValidateRegistries_UsesPerTypeServerName(t *testing.T) {
+	var gotClaim string
+	validator := func(_ context.Context, _ MCPPackageOrigin, claim string) error {
+		gotClaim = claim
+		return nil
+	}
+	m := &MCPServer{
+		Metadata: ObjectMeta{Namespace: "default", Name: "my-server"},
+		Spec: MCPServerSpec{Source: &MCPServerSource{Package: &MCPPackage{
+			Origin: MCPPackageOrigin{
+				Type:       MCPPackageOriginTypePyPI,
+				Identifier: "mcp-server-fetch",
+				PyPI: &MCPPackageOriginPyPI{
+					Version:    "1.0.0",
+					ServerName: "io.github.modelcontextprotocol/server-fetch",
+				},
+			},
+			Transport: MCPTransport{Type: "stdio"},
+		}}},
+	}
+	require.NoError(t, m.ValidateRegistries(context.Background(), validator))
+	require.Equal(t, "io.github.modelcontextprotocol/server-fetch", gotClaim)
+}

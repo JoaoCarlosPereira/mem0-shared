@@ -79,6 +79,9 @@ x-api-common: &api-common
     # Tracing OTLP (task_08 / ADR-004).
     OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
     OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-}
+    # Loja interna (AgentRegistry) — hostname interno do Compose, sem Traefik.
+    AGENT_REGISTRY_BASE_URL: ${AGENT_REGISTRY_BASE_URL:-http://agentregistry:8080}
+    AGENT_REGISTRY_INTERNAL_URL: ${AGENT_REGISTRY_INTERNAL_URL:-http://agentregistry:8080}
     # Object store para backup/cold tier (task_02/07 / ADR-003).
     S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
     S3_BUCKET: ${S3_BUCKET:-mem0-backups}
@@ -274,6 +277,10 @@ services:
       # Login Google na UI (feature auth Google, ADR-002). Segredos de servidor
       # (não passam pelo sed de NEXT_PUBLIC_* do entrypoint): defina no .env.
       # NEXTAUTH_URL deve ser a URL da UI acessível na LAN (ex.: http://IP:3000).
+      # ADMIN_TOKEN: só no container (nunca NEXT_PUBLIC_*). O /api-proxy injeta
+      # X-Admin-Token em mutações /admin/* quando a UI está em modo legado sem
+      # sessão Google — senão Backup/Restore/etc. falham com 401.
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
       # AUTH_UI_REQUIRED=0 → UI legado (sem forçar /login). Vazio = auto (Google id).
@@ -282,6 +289,47 @@ services:
       - NEXT_PUBLIC_GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-}
       - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
+      # Proxy /registry-api → AgentRegistry (loja interna)
+      - AGENT_REGISTRY_INTERNAL_URL=${AGENT_REGISTRY_INTERNAL_URL:-http://agentregistry:8080}
+
+  # Catálogo da loja interna (AgentRegistry / mem0registry). Schema PostgreSQL
+  # `agentregistry` no mesmo DB openmemory. NÃO usa Qdrant / mem0_store.
+  agentregistry:
+    container_name: openmemory_agentregistry
+    build:
+      context: ../integrations/agentregistry
+      dockerfile: docker/Dockerfile.mem0.runtime
+    image: mem0/agentregistry:local
+    restart: unless-stopped
+    environment:
+      AGENT_REGISTRY_SERVER_ADDRESS: ":8080"
+      AGENT_REGISTRY_MCP_PORT: "0"
+      AGENT_REGISTRY_LOG_LEVEL: ${AGENT_REGISTRY_LOG_LEVEL:-info}
+      # Postgres direto (migrações/locks); não usar PgBouncer transaction mode.
+      AGENT_REGISTRY_DATABASE_URL: postgres://${POSTGRES_USER:-mem0}:${POSTGRES_PASSWORD:-mem0}@postgres:5432/${POSTGRES_DB:-openmemory}?sslmode=disable
+      DATABASE_URL: postgres://${POSTGRES_USER:-mem0}:${POSTGRES_PASSWORD:-mem0}@postgres:5432/${POSTGRES_DB:-openmemory}?sslmode=disable
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-${NEXTAUTH_SECRET:-}}
+      AUTH_ADMIN_EMAILS: ${AUTH_ADMIN_EMAILS:-}
+      MEM0_AUTH_ALLOW_LEGACY: ${MEM0_AUTH_ALLOW_LEGACY:-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/v0/ping >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    expose:
+      - "8080"
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.agentregistry.rule=PathPrefix(`/registry-api`)
+      - traefik.http.routers.agentregistry.entrypoints=web
+      - traefik.http.routers.agentregistry.priority=90
+      - traefik.http.middlewares.agentregistry-strip.stripprefix.prefixes=/registry-api
+      - traefik.http.routers.agentregistry.middlewares=agentregistry-strip
+      - traefik.http.services.agentregistry.loadbalancer.server.port=8080
 
 volumes:
   mem0_storage:

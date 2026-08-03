@@ -1,0 +1,367 @@
+// UI compat shims for the v1alpha1 refactor.
+//
+// The `make gen-client` regen in commit ebdb837 renamed every symbol
+// the UI consumes (listServersV0 → listMcpserversAllNamespaces,
+// ServerResponse → MCPServer, etc.) and changed the type shape from
+// the flat legacy `{server: {...}}` to the K8s-style
+// `{apiVersion, kind, metadata, spec}`. Rather than rewrite every
+// rendering component to read the new nested envelope, this module
+// exposes:
+//
+//   - Adapter types that reconstruct the old flat `{server: {...}}`
+//     shape from the new envelope.
+//   - Alias list functions that default the path namespace and map
+//     responses through the adapter.
+//   - Old symbol names (ServerResponse / SkillResponse / etc.) as
+//     exports so imports stay source-compatible.
+//
+// Longer-term the UI should speak the envelope directly. This shim
+// lets the CI pipeline build while that migration happens separately.
+
+import type {
+  Agent,
+  AgentSpec,
+  Deployment,
+  McpServer,
+  McpServerSpec,
+  Prompt,
+  PromptSpec,
+  Skill,
+  SkillSpec,
+} from "@/lib/api/types.gen"
+import {
+  applyBatch as applyBatchRaw,
+  applyDeployment as applyDeploymentRaw,
+  listAgents as listAgentsRaw,
+  listMcpservers as listMcpserversRaw,
+  listPrompts as listPromptsRaw,
+  listSkills as listSkillsRaw,
+} from "@/lib/api/sdk.gen"
+
+// Cross-namespace listing used to be its own endpoint
+// (`/v0/{plural}` returning all namespaces). After the route flatten it
+// merged into the namespaced list with a `?namespace=all` query
+// sentinel; the shim still wants that semantic, so layer it on top of
+// any caller-supplied query.
+function withAllNamespaces<Q extends Record<string, unknown> | undefined>(query: Q): Q {
+  return { namespace: "all", ...(query ?? {}) } as unknown as Q
+}
+
+// ----------------------------------------------------------------------------
+// Old-shape wire types. Each mirrors the legacy `{server: {...}}` /
+// `{skill: {...}}` wrapper the UI consumed before the regen.
+// ----------------------------------------------------------------------------
+
+type LegacyInner<Spec, Extras = object> = Spec & {
+  name: string
+  // namespace is always populated by the adapter from ObjectMeta.namespace,
+  // but test/stories mocks construct LegacyInner directly without it.
+  namespace?: string
+  tag: string
+  title?: string
+  // $schema is a legacy ServerJson-only field; tolerated on the inner type so
+  // fixtures can pin a schema URL without widening McpServerSpec.
+  $schema?: string
+  _meta?: Record<string, any>
+  publishedAt?: string
+  updatedAt?: string
+  status?: string
+} & Extras
+
+// Legacy responses had `_meta` at BOTH the outer level and the nested
+// `.server`/`.skill`/etc. level — the outer copy typically held
+// MCP registry "official"/"publisher-provided" flags while the inner
+// copy held spec-authored metadata. Shim populates both from
+// ObjectMeta.annotations.
+export interface ServerResponse {
+  server: LegacyInner<McpServerSpec>
+  _meta?: Record<string, any>
+}
+
+export interface SkillResponse {
+  skill: LegacyInner<SkillSpec>
+  _meta?: Record<string, any>
+}
+
+export interface AgentResponse {
+  agent: LegacyInner<AgentSpec>
+  _meta?: Record<string, any>
+}
+
+export interface PromptResponse {
+  prompt: LegacyInner<PromptSpec>
+  _meta?: Record<string, any>
+}
+
+// ----------------------------------------------------------------------------
+// Envelope → legacy-shape adapters.
+// ----------------------------------------------------------------------------
+
+// namespace is now optional in the regen'd ObjectMeta because the wire
+// strips "default" — fall back to "default" so legacy renderers keep
+// composing display IDs the same way.
+function inner<Spec extends object>(
+  meta: { name: string; namespace?: string; tag?: string; annotations?: Record<string, string>; createdAt?: string },
+  spec: Spec,
+): LegacyInner<Spec> {
+  return {
+    ...spec,
+    name: meta.name,
+    namespace: meta.namespace ?? "default",
+    tag: meta.tag ?? "",
+    publishedAt: meta.createdAt,
+    _meta: meta.annotations ?? {},
+  } as LegacyInner<Spec>
+}
+
+export function toServerResponse(m: McpServer): ServerResponse {
+  return { server: inner(m.metadata, m.spec), _meta: m.metadata.annotations ?? {} }
+}
+
+export function toSkillResponse(s: Skill): SkillResponse {
+  return { skill: inner(s.metadata, s.spec), _meta: s.metadata.annotations ?? {} }
+}
+
+export function toAgentResponse(a: Agent): AgentResponse {
+  return { agent: inner(a.metadata, a.spec), _meta: a.metadata.annotations ?? {} }
+}
+
+export function toPromptResponse(p: Prompt): PromptResponse {
+  return { prompt: inner(p.metadata, p.spec), _meta: p.metadata.annotations ?? {} }
+}
+
+// ----------------------------------------------------------------------------
+// List-function aliases. Each wraps the regen'd *AllNamespaces endpoint and
+// maps items through the adapter.
+//
+// Legacy callers expect `{ query: { cursor, limit } }` + a response with a
+// `metadata: { nextCursor }` field. The shim threads those through the new
+// cursor-based list surface.
+// ----------------------------------------------------------------------------
+
+interface LegacyListOpts {
+  throwOnError?: true
+  query?: { cursor?: string; limit?: number }
+}
+
+interface LegacyListMetadata {
+  nextCursor?: string
+}
+
+export async function listServersV0(opts?: LegacyListOpts): Promise<{
+  data: { servers: ServerResponse[]; metadata: LegacyListMetadata }
+}> {
+  const { data } = await listMcpserversRaw({
+    throwOnError: true,
+    query: withAllNamespaces(opts?.query),
+  })
+  return {
+    data: {
+      servers: (data?.items ?? []).map(toServerResponse),
+      metadata: { nextCursor: data?.nextCursor },
+    },
+  }
+}
+
+export async function listSkillsV0(opts?: LegacyListOpts): Promise<{
+  data: { skills: SkillResponse[]; metadata: LegacyListMetadata }
+}> {
+  const { data } = await listSkillsRaw({
+    throwOnError: true,
+    query: withAllNamespaces(opts?.query),
+  })
+  return {
+    data: {
+      skills: (data?.items ?? []).map(toSkillResponse),
+      metadata: { nextCursor: data?.nextCursor },
+    },
+  }
+}
+
+export async function listAgentsV0(opts?: LegacyListOpts): Promise<{
+  data: { agents: AgentResponse[]; metadata: LegacyListMetadata }
+}> {
+  const { data } = await listAgentsRaw({
+    throwOnError: true,
+    query: withAllNamespaces(opts?.query),
+  })
+  return {
+    data: {
+      agents: (data?.items ?? []).map(toAgentResponse),
+      metadata: { nextCursor: data?.nextCursor },
+    },
+  }
+}
+
+export async function listPromptsV0(opts?: LegacyListOpts): Promise<{
+  data: { prompts: PromptResponse[]; metadata: LegacyListMetadata }
+}> {
+  const { data } = await listPromptsRaw({
+    throwOnError: true,
+    query: withAllNamespaces(opts?.query),
+  })
+  return {
+    data: {
+      prompts: (data?.items ?? []).map(toPromptResponse),
+      metadata: { nextCursor: data?.nextCursor },
+    },
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Create-function shims. Legacy callers pass a flat `{name: "ns/name", tag,
+// description, ...spec}` JSON. Wrap the spec in a K8s envelope, and apply the
+// document through the shared declarative endpoint.
+// ----------------------------------------------------------------------------
+
+export interface ServerJson extends McpServerSpec {
+  $schema?: string
+  name: string
+  tag: string
+}
+
+export interface SkillJson extends SkillSpec {
+  name: string
+  tag: string
+}
+
+export interface PromptJson extends PromptSpec {
+  name: string
+  tag: string
+}
+
+export interface AgentJson extends AgentSpec {
+  name: string
+  tag: string
+}
+
+interface LegacyCreateOpts<Body> {
+  throwOnError?: true
+  body: Body
+}
+
+function stripLegacy<T extends { name: string; tag: string }>(body: T): object {
+  const { name: _n, tag: _t, ...rest } = body as T & { $schema?: string }
+  delete (rest as { $schema?: string }).$schema
+  return rest
+}
+
+// applySingleDoc wraps a single typed envelope as a JSON body and POSTs
+// it to /v0/apply. Phase 1.5 removed the per-kind PUT routes for
+// content-registry kinds (Agent, MCPServer, RemoteMCPServer, Skill,
+// Prompt) — `applyBatch` is now the only write path. The handler decodes
+// the body via sigs.k8s.io/yaml, which natively accepts JSON, so we can
+// avoid pulling in a YAML serializer for what is always a single
+// document. Throws if the per-doc result reports failure so callers see
+// the same error surface as the old per-kind PUTs.
+async function applySingleDoc<T>(envelope: T & { kind?: string; metadata: { name: string } }): Promise<void> {
+  const json = JSON.stringify(envelope)
+  const body = new Blob([json], { type: "application/yaml" })
+  const { data } = await applyBatchRaw({ throwOnError: true, body })
+  const result = data?.results?.[0]
+  if (!result || result.status === "failed") {
+    const detail = result?.error ?? "no result returned"
+    throw new Error(`apply ${envelope.kind ?? "resource"} ${envelope.metadata.name} failed: ${detail}`)
+  }
+}
+
+export async function createServerV0(opts: LegacyCreateOpts<ServerJson>): Promise<{
+  data: ServerResponse
+}> {
+  // MCPServer.metadata.name is DNS-1123 subdomain; do not split on "/".
+  // The name does NOT represent a "NAMESPACE/NAME" format.
+  const spec = stripLegacy(opts.body) as McpServerSpec
+  const envelope: McpServer = {
+    apiVersion: "ar.dev/v1alpha1",
+    kind: "MCPServer",
+    metadata: { namespace: "default", name: opts.body.name, tag: opts.body.tag },
+    spec,
+  }
+  await applySingleDoc(envelope)
+  return { data: toServerResponse(envelope) }
+}
+
+export async function createSkillV0(opts: LegacyCreateOpts<SkillJson>): Promise<{
+  data: SkillResponse
+}> {
+  // Skill.metadata.name is DNS-1123 subdomain; no slash to split.
+  const spec = stripLegacy(opts.body) as SkillSpec
+  const envelope: Skill = {
+    apiVersion: "ar.dev/v1alpha1",
+    kind: "Skill",
+    metadata: { namespace: "default", name: opts.body.name, tag: opts.body.tag },
+    spec,
+  }
+  await applySingleDoc(envelope)
+  return { data: toSkillResponse(envelope) }
+}
+
+export async function createPromptV0(opts: LegacyCreateOpts<PromptJson>): Promise<{
+  data: PromptResponse
+}> {
+  // Prompt.metadata.name is DNS-1123 subdomain; no slash to split.
+  const spec = stripLegacy(opts.body) as PromptSpec
+  const envelope: Prompt = {
+    apiVersion: "ar.dev/v1alpha1",
+    kind: "Prompt",
+    metadata: { namespace: "default", name: opts.body.name, tag: opts.body.tag },
+    spec,
+  }
+  await applySingleDoc(envelope)
+  return { data: toPromptResponse(envelope) }
+}
+
+// ----------------------------------------------------------------------------
+// deployServer: legacy imperative deploy endpoint replaced by declarative
+// Deployment upsert. Legacy body fields: {serverName, tag, env,
+// runtimeId, resourceType}. Translate to a Deployment envelope.
+// ----------------------------------------------------------------------------
+
+export interface DeployServerBody {
+  serverName: string
+  tag: string
+  env?: Record<string, string>
+  runtimeId: string
+  resourceType?: "agent" | "mcp" | string
+}
+
+function resourceTypeToKind(rt?: string): string {
+  switch (rt) {
+    case "agent":
+      return "Agent"
+    case "mcp":
+    case undefined:
+    case "":
+      return "MCPServer"
+    default:
+      return rt.charAt(0).toUpperCase() + rt.slice(1)
+  }
+}
+
+export async function deployServer(opts: { throwOnError?: true; body: DeployServerBody }): Promise<{
+  data: Deployment
+}> {
+  // serverName is a DNS-1123 subdomain; no slash to split.
+  const namespace = "default"
+  const name = opts.body.serverName
+  const kind = resourceTypeToKind(opts.body.resourceType)
+  // Deployment name is derived from the (kind, target name) pair so that
+  // multiple deployments of different resource types can coexist in a
+  // namespace. Keep this stable so the legacy UI can find/update it.
+  const deploymentName = `${name}-${kind.toLowerCase()}`
+  const { data } = await applyDeploymentRaw({
+    throwOnError: true,
+    path: { name: deploymentName }, query: namespace !== "default" ? { namespace } : undefined,
+    body: {
+      apiVersion: "ar.dev/v1alpha1",
+      kind: "Deployment",
+      metadata: { namespace, name: deploymentName },
+      spec: {
+        targetRef: { kind, name, namespace, tag: opts.body.tag },
+        runtimeRef: { kind: "Runtime", name: opts.body.runtimeId, namespace },
+        env: opts.body.env,
+      },
+    },
+  })
+  return { data: data as Deployment }
+}

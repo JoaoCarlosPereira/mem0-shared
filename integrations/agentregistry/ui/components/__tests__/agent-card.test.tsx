@@ -1,0 +1,57 @@
+import { render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { describe, it, expect, vi } from "vitest"
+import { AgentCard } from "../agent-card"
+import type { AgentResponse } from "@/lib/admin-api"
+
+const mockAgent: AgentResponse = {
+  agent: {
+    name: "test-agent",
+    description: "A test agent for unit testing",
+    tag: "1.0.0",
+    source: {
+      image: "registry.example.com/test-agent:latest",
+    },
+  },
+  _meta: {
+    "io.modelcontextprotocol.registry/official": {
+      publishedAt: "2025-01-15T00:00:00Z",
+      updatedAt: "2025-01-15T00:00:00Z",
+      status: "active",
+      isLatest: true,
+    },
+  },
+}
+
+describe("AgentCard", () => {
+  it("renders agent name and description", () => {
+    render(<AgentCard agent={mockAgent} />)
+    expect(screen.getByText("test-agent")).toBeInTheDocument()
+    expect(screen.getByText("A test agent for unit testing")).toBeInTheDocument()
+  })
+
+  it("renders tag", () => {
+    render(<AgentCard agent={mockAgent} />)
+    expect(screen.getByText("1.0.0")).toBeInTheDocument()
+  })
+
+  it("calls onClick when card is clicked", async () => {
+    const onClick = vi.fn()
+    render(<AgentCard agent={mockAgent} onClick={onClick} />)
+    await userEvent.click(screen.getByText("test-agent"))
+    expect(onClick).toHaveBeenCalledOnce()
+  })
+
+  it("renders without optional fields", () => {
+    const minimalAgent: AgentResponse = {
+      agent: {
+        name: "minimal-agent",
+        description: "",
+        tag: "0.1.0",
+      },
+      _meta: {},
+    }
+    render(<AgentCard agent={minimalAgent} />)
+    expect(screen.getByText("minimal-agent")).toBeInTheDocument()
+  })
+})

@@ -1,0 +1,842 @@
+// Package resource provides a single generic HTTP handler wiring for every
+// v1alpha1 kind. One call to Register() binds the per-kind endpoints,
+// backed by a generic v1alpha1store.Store and a typed envelope T.
+//
+// Route shape (flat; namespace is a query param, defaults to "default";
+// `?namespace=all` widens list scope to every namespace):
+//
+//	GET    {basePrefix}/{pluralKind}?namespace={ns}                   list
+//	GET    {basePrefix}/{pluralKind}/{name}?namespace={ns}            get latest
+//	GET    {basePrefix}/{pluralKind}/{name}/tags?namespace={ns}      list tags of one (tagged content kinds only)
+//	GET    {basePrefix}/{pluralKind}/{name}/{tag}?namespace={ns}     get exact tag (tagged content kinds only)
+//	PUT    {basePrefix}/{pluralKind}/{name}?namespace={ns}           apply mutable object (Provider/Deployment/config)
+//	DELETE {basePrefix}/{pluralKind}/{name}?namespace={ns}           delete mutable object
+//	DELETE {basePrefix}/{pluralKind}/{name}/{tag}?namespace={ns}     delete exact tag (tagged content kinds only)
+//
+// Direct PUT is registered only for mutable object stores. Content-registry
+// artifact kinds (Agent, MCPServer, Model, Plugin, Skill, Prompt) use
+// metadata.tag and are
+// written through POST /v0/apply.
+package resource
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/agentregistry-dev/agentregistry/pkg/api/v1alpha1"
+	pkgdb "github.com/agentregistry-dev/agentregistry/pkg/registry/database"
+	"github.com/agentregistry-dev/agentregistry/pkg/registry/v1alpha1store"
+	"github.com/agentregistry-dev/agentregistry/pkg/types"
+)
+
+// unescapePath URL-decodes a path segment captured by Huma. Resource
+// names allow `/` (DNS-subdomain-style like `ai.exa/exa`) so callers
+// pass them as `%2F`-escaped path segments. Huma keeps the raw path
+// captures, so the handler must unescape before consulting the Store —
+// otherwise rows stored as `ai.exa/exa` are unreachable via GET/DELETE.
+// Returns a 400 on decode failure (malformed escape sequence).
+func unescapePath(field, value string) (string, error) {
+	out, err := url.PathUnescape(value)
+	if err != nil {
+		return "", huma.Error400BadRequest(fmt.Sprintf("invalid %s path segment: %v", field, err))
+	}
+	return out, nil
+}
+
+// Config is the per-kind configuration for Register. Kind / BasePrefix /
+// Store are required; Resolver is optional (enables cross-kind ref
+// existence checks on apply).
+type Config struct {
+	// Kind is the canonical Kind name (e.g. v1alpha1.KindAgent = "Agent").
+	Kind string
+	// PluralKind is the lowercase plural used in route paths (e.g. "agents",
+	// "mcpservers"). If empty, defaults to strings.ToLower(Kind) + "s".
+	PluralKind string
+	// BasePrefix is the HTTP route prefix shared across kinds (e.g. "/v0").
+	// Routes extend it with `/{plural}/{name}` and, for tagged artifacts,
+	// `/{plural}/{name}/{tag}`; namespace is
+	// carried as a query param (`?namespace={ns}`, default "default").
+	BasePrefix string
+	// Store is the v1alpha1store.Store bound to this kind's table. Callers
+	// construct one Store per kind; this package does not create them.
+	Store *v1alpha1store.Store
+	// Resolver is optional; when set, the apply handler calls
+	// obj.ResolveRefs with it so dangling references surface as 400
+	// errors. Leave nil to skip ref resolution (e.g. for kinds with no
+	// ResourceRef fields).
+	Resolver v1alpha1.ResolverFunc
+	// RegistryValidator is optional; when set, the apply handler
+	// calls obj.ValidateRegistries with it so external-registry
+	// failures (package missing, OCI label mismatch, etc.) surface
+	// as 400 errors. Leave nil to skip registry validation (tests,
+	// offline imports, air-gapped servers).
+	RegistryValidator v1alpha1.RegistryValidatorFunc
+
+	// PostUpsert is optional; when set, the apply handler invokes it
+	// after a successful Upsert + read-back so the kind can drive
+	// post-persist reconciliation. Built-in Deployment adapter side effects
+	// are not wired through this hook; they are owned by the Deployment
+	// controller's asynchronous reconcile loop.
+	//
+	// Hook errors surface as 500 — the row is already persisted, so a
+	// failure here indicates degraded state the caller should retry.
+	//
+	// Known limitation: Store.Upsert commits its own transaction before the
+	// hook fires, so a hook failure leaves the row persisted with stale Status
+	// (whatever the previous reconcile wrote). The caller sees a 500, but a
+	// follow-up GetLatest still returns the row.
+	//
+	// The hook re-fires on every PUT — including identical-spec
+	// re-applies that are a no-op at the Store layer — because the
+	// handler unconditionally invokes PostUpsert after Upsert
+	// returns, without consulting the upsert change-status. This is
+	// the operator-friendly retry path: a transient runtime-adapter
+	// failure clears as soon as the operator re-applies (or a periodic
+	// CI re-apply succeeds), without forcing a spec bump.
+	//
+	// The generic hook failure contract is pinned by
+	// TestResourceRegister_PostUpsertFailureLeavesPersistedRow.
+	PostUpsert func(ctx context.Context, obj v1alpha1.Object) error
+
+	// PostDelete is optional; when set, the delete handler invokes it
+	// after Store.Delete (which sets DeletionTimestamp). The row still
+	// exists at this point — the soft-delete + GC pass owns hard
+	// removal. Built-in Deployment teardown is controller-owned and does not
+	// use this hook.
+	PostDelete func(ctx context.Context, obj v1alpha1.Object) error
+
+	// Prepare is optional; when set, the apply handler invokes it after
+	// validation (refs/registries) and before admission/Store.Upsert, so
+	// the kind can mutate the decoded object before it is persisted (e.g.
+	// strip sensitive spec fields). Runs on both the dedicated PUT
+	// route and the batch /v0/apply path. Hook errors short-circuit the
+	// write and surface to the caller.
+	Prepare func(ctx context.Context, obj v1alpha1.Object) error
+
+	// DeleteAdmission optionally owns the final delete after authz. Nil uses
+	// ProductionDeleteAdmission, which deletes from the configured Store and
+	// runs PostDelete.
+	DeleteAdmission types.DeleteAdmission
+
+	// InitialFinalizers, when non-nil, seeds finalizers atomically on create.
+	// Updates preserve existing finalizers.
+	InitialFinalizers func(obj v1alpha1.Object) []string
+
+	// Authorize is optional; when set, every read and write handler
+	// (get / list / apply / delete) invokes it as an access gate before
+	// touching the store. Return nil to allow; return a huma error
+	// (Error401Unauthorized / Error403Forbidden / etc.) to reject — the
+	// value propagates back to the client as-is so the hook controls the
+	// status code. Wrap a non-huma error in huma.Error500InternalServerError
+	// if you want the server to 500.
+	//
+	// nil hook matches the OSS default: public reads and writes, with
+	// authorization deferred to router-level middleware or the underlying
+	// auth.AuthzProvider. Downstream builds that need per-kind gates
+	// (e.g. "only registry admins can mutate Role") wire this callback.
+	//
+	// The hook is called after path parsing and — for apply — after the
+	// body decodes, but before any validation or store I/O. For list +
+	// cross-namespace list, Name and Tag are empty; for get-latest,
+	// Tag is empty; Object is non-nil only for apply.
+	Authorize func(ctx context.Context, in AuthorizeInput) error
+
+	// ListFilter is optional; when set, list handlers consult it before
+	// querying the store and inject the returned predicate into
+	// ListOpts.ExtraWhere / ExtraArgs. This is the per-row authz seam —
+	// downstream integrations wire it to a per-user RBAC predicate so a
+	// reader without grant for a given resource never sees the row in
+	// the list response, but reads at the row endpoint still 403 via
+	// Authorize.
+	//
+	// Returning a nil error + empty fragment means "no extra filter,
+	// behave like the public default". A non-nil error short-circuits
+	// the list and propagates to the caller (use a huma error to set
+	// the response code; non-huma errors bubble as 500).
+	//
+	// Mirrors the contract on v1alpha1store.ListOpts.ExtraWhere — read
+	// the placeholder + parameterization rules there before wiring a
+	// new caller.
+	ListFilter func(ctx context.Context, in AuthorizeInput) (extraWhere string, extraArgs []any, err error)
+
+	// EnableOriginFilter exposes ?origin=managed|discovered on list routes
+	// for kinds that distinguish registry-managed rows from provider-discovered
+	// rows materialized into the same Store. Leave false for regular resource
+	// lists.
+	EnableOriginFilter bool
+
+	// IncludeTerminatingByDefault, when true, makes the list handler
+	// surface rows with deletion_timestamp set even if the caller
+	// hasn't passed ?includeTerminating=true. Used by kinds whose
+	// teardown is operator-observable so `arctl get` can
+	// show resources while finalizers are still draining.
+	//
+	// The ?includeTerminating query value is OR-ed with this flag, so
+	// the caller can still force inclusion but never exclusion when
+	// the kind has opted in.
+	IncludeTerminatingByDefault bool
+}
+
+// AuthorizeInput is the context passed to Config.Authorize on every handler
+// invocation. Fields are populated per the verb being authorized (see
+// Config.Authorize comment for the combinations). New fields may be added
+// in future releases — callers should use named-field initialization and
+// tolerate unknown verbs by defaulting to deny.
+type AuthorizeInput struct {
+	// Verb is "get" | "list" | "apply" | "delete".
+	Verb string
+	// Kind is the canonical Kind the handler is serving (e.g. "Role").
+	Kind string
+	// Namespace is the URL-scoped namespace; empty for the cross-namespace
+	// list endpoint.
+	Namespace string
+	// Name is empty for list verbs.
+	Name string
+	// Tag is populated for exact tagged content resource operations.
+	// Batch delete leaves Tag empty when deleting every tag for a name.
+	Tag string
+	// Object is non-nil only when Verb == "apply"; it carries the decoded
+	// request body post-validation-stamping (path identity already merged
+	// into metadata), so the hook can inspect labels / annotations / spec
+	// in authz decisions.
+	Object v1alpha1.Object
+}
+
+// Input/output wire types. Registered per-kind so OpenAPI schemas stay typed.
+//
+// Namespace is a `query:"namespace"` param (hidden from the user-facing
+// API while the surface stays minimal; empty → "default", "all" → list
+// across every namespace). Defaulting happens in resolveNamespace below
+// so every endpoint sees the same semantics.
+
+// namespaceAll is the query-param sentinel that asks the list endpoint
+// to ignore the namespace scope and return rows from every namespace.
+// Exported via listParams.Namespace == "" (empty string) to the Store.
+const namespaceAll = "all"
+
+// resolveNamespace applies the default-and-sentinel policy for
+// ?namespace= query values: empty → DefaultNamespace, "all" → "" (the
+// Store interprets empty as cross-namespace for list operations).
+// Non-list callers (get/put/delete) still pass "" through as "default"
+// — they never accept "all".
+func resolveNamespace(raw string, allowAll bool) string {
+	if allowAll && raw == namespaceAll {
+		return ""
+	}
+	if raw == "" {
+		return v1alpha1.DefaultNamespace
+	}
+	return raw
+}
+
+type getInput struct {
+	Namespace string `query:"namespace" doc:"Namespace (internal; defaults to 'default')."`
+	Name      string `path:"name"`
+	Tag       string `path:"tag"`
+}
+
+type getLatestInput struct {
+	Namespace string `query:"namespace" doc:"Namespace (internal; defaults to 'default')."`
+	Name      string `path:"name"`
+}
+
+type listTagsInput struct {
+	Namespace string `query:"namespace" doc:"Namespace (internal; defaults to 'default')."`
+	Name      string `path:"name"`
+}
+
+type deleteInput struct {
+	Namespace string `query:"namespace" doc:"Namespace (internal; defaults to 'default')."`
+	Name      string `path:"name"`
+	Tag       string `path:"tag"`
+}
+
+type deleteMutableInput struct {
+	Namespace string `query:"namespace" doc:"Namespace (internal; defaults to 'default')."`
+	Name      string `path:"name"`
+}
+
+// ListInput defines the common list query parameters used by Huma route inputs.
+// It is exported so Huma can reflect it when embedded by route-specific inputs.
+type ListInput struct {
+	// Namespace scopes the list. Empty / missing → "default";
+	// literal "all" → cross-namespace.
+	Namespace  string `query:"namespace" doc:"Namespace (defaults to 'default'; 'all' lists across all namespaces)."`
+	Limit      int    `query:"limit" doc:"Max items to return (default 50)." default:"50"`
+	Cursor     string `query:"cursor" doc:"Opaque pagination cursor."`
+	Labels     string `query:"labels" doc:"Label selector: key=value,key2=value2."`
+	Tag        string `query:"tag" doc:"Restrict the result set to one tag value (tagged artifact kinds only)."`
+	LatestOnly bool   `query:"latestOnly" doc:"Only return the literal latest tag per (namespace, name). Equivalent to tag=latest for tagged kinds."`
+	// IncludeTerminating surfaces soft-deleted rows (deletionTimestamp != nil)
+	// which are hidden by default.
+	IncludeTerminating bool `query:"includeTerminating" doc:"Include rows with a deletionTimestamp."`
+}
+
+type listInput = ListInput
+
+type listWithOriginInput struct {
+	ListInput
+
+	// Origin filters Deployment-like resources by their source. Empty includes
+	// both managed and persisted discovered rows where the route supports them.
+	Origin string `query:"origin" doc:"Deployment origin filter: managed or discovered."`
+}
+
+type bodyOutput[T v1alpha1.Object] struct {
+	Body T
+}
+
+type listOutput[T v1alpha1.Object] struct {
+	Body struct {
+		Items      []T    `json:"items"`
+		NextCursor string `json:"nextCursor,omitempty"`
+	}
+}
+
+type putMutableInput[T v1alpha1.Object] struct {
+	Namespace string `query:"namespace" doc:"Namespace (internal; defaults to 'default')."`
+	Name      string `path:"name"`
+	Body      T
+}
+
+type deleteOutput struct{}
+
+// Register wires the namespace-scoped + cross-namespace list endpoints for
+// kind T. newObj must return a fresh, zero-valued T on each call (e.g.
+// `func() *v1alpha1.Agent { return &v1alpha1.Agent{} }`).
+func Register[T v1alpha1.Object](api huma.API, cfg Config, newObj func() T) {
+	kind := cfg.Kind
+	plural := cfg.PluralKind
+	if plural == "" {
+		plural = strings.ToLower(kind) + "s"
+	}
+	base := strings.TrimRight(cfg.BasePrefix, "/")
+
+	// Flat URL shape: namespace is an internal detail carried as a query
+	// param, not a path segment. Defaults to "default"; a special value
+	// "all" on the list endpoint widens the scope to every namespace.
+	listPath := base + "/" + plural
+	itemPath := listPath + "/{name}"
+	itemTagPath := itemPath + "/{tag}"
+
+	// List: `/v0/{plural}?namespace=default` (or ?namespace=all).
+	listOperation := huma.Operation{
+		OperationID: "list-" + plural,
+		Method:      http.MethodGet,
+		Path:        listPath,
+		Summary:     fmt.Sprintf("List %s (scoped by ?namespace)", kind),
+	}
+	if cfg.EnableOriginFilter {
+		huma.Register(api, listOperation, func(ctx context.Context, in *listWithOriginInput) (*listOutput[T], error) {
+			return handleList(ctx, cfg, newObj, in.ListInput, in.Origin)
+		})
+	} else {
+		huma.Register(api, listOperation, func(ctx context.Context, in *listInput) (*listOutput[T], error) {
+			return handleList(ctx, cfg, newObj, *in, "")
+		})
+	}
+
+	// Get latest (name only; namespace via query).
+	huma.Register(api, huma.Operation{
+		OperationID: "get-latest-" + strings.ToLower(kind),
+		Method:      http.MethodGet,
+		Path:        itemPath,
+		Summary:     fmt.Sprintf("Get the latest %s", kind),
+	}, func(ctx context.Context, in *getLatestInput) (*bodyOutput[T], error) {
+		ns := resolveNamespace(in.Namespace, false)
+		name, err := unescapePath("name", in.Name)
+		if err != nil {
+			return nil, err
+		}
+		if cfg.Authorize != nil {
+			if err := cfg.Authorize(ctx, AuthorizeInput{Verb: "get", Kind: kind, Namespace: ns, Name: name}); err != nil {
+				return nil, err
+			}
+		}
+		// Mirror LIST's view of terminating rows: kinds that opt in via
+		// IncludeTerminatingByDefault surface in-flight teardown to operators,
+		// so the single-row GET must also return the row (with
+		// deletionTimestamp populated) instead of 404'ing while LIST still
+		// lists it.
+		row, err := getLatestForRead(ctx, cfg, ns, name)
+		if err != nil {
+			return nil, mapNotFound(err, kind, ns, name, "")
+		}
+		obj, err := v1alpha1.EnvelopeFromRaw(newObj, row, kind)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("decode "+kind, err)
+		}
+		return &bodyOutput[T]{Body: obj}, nil
+	})
+
+	// List tags (name only; namespace via query). Tagged-artifact
+	// kinds only — mutable object stores have no concept of
+	// "every tag of a logical resource". Registered before the
+	// get-exact route below so the literal "tags" path segment
+	// wins over the `{tag}` capture in the underlying flow router
+	// (routes match in registration order).
+	if v1alpha1.IsTaggedArtifactKind(kind) {
+		registerListTags(api, cfg, newObj, kind, itemPath)
+	}
+
+	if v1alpha1.IsTaggedArtifactKind(kind) {
+		registerGetTagged(api, cfg, newObj, kind, itemTagPath)
+		registerDeleteTagged(api, cfg, newObj, kind, itemTagPath)
+	} else {
+		registerApplyMutable(api, cfg, newObj, kind, itemPath)
+		registerDeleteMutable(api, cfg, newObj, kind, itemPath)
+	}
+}
+
+func registerGetTagged[T v1alpha1.Object](api huma.API, cfg Config, newObj func() T, kind, itemTagPath string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "get-" + strings.ToLower(kind),
+		Method:      http.MethodGet,
+		Path:        itemTagPath,
+		Summary:     fmt.Sprintf("Get a %s by name and tag", kind),
+	}, func(ctx context.Context, in *getInput) (*bodyOutput[T], error) {
+		ns := resolveNamespace(in.Namespace, false)
+		name, err := unescapePath("name", in.Name)
+		if err != nil {
+			return nil, err
+		}
+		tag, err := unescapePath("tag", in.Tag)
+		if err != nil {
+			return nil, err
+		}
+		if cfg.Authorize != nil {
+			if err := cfg.Authorize(ctx, AuthorizeInput{Verb: "get", Kind: kind, Namespace: ns, Name: name, Tag: tag}); err != nil {
+				return nil, err
+			}
+		}
+		row, err := cfg.Store.Get(ctx, ns, name, tag)
+		if err != nil {
+			return nil, mapNotFound(err, kind, ns, name, tag)
+		}
+		obj, err := v1alpha1.EnvelopeFromRaw(newObj, row, kind)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("decode "+kind, err)
+		}
+		return &bodyOutput[T]{Body: obj}, nil
+	})
+}
+
+// registerListTags wires the GET /{name}/tags endpoint for a
+// tagged-artifact kind. Extracted from Register to keep the per-kind
+// route registration sequence readable.
+func registerListTags[T v1alpha1.Object](api huma.API, cfg Config, newObj func() T, kind, itemPath string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "list-tags-" + strings.ToLower(kind),
+		Method:      http.MethodGet,
+		Path:        itemPath + "/tags",
+		Summary:     fmt.Sprintf("List all tags of a %s", kind),
+	}, func(ctx context.Context, in *listTagsInput) (*listOutput[T], error) {
+		ns := resolveNamespace(in.Namespace, false)
+		name, err := unescapePath("name", in.Name)
+		if err != nil {
+			return nil, err
+		}
+		if cfg.Authorize != nil {
+			if err := cfg.Authorize(ctx, AuthorizeInput{Verb: "list", Kind: kind, Namespace: ns, Name: name}); err != nil {
+				return nil, err
+			}
+		}
+		rows, err := cfg.Store.ListTags(ctx, ns, name)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("list tags "+kind, err)
+		}
+		items := make([]T, 0, len(rows))
+		for _, row := range rows {
+			obj, err := v1alpha1.EnvelopeFromRaw(newObj, row, kind)
+			if err != nil {
+				return nil, huma.Error500InternalServerError("decode "+kind, err)
+			}
+			items = append(items, obj)
+		}
+		out := &listOutput[T]{}
+		out.Body.Items = items
+		return out, nil
+	})
+}
+
+// registerApplyMutable wires name-only PUT for mutable object stores.
+func registerApplyMutable[T v1alpha1.Object](api huma.API, cfg Config, newObj func() T, kind, itemPath string) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "apply-" + strings.ToLower(kind),
+		Method:        http.MethodPut,
+		Path:          itemPath,
+		Summary:       fmt.Sprintf("Apply a %s (idempotent upsert)", kind),
+		DefaultStatus: http.StatusOK,
+	}, func(ctx context.Context, in *putMutableInput[T]) (*bodyOutput[T], error) {
+		ns := resolveNamespace(in.Namespace, false)
+		name, err := unescapePath("name", in.Name)
+		if err != nil {
+			return nil, err
+		}
+		body := in.Body
+		if apiVer := body.GetAPIVersion(); apiVer != "" && apiVer != v1alpha1.GroupVersion {
+			return nil, huma.Error400BadRequest(fmt.Sprintf(
+				"apiVersion %q is not supported; expected %q", apiVer, v1alpha1.GroupVersion))
+		}
+		if k := body.GetKind(); k != "" && k != kind {
+			return nil, huma.Error400BadRequest(fmt.Sprintf(
+				"kind %q does not match endpoint kind %q", k, kind))
+		}
+		meta := body.GetMetadata()
+		if meta.Namespace != "" && meta.Namespace != ns {
+			return nil, huma.Error400BadRequest("metadata.namespace does not match ?namespace=")
+		}
+		if meta.Name != "" && meta.Name != name {
+			return nil, huma.Error400BadRequest("metadata.name does not match path")
+		}
+
+		// Stamp resolved public identity into metadata so applyCore sees the
+		// resolved namespace/name. The store owns any private mutable-object
+		// backing-row identity.
+		meta.Namespace = ns
+		meta.Name = name
+		body.SetMetadata(*meta)
+
+		if _, ae := applyCore(ctx, cfg.Store, body, applyOpts{
+			Authorize:         cfg.Authorize,
+			Resolver:          cfg.Resolver,
+			RegistryValidator: cfg.RegistryValidator,
+			PostUpsert:        cfg.PostUpsert,
+			InitialFinalizers: cfg.InitialFinalizers,
+			Prepare:           cfg.Prepare,
+		}, false); ae != nil {
+			return nil, mapApplyErrorToHuma(ae, kind, ns, name, "")
+		}
+
+		// Read back so the response reflects the stored identity
+		// (assigned generation, default'd metadata) plus any status /
+		// annotation writes the PostUpsert hook performed.
+		row, err := cfg.Store.GetLatest(ctx, ns, name)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("read back "+kind, err)
+		}
+		obj, err := v1alpha1.EnvelopeFromRaw(newObj, row, kind)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("decode "+kind, err)
+		}
+		return &bodyOutput[T]{Body: obj}, nil
+	})
+}
+
+func registerDeleteTagged[T v1alpha1.Object](api huma.API, cfg Config, newObj func() T, kind, itemTagPath string) {
+	registerDelete(api, cfg, newObj, kind, itemTagPath, true)
+}
+
+func registerDeleteMutable[T v1alpha1.Object](api huma.API, cfg Config, newObj func() T, kind, itemPath string) {
+	registerDelete(api, cfg, newObj, kind, itemPath, false)
+}
+
+func registerDelete[T v1alpha1.Object](api huma.API, cfg Config, newObj func() T, kind, path string, tagged bool) {
+	op := huma.Operation{
+		OperationID:   "delete-" + strings.ToLower(kind),
+		Method:        http.MethodDelete,
+		Path:          path,
+		Summary:       fmt.Sprintf("Delete a %s (soft-delete: sets deletionTimestamp)", kind),
+		DefaultStatus: http.StatusNoContent,
+	}
+	if tagged {
+		huma.Register(api, op, func(ctx context.Context, in *deleteInput) (*deleteOutput, error) {
+			ns := resolveNamespace(in.Namespace, false)
+			name, err := unescapePath("name", in.Name)
+			if err != nil {
+				return nil, err
+			}
+			tag, err := unescapePath("tag", in.Tag)
+			if err != nil {
+				return nil, err
+			}
+			return runDelete(ctx, cfg, newObj, kind, ns, name, tag)
+		})
+		return
+	}
+	huma.Register(api, op, func(ctx context.Context, in *deleteMutableInput) (*deleteOutput, error) {
+		ns := resolveNamespace(in.Namespace, false)
+		name, err := unescapePath("name", in.Name)
+		if err != nil {
+			return nil, err
+		}
+		return runDeleteLatest(ctx, cfg, newObj, kind, ns, name)
+	})
+}
+
+func runDeleteLatest[T v1alpha1.Object](ctx context.Context, cfg Config, newObj func() T, kind, ns, name string) (*deleteOutput, error) {
+	// Use the terminating-aware lookup so a repeated DELETE on a row that's
+	// already mid-teardown stays idempotent. Without this the second call
+	// 404s the moment deletion_timestamp lands (GetLatest filters those
+	// out), which contradicts LIST for kinds that opt into
+	// IncludeTerminatingByDefault, and breaks scripts that retry DELETE
+	// expecting the same response shape. Store.Delete is already a no-op
+	// on terminating rows (see v1alpha1store.deleteMutable), and the
+	// PostDelete re-fire mirrors PostUpsert's operator-friendly retry path
+	// for transient runtime-adapter failures.
+	row, err := cfg.Store.GetLatestIncludingTerminating(ctx, ns, name)
+	if err != nil {
+		return nil, mapNotFound(err, kind, ns, name, "")
+	}
+	obj, err := v1alpha1.EnvelopeFromRaw(newObj, row, kind)
+	if err != nil {
+		return nil, huma.Error500InternalServerError("decode "+kind, err)
+	}
+	dopts := deleteOpts{Authorize: cfg.Authorize}
+	if cfg.PostDelete != nil {
+		dopts.PostDelete = cfg.PostDelete
+	}
+	if cfg.DeleteAdmission != nil || dopts.PostDelete != nil {
+		dopts.PreDeleteObject = obj
+	}
+	dopts.DeleteAdmission = cfg.DeleteAdmission
+	if _, ae := deleteCore(ctx, cfg.Store, kind, ns, name, "", dopts, false); ae != nil {
+		return nil, mapApplyErrorToHuma(ae, kind, ns, name, "")
+	}
+	return &deleteOutput{}, nil
+}
+
+// getLatestForRead reads the current row for the kind's GET-latest endpoint,
+// choosing between the terminating-excluded and terminating-included lookups
+// based on Config.IncludeTerminatingByDefault. Keeps GET coherent with LIST
+// for kinds whose teardown is operator-observable.
+func getLatestForRead(ctx context.Context, cfg Config, ns, name string) (*v1alpha1.RawObject, error) {
+	if cfg.IncludeTerminatingByDefault {
+		return cfg.Store.GetLatestIncludingTerminating(ctx, ns, name)
+	}
+	return cfg.Store.GetLatest(ctx, ns, name)
+}
+
+func runDelete[T v1alpha1.Object](ctx context.Context, cfg Config, newObj func() T, kind, ns, name, tag string) (*deleteOutput, error) {
+	var preDelete v1alpha1.Object
+	if cfg.PostDelete != nil {
+		row, err := cfg.Store.Get(ctx, ns, name, tag)
+		if err != nil {
+			return nil, mapNotFound(err, kind, ns, name, tag)
+		}
+		obj, err := v1alpha1.EnvelopeFromRaw(newObj, row, kind)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("decode "+kind, err)
+		}
+		preDelete = obj
+	}
+
+	dopts := deleteOpts{
+		Authorize:       cfg.Authorize,
+		PreDeleteObject: preDelete,
+	}
+	if cfg.PostDelete != nil {
+		dopts.PostDelete = cfg.PostDelete
+	}
+	dopts.DeleteAdmission = cfg.DeleteAdmission
+	if _, ae := deleteCore(ctx, cfg.Store, kind, ns, name, tag, dopts, false); ae != nil {
+		return nil, mapApplyErrorToHuma(ae, kind, ns, name, tag)
+	}
+	return &deleteOutput{}, nil
+}
+
+// mapApplyErrorToHuma translates the stage-tagged applyError surface
+// from applyCore / deleteCore into the huma error shape the
+// single-resource handlers emit. Mirrors the per-stage HTTP-status
+// policy that used to be inlined in each closure.
+func mapApplyErrorToHuma(ae *applyError, kind, ns, name, tag string) error {
+	switch ae.Stage {
+	case stageAuth:
+		// Auth callbacks already return huma errors; propagate.
+		return ae.Err
+	case stageValidation:
+		return huma.Error400BadRequest("validation: " + ae.Err.Error())
+	case stageRefs:
+		return huma.Error400BadRequest("refs: " + ae.Err.Error())
+	case stageRegistries:
+		return huma.Error400BadRequest("registries: " + ae.Err.Error())
+	case stageAdmission:
+		return ae.Err
+	case stageMarshal:
+		return huma.Error400BadRequest("marshal spec: " + ae.Err.Error())
+	case stageUpsert:
+		if ae.Terminating {
+			return huma.Error409Conflict(fmt.Sprintf(
+				"%s %s/%s/%s is terminating; delete + re-apply once GC purges the row",
+				kind, ns, name, tag))
+		}
+		return huma.Error500InternalServerError("upsert "+kind, ae.Err)
+	case stagePostUpsert:
+		return huma.Error500InternalServerError(kind+" post-upsert", ae.Err)
+	case stageDelete:
+		if ae.NotFound {
+			return mapNotFound(ae.Err, kind, ns, name, tag)
+		}
+		return huma.Error500InternalServerError("delete "+kind, ae.Err)
+	case stagePostDelete:
+		return huma.Error500InternalServerError(kind+" post-delete", ae.Err)
+	}
+	return huma.Error500InternalServerError(kind+" "+string(ae.Stage), ae.Err)
+}
+
+// listParams bundles the query parameters the list endpoints accept.
+// Shared across the cross-namespace and namespace-scoped list flows so
+// adding a new parameter (future filters) touches one place instead of
+// two call sites.
+type listParams struct {
+	Namespace          string
+	Labels             string
+	Limit              int
+	Cursor             string
+	Tag                string
+	LatestOnly         bool
+	IncludeTerminating bool
+	Origin             string
+}
+
+func handleList[T v1alpha1.Object](
+	ctx context.Context, cfg Config, newObj func() T, in listInput, origin string,
+) (*listOutput[T], error) {
+	ns := resolveNamespace(in.Namespace, true)
+	if cfg.Authorize != nil {
+		if err := cfg.Authorize(ctx, AuthorizeInput{Verb: "list", Kind: cfg.Kind, Namespace: ns}); err != nil {
+			return nil, err
+		}
+	}
+	return runList(ctx, cfg, newObj, listParams{
+		Namespace:          ns,
+		Labels:             in.Labels,
+		Limit:              in.Limit,
+		Cursor:             in.Cursor,
+		Tag:                in.Tag,
+		LatestOnly:         in.LatestOnly,
+		IncludeTerminating: in.IncludeTerminating,
+		Origin:             origin,
+	})
+}
+
+// runList is the shared list body used by both the cross-namespace and
+// namespace-scoped list endpoints. Namespace="" means "across all namespaces".
+func runList[T v1alpha1.Object](
+	ctx context.Context, cfg Config, newObj func() T, p listParams,
+) (*listOutput[T], error) {
+	switch p.Origin {
+	case "", "managed", "discovered":
+	default:
+		return nil, huma.Error400BadRequest("invalid origin filter: expected managed or discovered")
+	}
+
+	opts := v1alpha1store.ListOpts{
+		Namespace:          p.Namespace,
+		Limit:              p.Limit,
+		Cursor:             p.Cursor,
+		Tag:                p.Tag,
+		LatestOnly:         p.LatestOnly,
+		IncludeTerminating: p.IncludeTerminating || cfg.IncludeTerminatingByDefault,
+	}
+	if p.Labels != "" {
+		selector, err := parseLabelSelector(p.Labels)
+		if err != nil {
+			return nil, huma.Error400BadRequest("invalid labels selector: " + err.Error())
+		}
+		opts.LabelSelector = selector
+	}
+	if cfg.ListFilter != nil {
+		extra, extraArgs, err := cfg.ListFilter(ctx, AuthorizeInput{Verb: "list", Kind: cfg.Kind, Namespace: p.Namespace})
+		if err != nil {
+			return nil, err
+		}
+		opts.ExtraWhere = extra
+		opts.ExtraArgs = extraArgs
+	}
+	applyOriginFilter(&opts, p.Origin)
+	rows, nextCursor, err := cfg.Store.List(ctx, opts)
+	if err != nil {
+		if errors.Is(err, v1alpha1store.ErrInvalidCursor) {
+			return nil, huma.Error400BadRequest("invalid cursor")
+		}
+		return nil, huma.Error500InternalServerError("list "+cfg.Kind, err)
+	}
+	items := make([]T, 0, len(rows))
+	for _, row := range rows {
+		obj, err := v1alpha1.EnvelopeFromRaw(newObj, row, cfg.Kind)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("decode "+cfg.Kind, err)
+		}
+		items = append(items, obj)
+	}
+	out := &listOutput[T]{}
+	out.Body.Items = items
+	out.Body.NextCursor = nextCursor
+	return out, nil
+}
+
+func applyOriginFilter(opts *v1alpha1store.ListOpts, origin string) {
+	if opts == nil {
+		return
+	}
+	var predicate string
+	switch origin {
+	case v1alpha1.DeploymentOriginManaged:
+		predicate = "NOT (annotations @> $%d::jsonb)"
+	case v1alpha1.DeploymentOriginDiscovered:
+		predicate = "annotations @> $%d::jsonb"
+	default:
+		return
+	}
+	originSelector, err := json.Marshal(map[string]string{
+		v1alpha1.DeploymentOriginAnnotation: v1alpha1.DeploymentOriginDiscovered,
+	})
+	if err != nil {
+		return
+	}
+	appendExtraWhere(opts, predicate, originSelector)
+}
+
+func appendExtraWhere(opts *v1alpha1store.ListOpts, predicateFormat string, arg any) {
+	opts.ExtraArgs = append(opts.ExtraArgs, arg)
+	predicate := fmt.Sprintf(predicateFormat, len(opts.ExtraArgs))
+	if opts.ExtraWhere == "" {
+		opts.ExtraWhere = predicate
+		return
+	}
+	opts.ExtraWhere = "(" + opts.ExtraWhere + ") AND (" + predicate + ")"
+}
+
+// mapNotFound converts a pkgdb.ErrNotFound error into a Huma 404 with a
+// consistent message. Other errors fall through as 500.
+func mapNotFound(err error, kind, namespace, name, tag string) error {
+	if errors.Is(err, pkgdb.ErrNotFound) {
+		if tag == "" {
+			return huma.Error404NotFound(fmt.Sprintf("%s %q/%q not found", kind, namespace, name))
+		}
+		return huma.Error404NotFound(fmt.Sprintf("%s %q/%q@%q not found", kind, namespace, name, tag))
+	}
+	return huma.Error500InternalServerError("fetch "+kind, err)
+}
+
+// parseLabelSelector decodes "key=value,key2=value2" into a map. Values
+// may contain `=` (split is on the first `=` only); values with `,` are
+// not supported and would split mid-pair.
+func parseLabelSelector(s string) (map[string]string, error) {
+	out := make(map[string]string)
+	for pair := range strings.SplitSeq(s, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		eq := strings.IndexByte(pair, '=')
+		if eq <= 0 {
+			return nil, fmt.Errorf("label %q must be key=value", pair)
+		}
+		key := strings.TrimSpace(pair[:eq])
+		val := strings.TrimSpace(pair[eq+1:])
+		if key == "" {
+			return nil, fmt.Errorf("label %q has empty key", pair)
+		}
+		out[key] = val
+	}
+	return out, nil
+}

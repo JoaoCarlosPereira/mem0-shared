@@ -1,0 +1,211 @@
+"use client"
+
+import { useState } from "react"
+import { AgentResponse } from "@/lib/admin-api"
+import { Badge } from "@/components/ui/badge"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+  Calendar,
+  Bot,
+  Code,
+  Clock,
+  Github,
+  ExternalLink,
+  History,
+} from "lucide-react"
+
+interface AgentDetailProps {
+  agent: AgentResponse
+  allTags?: AgentResponse[]
+}
+
+export function AgentDetail({ agent, allTags: allTagsProp }: AgentDetailProps) {
+  const [activeTab, setActiveTab] = useState("overview")
+  const [selectedTag, setSelectedTag] = useState<AgentResponse>(agent)
+
+  const allTags = allTagsProp || [agent]
+
+  const { agent: agentData, _meta } = selectedTag
+  const official = _meta?.['io.modelcontextprotocol.registry/official']
+  const source = agentData.source
+
+  const handleTagChange = (tag: string) => {
+    const newTag = allTags.find(v => v.agent.tag === tag)
+    if (newTag) setSelectedTag(newTag)
+  }
+
+  const formatDate = (dateString: string) => {
+    try {
+      return new Date(dateString).toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    } catch {
+      return dateString
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+        {/* Header */}
+        <div className="flex items-start gap-4">
+          <div className="w-12 h-12 rounded bg-primary/8 flex items-center justify-center flex-shrink-0">
+            <Bot className="h-6 w-6 text-primary" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <h1 className="text-2xl font-bold truncate">{agentData.name}</h1>
+            </div>
+            {agentData.description && (
+              <p className="text-[15px] text-muted-foreground">{agentData.description}</p>
+            )}
+          </div>
+        </div>
+
+        {/* Tag selector */}
+        {allTags.length > 1 && (
+          <div className="flex items-center gap-3 px-3 py-2 bg-accent/50 border border-primary/10 rounded-md">
+            <History className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm">{allTags.length} tags</span>
+            <Select value={selectedTag.agent.tag} onValueChange={handleTagChange}>
+              <SelectTrigger className="w-[160px] h-7 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {allTags.map((tag) => (
+                  <SelectItem key={tag.agent.tag} value={tag.agent.tag}>
+                    {tag.agent.tag}
+                    {tag.agent.tag === agent.agent.tag && " (latest)"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {/* Quick info */}
+        <div className="flex flex-wrap gap-2">
+          <span className="flex items-center gap-1.5 px-2.5 py-1 bg-muted rounded text-sm">
+            <span className="font-mono">{agentData.tag}</span>
+            {allTags.length > 1 && (
+              <Badge variant="secondary" className="text-[10px] px-1 py-0 h-3.5">{allTags.length} total</Badge>
+            )}
+          </span>
+          <span className="flex items-center gap-1.5 px-2.5 py-1 bg-muted rounded text-sm">
+            {agentData.status}
+          </span>
+          {official?.publishedAt && (
+            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-muted rounded text-sm">
+              <Calendar className="h-3 w-3 text-muted-foreground" />
+              {formatDate(official.publishedAt)}
+            </span>
+          )}
+          {official?.updatedAt && (
+            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-muted rounded text-sm">
+              <Clock className="h-3 w-3 text-muted-foreground" />
+              {formatDate(official.updatedAt)}
+            </span>
+          )}
+        </div>
+
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <TabsList className="mb-4">
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="technical">Technical</TabsTrigger>
+            <TabsTrigger value="raw">Raw</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="overview" className="space-y-6">
+            {agentData.description && (
+              <section>
+                <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">Description</h3>
+                <p className="text-[15px] leading-relaxed">{agentData.description}</p>
+              </section>
+            )}
+
+            {source?.repository?.url && (
+              <section>
+                <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">Repository</h3>
+                <a
+                  href={source.repository.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 text-sm text-primary hover:underline"
+                >
+                  <Github className="h-3.5 w-3.5" />
+                  {source.repository.url}
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </section>
+            )}
+          </TabsContent>
+
+          <TabsContent value="technical" className="space-y-6">
+            {source?.repository?.url && (
+              <section>
+                <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">Source Repository</h3>
+                <a
+                  href={source.repository.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 text-sm text-primary hover:underline font-mono"
+                >
+                  {source.repository.url}
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </section>
+            )}
+
+            {source?.image && (
+              <section>
+                <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">Container Image</h3>
+                <div className="bg-muted p-3 rounded-md">
+                  <code className="text-xs break-all">{source.image}</code>
+                </div>
+              </section>
+            )}
+
+            <section>
+              <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">Timestamps</h3>
+              <div className="space-y-2 text-sm">
+                {agentData.updatedAt && (
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Last Updated</span>
+                    <span className="font-mono">{formatDate(agentData.updatedAt)}</span>
+                  </div>
+                )}
+                {official?.publishedAt && (
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Published</span>
+                    <span className="font-mono">{formatDate(official.publishedAt)}</span>
+                  </div>
+                )}
+                {official?.updatedAt && (
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Registry Updated</span>
+                    <span className="font-mono">{formatDate(official.updatedAt)}</span>
+                  </div>
+                )}
+              </div>
+            </section>
+          </TabsContent>
+
+          <TabsContent value="raw">
+            <div className="rounded-lg border p-4">
+              <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
+                <Code className="h-4 w-4" />
+                Raw JSON
+              </h3>
+              <pre className="bg-muted p-3 rounded-md overflow-x-auto text-xs leading-relaxed">
+                {JSON.stringify(selectedTag, null, 2)}
+              </pre>
+            </div>
+          </TabsContent>
+        </Tabs>
+    </div>
+  )
+}

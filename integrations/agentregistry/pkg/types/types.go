@@ -1,0 +1,423 @@
+// Package types defines public extension points shared by registry components
+// and external integrations.
+package types
+
+import (
+	"context"
+	"net/http"
+	"reflect"
+
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
+
+	v0 "github.com/agentregistry-dev/agentregistry/pkg/api/v0"
+	"github.com/agentregistry-dev/agentregistry/pkg/api/v1alpha1"
+	"github.com/agentregistry-dev/agentregistry/pkg/registry/auth"
+	"github.com/agentregistry-dev/agentregistry/pkg/registry/database"
+)
+
+// DatabaseFactory is a function type that creates a store implementation.
+// This allows implementors to run additional migrations and wrap the base
+// store.
+type DatabaseFactory func(ctx context.Context, databaseURL string, baseStore database.Store, authz auth.Authorizer) (database.Store, error)
+
+// AuthorizeInput is the per-call context handed to
+// Authorizer + ListFilter callbacks. Mirrors
+// resource.AuthorizeInput field-for-field; declared here to keep
+// AppOptions free of internal-package imports.
+type AuthorizeInput struct {
+	// Verb is one of "get", "list", "apply", "delete".
+	Verb string
+	// Kind is the canonical Kind name (v1alpha1.KindAgent, etc.).
+	Kind string
+	// Namespace is the URL-scoped namespace; "" for cross-namespace list.
+	Namespace string
+	// Name is the resource name; "" for list verbs.
+	Name string
+	// Tag is the resource tag for content kinds; "" for list/get-latest.
+	Tag string
+}
+
+// Authorizer gates a single resource handler invocation. Return
+// nil to allow; a huma error to set the response status; any other
+// error to surface as 500. Wired into resource.Config.Authorize.
+type Authorizer func(ctx context.Context, in AuthorizeInput) error
+
+// ListFilter returns a SQL predicate fragment + bind args to
+// inject into the list query as ListOpts.ExtraWhere / ExtraArgs. Wired
+// into resource.Config.ListFilter. Return ("", nil, nil) for "no
+// filter"; non-nil err short-circuits the list.
+type ListFilter func(ctx context.Context, in AuthorizeInput) (extraWhere string, extraArgs []any, err error)
+
+// PostUpsert runs after a successful PUT or apply on a v1alpha1
+// resource. Wired into resource.Config.PostUpsert and the matching
+// per-doc apply hook on /v0/apply. Hook errors propagate to the
+// caller (500 on the per-kind PUT path, ApplyStatusFailed on the
+// batch path).
+type PostUpsert func(ctx context.Context, obj v1alpha1.Object) error
+
+// PostDelete runs after a successful DELETE on a v1alpha1
+// resource. Wired into resource.Config.PostDelete + the apply
+// batch's per-doc delete hook.
+type PostDelete func(ctx context.Context, obj v1alpha1.Object) error
+
+// Prepare runs after validation and before Store.Upsert on a
+// v1alpha1 resource. Wired into resource.Config.Prepare + the apply
+// batch's per-doc prepare hook. Used to mutate the decoded object
+// before persistence (e.g. strip sensitive spec fields).
+type Prepare func(ctx context.Context, obj v1alpha1.Object) error
+
+const (
+	AdmissionSourceApply  = "apply"
+	AdmissionSourceDelete = "delete"
+	AdmissionSourceImport = "import"
+)
+
+// Admission owns the final write decision for an apply request after authz,
+// validation, reference resolution, and registry checks have passed. The OSS
+// default writes to production; downstream integrations can wrap that behavior
+// to stage, reject, or otherwise route the write.
+//
+// TODO(controller): this belongs to the synchronous handler architecture.
+// Prefer a reconciler-owned admission/staging model and delete this bridge once
+// no downstream route depends on it.
+type Admission func(ctx context.Context, in AdmissionInput) (AdmissionResult, error)
+
+type AdmissionInput struct {
+	Source            string
+	Verb              string
+	DryRun            bool
+	Kind              string
+	Namespace         string
+	Name              string
+	Tag               string
+	Object            v1alpha1.Object
+	Store             any
+	PostUpsert        PostUpsert
+	InitialFinalizers func(v1alpha1.Object) []string
+}
+
+type AdmissionResult struct {
+	Status     string
+	Tag        string
+	Generation int64
+}
+
+// DeleteAdmission owns the final delete decision after authz has passed. The
+// OSS default deletes from production; downstream integrations can stage,
+// reject, or otherwise route the delete before production storage is touched.
+//
+// TODO(controller): temporary synchronous-handler bridge; remove with
+// reconciler admission/staging.
+type DeleteAdmission func(ctx context.Context, in DeleteAdmissionInput) (DeleteAdmissionResult, error)
+
+type DeleteAdmissionInput struct {
+	Source     string
+	Verb       string
+	DryRun     bool
+	Kind       string
+	Namespace  string
+	Name       string
+	Tag        string
+	Object     v1alpha1.Object
+	Store      any
+	PostDelete PostDelete
+}
+
+type DeleteAdmissionResult struct {
+	Status string
+	Tag    string
+}
+
+// ResourceRouteContext exposes the finalized v1alpha1 route wiring to
+// downstream integrations that need adjacent routes against the same stores
+// and hooks as /v0/apply.
+//
+// TODO(controller): this is a temporary way for downstream synchronous routes
+// to reuse production apply wiring. Reconciler-owned staging should make this
+// unnecessary outside HTTP route callbacks.
+type ResourceRouteContext struct {
+	Stores            map[string]any
+	Resolver          v1alpha1.ResolverFunc
+	RegistryValidator v1alpha1.RegistryValidatorFunc
+	Apply             func(ctx context.Context, obj v1alpha1.Object, dryRun bool) v0.ApplyResult
+	Delete            func(ctx context.Context, obj v1alpha1.Object, dryRun bool) v0.ApplyResult
+}
+
+// Auditor receives audit events for state changes that the OSS layer
+// considers significant. The default OSS implementation is a no-op;
+// downstream builds plug in a real audit sink via NewStore options.
+//
+// Audit completeness is enforced at the source: every code path that
+// produces a recordable state change calls into Auditor directly,
+// rather than relying on observers (PostUpsert hooks, etc.) to remember
+// to log.
+type Auditor interface {
+	// ResourceTagCreated is invoked when Store.Upsert creates a new tag row
+	// for a content-registry kind. Mutable-object kinds do not produce this
+	// event.
+	ResourceTagCreated(ctx context.Context, kind, namespace, name, tag string)
+}
+
+type noopAuditor struct{}
+
+func (noopAuditor) ResourceTagCreated(ctx context.Context, kind, namespace, name, tag string) {
+}
+
+// NoopAuditor is the default Auditor used when none is plugged in.
+var NoopAuditor Auditor = noopAuditor{}
+
+// AppOptions contains configuration for the registry app.
+// All fields are optional and allow external developers to extend
+// functionality.
+//
+// This type lives in pkg/types (rather than pkg/registry or
+// internal/registry) so that both the public entrypoint
+// (pkg/registry/registry_app.go) and the internal implementation
+// (internal/registry/registry_app.go) can reference it without a cyclic
+// import.
+type AppOptions struct {
+	// OpenAPISchemaNamer overrides Huma's default schema naming function.
+	// Use this when an application exposes same-named Go types from different
+	// packages; Huma's default namer omits package paths and panics on those
+	// collisions. Nil preserves Huma's default schema names.
+	OpenAPISchemaNamer func(reflect.Type, string) string
+
+	// DatabaseFactory is an optional function to create a database that
+	// adds new functionality. The factory receives the base database and
+	// can run additional migrations. If nil, uses the default PostgreSQL
+	// database.
+	DatabaseFactory DatabaseFactory
+
+	// SkipMigrations skips the server's startup OSS migrator (the
+	// v1alpha1 migration set inside internaldb.NewPostgreSQL) so the
+	// server boots against a schema that was already migrated by
+	// `arctl db migrate up` (typically from CI/CD ahead of the
+	// rollout). DatabaseFactory-supplied migrators are NOT
+	// automatically skipped — downstream factories that run their own
+	// migrations should consult this same flag (e.g. via closure
+	// capture from AppOptions construction) to honor the operator's
+	// intent. Wins over the SKIP_MIGRATIONS env var when set true.
+	SkipMigrations bool
+
+	// RuntimeAdapters registers per-type PostUpsert/PostDelete
+	// hooks for the KindRuntime resource handler, keyed by the
+	// lowercase canonical Runtime.Spec.Type ("bedrockagentcore",
+	// "geminiagentruntime", "kagent", ...). Used by downstream builds
+	// to mirror Runtime apply/delete into a type-specific sidecar
+	// table. Missing types = no sidecar reconciliation for that type
+	// — the v1alpha1 Runtime row still persists.
+	RuntimeAdapters map[string]RuntimeAdapter
+
+	// DeploymentAdapters registers v1alpha1 DeploymentAdapter
+	// implementations keyed by lowercase Runtime.Spec.Type ("local",
+	// "kubernetes", ...). The Deployment controller and adjacent adapter
+	// resolver look up by the type string; downstream builds inject
+	// additional adapters here.
+	DeploymentAdapters map[string]DeploymentAdapter
+
+	// DeploymentDependencyKinds registers additional resource kinds whose
+	// durable control-plane events may change a Deployment's desired inputs.
+	// The Deployment controller requeues current Deployments for these events;
+	// its apply fingerprint still suppresses unchanged adapter work.
+	DeploymentDependencyKinds map[string]bool
+
+	// Authorizers gates every read + write operation on the
+	// generic v1alpha1 resource handler, keyed by canonical Kind name
+	// (v1alpha1.KindAgent, v1alpha1.KindMCPServer, etc.). Downstream
+	// builds wire their RBAC engine here so reader / publisher / admin
+	// gates fire on the OSS-registered Agent / MCPServer / Skill /
+	// Prompt / Runtime / Deployment endpoints. Missing keys behave
+	// like "no per-kind gate" — the resource handler's default permits
+	// the call, with API-level authn middleware still applying.
+	Authorizers map[string]Authorizer
+
+	// ListFilters injects per-kind ExtraWhere predicates into
+	// list queries. Use this for row-level visibility (e.g. RBAC
+	// filtering: a reader without a grant for a given resource never
+	// sees the row in a list response). The (string, []any) tuple is
+	// passed straight through to v1alpha1store.ListOpts.ExtraWhere /
+	// ExtraArgs — see that docstring for placeholder rules.
+	ListFilters map[string]ListFilter
+
+	// PostUpserts run after the generic resource handler PUTs a
+	// row, per kind. Downstream applications wire this for kinds that need
+	// runtime side-effects on apply — Runtime apply mirroring spec
+	// into a per-type sidecar table, for example. Missing keys =
+	// no post-upsert hook for that kind.
+	//
+	// Hook errors fail the request with 500 (the row is already
+	// persisted, so a hook failure indicates degraded state).
+	PostUpserts map[string]PostUpsert
+
+	// PostDeletes mirror PostUpserts on the delete path.
+	PostDeletes map[string]PostDelete
+
+	// Prepares run per-kind after validation and before Store.Upsert on
+	// both the dedicated PUT route and the batch /v0/apply path. Keyed by
+	// canonical Kind. Used to mutate the decoded object before persistence
+	// (e.g. strip sensitive spec fields). Missing keys = no prepare
+	// hook for that kind.
+	Prepares map[string]Prepare
+
+	// Admission optionally accepts a validated write before the row reaches
+	// production storage. Nil preserves normal direct writes.
+	// TODO(controller): temporary synchronous-handler bridge; remove with
+	// reconciler admission/staging.
+	Admission Admission
+
+	// DeleteAdmission optionally accepts an authorized delete before the row is
+	// removed from production storage. Nil preserves normal direct deletes.
+	// TODO(controller): temporary synchronous-handler bridge; remove with
+	// reconciler admission/staging.
+	DeleteAdmission DeleteAdmission
+
+	// ResolverWrapper decorates the shared ResourceRef resolver before route
+	// registration. Nil preserves the default store-backed resolver.
+	// TODO(controller): temporary bridge for pending staged refs in HTTP apply.
+	ResolverWrapper func(v1alpha1.ResolverFunc) v1alpha1.ResolverFunc
+
+	// V1Alpha1StoreTables registers additional v1alpha1 kinds with their
+	// backing PostgreSQL tables. Downstream builds that add their own
+	// Scheme kinds should populate this so the shared /v0/apply,
+	// resolver, and generic route plumbing can see the same store map
+	// as any ExtraRoutes they register.
+	//
+	// A bare "table" resolves in the OSS schema. To place a kind in
+	// another schema, qualify the value as "schema.table"; the schema
+	// segment must be a valid lowercase identifier (^[a-z_][a-z0-9_]*$)
+	// or server startup panics.
+	V1Alpha1StoreTables map[string]string
+
+	// V1Alpha1MutableStoreKinds marks extra v1alpha1 kinds that use mutable
+	// namespace/name object behavior instead of tagged artifact semantics.
+	// Downstream control-plane/config kinds are v1alpha1-shaped but are not
+	// content artifacts.
+	V1Alpha1MutableStoreKinds map[string]bool
+
+	// RegistryValidator overrides the per-package registry
+	// validator (the dispatcher consulted on apply to confirm
+	// each declared package — npm / pypi / oci — exists
+	// and (for OCI) carries the
+	// `LABEL io.modelcontextprotocol.server.name` ownership annotation
+	// proving the publisher controls the OCI namespace).
+	//
+	// Default (nil) is registries.Dispatcher, which fans out to every
+	// per-registry validator and matches the public-catalogue contract
+	// the upstream modelcontextprotocol/registry project ships. That's
+	// the right behavior for the OSS public catalogue but not for
+	// private deployments where:
+	//
+	//   - images live in private ECR / GCR / ACR that anonymous fetch
+	//     can't reach;
+	//   - server names aren't claims against a public namespace, so the
+	//     ownership-annotation requirement is moot;
+	//   - synthetic test names mean no public image can satisfy the
+	//     annotation match.
+	//
+	// Pass a custom RegistryValidatorFunc to filter out origin types
+	// the build doesn't want enforced (e.g. wrap registries.Dispatcher
+	// and short-circuit when origin.OCI != nil), or pass an explicit
+	// no-op (`func(...) error { return nil }`) to disable per-package
+	// registry validation entirely. Cross-kind ResourceRef checks still
+	// run regardless.
+	RegistryValidator v1alpha1.RegistryValidatorFunc
+
+	// ExtraRoutes allows external integrations to register additional HTTP
+	// routes using the same API instance and path prefix as OSS core
+	// routes.
+	ExtraRoutes func(api huma.API, pathPrefix string)
+
+	// ExtraResourceRoutes is like ExtraRoutes, but runs after the v1alpha1
+	// resource route context has been finalized.
+	// TODO(controller): temporary bridge for downstream synchronous approval routes.
+	ExtraResourceRoutes func(api huma.API, pathPrefix string, ctx ResourceRouteContext)
+
+	// HTTPServerFactory is an optional function to create a server that
+	// adds new API routes.
+	HTTPServerFactory HTTPServerFactory
+
+	// OnHTTPServerCreated is an optional callback that receives the
+	// created server (potentially extended via HTTPServerFactory).
+	OnHTTPServerCreated func(Server)
+
+	// UIHandler is an optional HTTP handler for serving a custom UI at
+	// the root path ("/"). If provided, this handler will be used instead
+	// of the default redirect to docs. API routes will still take
+	// precedence over the UI handler.
+	UIHandler http.Handler
+
+	// AuthnProvider is an optional authentication provider. Nil disables HTTP
+	// authentication middleware, which is the permissive default.
+	AuthnProvider auth.AuthnProvider
+
+	// AuthzProvider is an optional authorization provider. Nil selects the
+	// permissive default provider.
+	AuthzProvider auth.AuthzProvider
+
+	// MCPProtectedResourceMetadata, when non-nil, makes the MCP bridge serve
+	// RFC 9728 protected-resource metadata at the well-known path. Nil disables
+	// OAuth discovery. Authentication and authorization enforcement are
+	// determined by the configured providers.
+	MCPProtectedResourceMetadata *oauthex.ProtectedResourceMetadata
+
+	// MCPResourceMetadataURL is the external URL of that metadata document,
+	// emitted as the resource_metadata parameter of the bridge's 401
+	// WWW-Authenticate challenge. Empty omits the hint.
+	MCPResourceMetadataURL string
+
+	// MCPAuthnProvider optionally overrides AuthnProvider for the MCP bridge
+	// only, letting a build apply bridge-specific validation (e.g. audience
+	// binding to the MCP resource). Nil falls back to AuthnProvider.
+	MCPAuthnProvider auth.AuthnProvider
+
+	// Auditor receives audit events from the v1alpha1 store layer
+	// (e.g. ResourceTagCreated on Upsert creates). The default OSS
+	// behavior is a no-op; downstream builds plug in a real audit sink.
+	// If nil, NoopAuditor is used.
+	Auditor Auditor
+
+	// InitialFinalizers seeds finalizers atomically on create for kinds
+	// whose external teardown must be protected from a concurrent delete.
+	InitialFinalizers map[string]func(v1alpha1.Object) []string
+}
+
+// Server represents the HTTP server and provides access to the Huma API
+// and HTTP mux for registering new routes and handlers.
+//
+// This interface allows external packages to extend the server
+// functionality by adding new endpoints without accessing internal
+// implementation details.
+type Server interface {
+	// HumaAPI returns the Huma API instance, allowing registration of new
+	// routes that will appear in the OpenAPI documentation.
+	HumaAPI() huma.API
+
+	// Mux returns the HTTP ServeMux, allowing registration of custom HTTP
+	// handlers.
+	Mux() *http.ServeMux
+
+	// Start begins listening for incoming HTTP requests.
+	Start() error
+
+	// Shutdown gracefully shuts down the server.
+	Shutdown(ctx context.Context) error
+}
+
+// HTTPServerFactory is a function type that creates a server
+// implementation that adds new API routes and handlers.
+//
+// The factory receives a Server interface and should return a Server
+// after registering new routes using base.HumaAPI() or base.Mux().
+type HTTPServerFactory func(base Server, store database.Store) Server
+
+// Response is a generic wrapper for Huma responses.
+// Usage: Response[HealthBody] instead of HealthOutput.
+type Response[T any] struct {
+	Body T
+}
+
+// EmptyResponse represents a simple success response with a message.
+type EmptyResponse struct {
+	Message string `json:"message" doc:"Success message" example:"Operation completed successfully"`
+}

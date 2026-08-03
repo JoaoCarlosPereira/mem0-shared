@@ -1,0 +1,522 @@
+//go:build integration
+
+package resource_test
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/danielgtaylor/huma/v2/humatest"
+	"github.com/stretchr/testify/require"
+
+	arv0 "github.com/agentregistry-dev/agentregistry/pkg/api/v0"
+	"github.com/agentregistry-dev/agentregistry/pkg/api/v1alpha1"
+	pkgdb "github.com/agentregistry-dev/agentregistry/pkg/registry/database"
+	"github.com/agentregistry-dev/agentregistry/pkg/registry/resource"
+	"github.com/agentregistry-dev/agentregistry/pkg/registry/v1alpha1store"
+	"github.com/agentregistry-dev/agentregistry/pkg/types"
+)
+
+func TestRegisterApply_MultiDocRoundTrip(t *testing.T) {
+	pool := v1alpha1store.NewTestPool(t)
+	agents := v1alpha1store.NewStore(pool, v1alpha1store.TestSchema(), "agents")
+	mcps := v1alpha1store.NewStore(pool, v1alpha1store.TestSchema(), "mcp_servers")
+
+	_, api := humatest.New(t)
+	resource.RegisterApply(api, resource.ApplyConfig{
+		BasePrefix: "/v0",
+		Stores: map[string]*v1alpha1store.Store{
+			v1alpha1.KindAgent:     agents,
+			v1alpha1.KindMCPServer: mcps,
+		},
+	})
+
+	yaml := []byte(`apiVersion: ar.dev/v1alpha1
+kind: MCPServer
+metadata:
+  namespace: default
+  name: tools
+spec:
+  title: Tools
+  remote:
+    type: streamable-http
+    url: https://example.test/mcp
+---
+apiVersion: ar.dev/v1alpha1
+kind: Agent
+metadata:
+  namespace: default
+  name: alice
+spec:
+  title: Alice
+  mcpServers:
+    - kind: MCPServer
+      name: tools
+      tag: latest
+`)
+	resp := api.Post("/v0/apply", "Content-Type: application/yaml", strings.NewReader(string(yaml)))
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	var out struct {
+		Results []arv0.ApplyResult `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.Len(t, out.Results, 2)
+	require.Equal(t, v1alpha1.KindMCPServer, out.Results[0].Kind)
+	require.Equal(t, arv0.ApplyStatusCreated, out.Results[0].Status)
+	require.Equal(t, v1alpha1.KindAgent, out.Results[1].Kind)
+	require.Equal(t, arv0.ApplyStatusCreated, out.Results[1].Status)
+
+	// Re-apply identical YAML: both should report "unchanged".
+	resp = api.Post("/v0/apply", "Content-Type: application/yaml", strings.NewReader(string(yaml)))
+	require.Equal(t, http.StatusOK, resp.Code)
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.Equal(t, arv0.ApplyStatusUnchanged, out.Results[0].Status)
+	require.Equal(t, arv0.ApplyStatusUnchanged, out.Results[1].Status)
+}
+
+func TestRegisterApply_PerDocFailureDoesntAbortBatch(t *testing.T) {
+	pool := v1alpha1store.NewTestPool(t)
+	agents := v1alpha1store.NewStore(pool, v1alpha1store.TestSchema(), "agents")
+
+	_, api := humatest.New(t)
+	resource.RegisterApply(api, resource.ApplyConfig{
+		BasePrefix: "/v0",
+		Stores: map[string]*v1alpha1store.Store{
+			v1alpha1.KindAgent: agents,
+		},
+	})
+
+	// Two docs: first valid, second references a non-configured kind.
+	yaml := []byte(`apiVersion: ar.dev/v1alpha1
+kind: Agent
+metadata:
+  namespace: default
+  name: good
+spec:
+  title: Good
+---
+apiVersion: ar.dev/v1alpha1
+kind: Skill
+metadata:
+  namespace: default
+  name: nope
+spec:
+  title: Nope
+`)
+	resp := api.Post("/v0/apply", "Content-Type: application/yaml", strings.NewReader(string(yaml)))
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var out struct {
+		Results []arv0.ApplyResult `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.Len(t, out.Results, 2)
+	require.Equal(t, arv0.ApplyStatusCreated, out.Results[0].Status)
+	require.Equal(t, arv0.ApplyStatusFailed, out.Results[1].Status)
+	require.Contains(t, out.Results[1].Error, "unknown or unconfigured kind")
+}
+
+func TestRegisterApply_AdmissionCanStageInsteadOfProductionUpsert(t *testing.T) {
+	pool := v1alpha1store.NewTestPool(t)
+	agents := v1alpha1store.NewStore(pool, v1alpha1store.TestSchema(), "agents")
+
+	var admitted types.AdmissionInput
+	postUpsertCalled := false
+	_, api := humatest.New(t)
+	resource.RegisterApply(api, resource.ApplyConfig{
+		BasePrefix: "/v0",
+		Stores: map[string]*v1alpha1store.Store{
+			v1alpha1.KindAgent: agents,
+		},
+		PostUpserts: map[string]func(context.Context, v1alpha1.Object) error{
+			v1alpha1.KindAgent: func(context.Context, v1alpha1.Object) error {
+				postUpsertCalled = true
+				return nil
+			},
+		},
+		Admission: func(ctx context.Context, in types.AdmissionInput) (types.AdmissionResult, error) {
+			admitted = in
+			return types.AdmissionResult{Status: arv0.ApplyStatusStaged, Tag: in.Tag}, nil
+		},
+	})
+
+	yaml := []byte(`apiVersion: ar.dev/v1alpha1
+kind: Agent
+metadata:
+  namespace: default
+  name: staged-agent
+spec:
+  title: Staged Agent
+`)
+	resp := api.Post("/v0/apply", "Content-Type: application/yaml", strings.NewReader(string(yaml)))
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	var out struct {
+		Results []arv0.ApplyResult `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.Len(t, out.Results, 1)
+	require.Equal(t, arv0.ApplyStatusStaged, out.Results[0].Status)
+	require.Equal(t, v1alpha1store.DefaultTag(), out.Results[0].Tag)
+	require.False(t, postUpsertCalled, "admitted applies must not fire production side effects")
+	require.Equal(t, types.AdmissionSourceApply, admitted.Source)
+	require.Equal(t, "apply", admitted.Verb)
+	require.Equal(t, v1alpha1.KindAgent, admitted.Kind)
+	require.Equal(t, "default", admitted.Namespace)
+	require.Equal(t, "staged-agent", admitted.Name)
+	require.Equal(t, v1alpha1store.DefaultTag(), admitted.Tag)
+	require.Same(t, agents, admitted.Store)
+
+	_, err := agents.Get(t.Context(), "default", "staged-agent", v1alpha1store.DefaultTag())
+	require.ErrorIs(t, err, pkgdb.ErrNotFound)
+}
+
+func TestRegisterApply_DeleteAdmissionCanStageInsteadOfProductionDelete(t *testing.T) {
+	pool := v1alpha1store.NewTestPool(t)
+	agents := v1alpha1store.NewStore(pool, v1alpha1store.TestSchema(), "agents")
+	_, err := agents.Upsert(t.Context(), &v1alpha1.Agent{
+		Metadata: v1alpha1.ObjectMeta{Namespace: "default", Name: "staged-delete", Tag: "stable"},
+		Spec:     v1alpha1.AgentSpec{Title: "Staged Delete"},
+	})
+	require.NoError(t, err)
+
+	var admitted types.DeleteAdmissionInput
+	postDeleteCalled := false
+	_, api := humatest.New(t)
+	resource.RegisterApply(api, resource.ApplyConfig{
+		BasePrefix: "/v0",
+		Stores: map[string]*v1alpha1store.Store{
+			v1alpha1.KindAgent: agents,
+		},
+		PostDeletes: map[string]func(context.Context, v1alpha1.Object) error{
+			v1alpha1.KindAgent: func(context.Context, v1alpha1.Object) error {
+				postDeleteCalled = true
+				return nil
+			},
+		},
+		DeleteAdmission: func(ctx context.Context, in types.DeleteAdmissionInput) (types.DeleteAdmissionResult, error) {
+			admitted = in
+			return types.DeleteAdmissionResult{Status: arv0.ApplyStatusStaged, Tag: in.Tag}, nil
+		},
+	})
+
+	yaml := []byte(`apiVersion: ar.dev/v1alpha1
+kind: Agent
+metadata:
+  namespace: default
+  name: staged-delete
+  tag: stable
+`)
+	resp := api.Do(http.MethodDelete, "/v0/apply", "Content-Type: application/yaml", strings.NewReader(string(yaml)))
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	var out struct {
+		Results []arv0.ApplyResult `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.Len(t, out.Results, 1)
+	require.Equal(t, arv0.ApplyStatusStaged, out.Results[0].Status)
+	require.Equal(t, "stable", out.Results[0].Tag)
+	require.False(t, postDeleteCalled, "staged deletes must not fire production side effects")
+	require.Equal(t, types.AdmissionSourceDelete, admitted.Source)
+	require.Equal(t, "delete", admitted.Verb)
+	require.Equal(t, v1alpha1.KindAgent, admitted.Kind)
+	require.Equal(t, "default", admitted.Namespace)
+	require.Equal(t, "staged-delete", admitted.Name)
+	require.Equal(t, "stable", admitted.Tag)
+	require.NotNil(t, admitted.Object)
+	require.NotNil(t, admitted.PostDelete)
+	require.Same(t, agents, admitted.Store)
+
+	row, err := agents.Get(t.Context(), "default", "staged-delete", "stable")
+	require.NoError(t, err)
+	require.Equal(t, "stable", row.Metadata.Tag)
+}
+
+func TestApplyObject_ReusesProductionApplyPath(t *testing.T) {
+	pool := v1alpha1store.NewTestPool(t)
+	agents := v1alpha1store.NewStore(pool, v1alpha1store.TestSchema(), "agents")
+
+	obj := &v1alpha1.Agent{
+		TypeMeta: v1alpha1.TypeMeta{APIVersion: v1alpha1.GroupVersion, Kind: v1alpha1.KindAgent},
+		Metadata: v1alpha1.ObjectMeta{
+			Namespace: "default",
+			Name:      "replayed-agent",
+			Tag:       "stable",
+		},
+		Spec: v1alpha1.AgentSpec{Title: "Replayed Agent"},
+	}
+	res := resource.ApplyObject(t.Context(), resource.ApplyConfig{
+		Stores: map[string]*v1alpha1store.Store{
+			v1alpha1.KindAgent: agents,
+		},
+	}, obj, false)
+	require.Equal(t, arv0.ApplyStatusCreated, res.Status)
+	require.Equal(t, "stable", res.Tag)
+
+	row, err := agents.Get(t.Context(), "default", "replayed-agent", "stable")
+	require.NoError(t, err)
+	require.Equal(t, "stable", row.Metadata.Tag)
+}
+
+func TestRegisterApply_MutableObjectResultsDoNotExposeVersion(t *testing.T) {
+	pool := v1alpha1store.NewTestPool(t)
+	runtimes := v1alpha1store.NewMutableObjectStore(pool, v1alpha1store.TestSchema(), "runtimes")
+	deployments := v1alpha1store.NewMutableObjectStore(pool, v1alpha1store.TestSchema(), "deployments")
+
+	_, api := humatest.New(t)
+	resource.RegisterApply(api, resource.ApplyConfig{
+		BasePrefix: "/v0",
+		Stores: map[string]*v1alpha1store.Store{
+			v1alpha1.KindRuntime:    runtimes,
+			v1alpha1.KindDeployment: deployments,
+		},
+	})
+
+	yaml := []byte(`apiVersion: ar.dev/v1alpha1
+kind: Runtime
+metadata:
+  namespace: default
+  name: local-test-runtime
+spec:
+  type: local
+---
+apiVersion: ar.dev/v1alpha1
+kind: Deployment
+metadata:
+  namespace: default
+  name: summarizer
+spec:
+  targetRef:
+    kind: Agent
+    name: summarizer
+    tag: stable
+  runtimeRef:
+    kind: Runtime
+    name: local-test-runtime
+`)
+	resp := api.Post("/v0/apply", "Content-Type: application/yaml", strings.NewReader(string(yaml)))
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	var out struct {
+		Results []arv0.ApplyResult `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.Len(t, out.Results, 2)
+	require.Equal(t, v1alpha1.KindRuntime, out.Results[0].Kind)
+	require.Equal(t, arv0.ApplyStatusCreated, out.Results[0].Status)
+	require.Empty(t, out.Results[0].Tag)
+	require.Equal(t, v1alpha1.KindDeployment, out.Results[1].Kind)
+	require.Equal(t, arv0.ApplyStatusCreated, out.Results[1].Status)
+	require.Empty(t, out.Results[1].Tag)
+
+	runtimeRow, err := runtimes.Get(t.Context(), "default", "local-test-runtime", "")
+	require.NoError(t, err)
+	require.Empty(t, runtimeRow.Metadata.Tag)
+	deploymentRow, err := deployments.Get(t.Context(), "default", "summarizer", "")
+	require.NoError(t, err)
+	require.Empty(t, deploymentRow.Metadata.Tag)
+}
+
+func TestRegisterDeleteApply_OmittedTagDeletesAllTags(t *testing.T) {
+	pool := v1alpha1store.NewTestPool(t)
+	agents := v1alpha1store.NewStore(pool, v1alpha1store.TestSchema(), "agents")
+
+	_, api := humatest.New(t)
+	resource.RegisterApply(api, resource.ApplyConfig{
+		BasePrefix: "/v0",
+		Stores:     map[string]*v1alpha1store.Store{v1alpha1.KindAgent: agents},
+	})
+
+	_, err := agents.Upsert(t.Context(), &v1alpha1.Agent{
+		Metadata: v1alpha1.ObjectMeta{Namespace: "default", Name: "alice", Tag: "stable"},
+		Spec:     v1alpha1.AgentSpec{Title: "Stable Alice"},
+	})
+	require.NoError(t, err)
+	_, err = agents.Upsert(t.Context(), &v1alpha1.Agent{
+		Metadata: v1alpha1.ObjectMeta{Namespace: "default", Name: "alice"},
+		Spec:     v1alpha1.AgentSpec{Title: "Latest Alice"},
+	})
+	require.NoError(t, err)
+
+	yaml := []byte(`apiVersion: ar.dev/v1alpha1
+kind: Agent
+metadata:
+  namespace: default
+  name: alice
+`)
+	resp := api.Do(http.MethodDelete, "/v0/apply", "Content-Type: application/yaml", strings.NewReader(string(yaml)))
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	var out struct {
+		Results []arv0.ApplyResult `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.Len(t, out.Results, 1)
+	require.Equal(t, arv0.ApplyStatusDeleted, out.Results[0].Status)
+	require.Empty(t, out.Results[0].Tag)
+	require.NotContains(t, resp.Body.String(), `"tag"`, "all-tag deletes should not report a single tag")
+
+	_, err = agents.Get(t.Context(), "default", "alice", "stable")
+	require.ErrorIs(t, err, pkgdb.ErrNotFound)
+	_, err = agents.Get(t.Context(), "default", "alice", v1alpha1store.DefaultTag())
+	require.ErrorIs(t, err, pkgdb.ErrNotFound)
+}
+
+func TestRegisterDeleteApply_TagDeletesOnlyExactTag(t *testing.T) {
+	pool := v1alpha1store.NewTestPool(t)
+	agents := v1alpha1store.NewStore(pool, v1alpha1store.TestSchema(), "agents")
+
+	_, api := humatest.New(t)
+	resource.RegisterApply(api, resource.ApplyConfig{
+		BasePrefix: "/v0",
+		Stores:     map[string]*v1alpha1store.Store{v1alpha1.KindAgent: agents},
+	})
+
+	_, err := agents.Upsert(t.Context(), &v1alpha1.Agent{
+		Metadata: v1alpha1.ObjectMeta{Namespace: "default", Name: "alice", Tag: "stable"},
+		Spec:     v1alpha1.AgentSpec{Title: "Stable Alice"},
+	})
+	require.NoError(t, err)
+	_, err = agents.Upsert(t.Context(), &v1alpha1.Agent{
+		Metadata: v1alpha1.ObjectMeta{Namespace: "default", Name: "alice"},
+		Spec:     v1alpha1.AgentSpec{Title: "Latest Alice"},
+	})
+	require.NoError(t, err)
+
+	yaml := []byte(`apiVersion: ar.dev/v1alpha1
+kind: Agent
+metadata:
+  namespace: default
+  name: alice
+  tag: stable
+`)
+	resp := api.Do(http.MethodDelete, "/v0/apply", "Content-Type: application/yaml", strings.NewReader(string(yaml)))
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	var out struct {
+		Results []arv0.ApplyResult `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.Len(t, out.Results, 1)
+	require.Equal(t, arv0.ApplyStatusDeleted, out.Results[0].Status)
+	require.Equal(t, "stable", out.Results[0].Tag)
+
+	_, err = agents.Get(t.Context(), "default", "alice", "stable")
+	require.ErrorIs(t, err, pkgdb.ErrNotFound)
+	latest, err := agents.Get(t.Context(), "default", "alice", v1alpha1store.DefaultTag())
+	require.NoError(t, err)
+	require.Equal(t, v1alpha1store.DefaultTag(), latest.Metadata.Tag)
+}
+
+func TestRegisterApply_DefaultsRemoteMCPServerTagBeforeAuthorize(t *testing.T) {
+	pool := v1alpha1store.NewTestPool(t)
+	mcpServers := v1alpha1store.NewStore(pool, v1alpha1store.TestSchema(), "mcp_servers")
+
+	_, err := mcpServers.Upsert(t.Context(), &v1alpha1.MCPServer{
+		Metadata: v1alpha1.ObjectMeta{Namespace: "default", Name: "test-mcp-server"},
+		Spec: v1alpha1.MCPServerSpec{
+			Title:  "Test MCP Server",
+			Remote: &v1alpha1.MCPRemote{Type: "streamable-http", URL: "https://example.test/mcp"},
+		},
+	})
+	require.NoError(t, err)
+
+	var seen resource.AuthorizeInput
+	_, api := humatest.New(t)
+	resource.RegisterApply(api, resource.ApplyConfig{
+		BasePrefix: "/v0",
+		Stores: map[string]*v1alpha1store.Store{
+			v1alpha1.KindMCPServer: mcpServers,
+		},
+		Authorizers: map[string]func(context.Context, resource.AuthorizeInput) error{
+			v1alpha1.KindMCPServer: func(ctx context.Context, in resource.AuthorizeInput) error {
+				seen = in
+				_, err := mcpServers.Get(ctx, in.Namespace, in.Name, in.Tag)
+				return err
+			},
+		},
+	})
+
+	yaml := []byte(`apiVersion: ar.dev/v1alpha1
+kind: MCPServer
+metadata:
+  namespace: default
+  name: test-mcp-server
+spec:
+  title: Test MCP Server
+  remote:
+    type: streamable-http
+    url: https://example.test/mcp
+`)
+	resp := api.Post("/v0/apply", "Content-Type: application/yaml", strings.NewReader(string(yaml)))
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	var out struct {
+		Results []arv0.ApplyResult `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.Len(t, out.Results, 1)
+	require.Equal(t, arv0.ApplyStatusUnchanged, out.Results[0].Status)
+	require.Equal(t, v1alpha1store.DefaultTag(), out.Results[0].Tag)
+	require.Equal(t, "apply", seen.Verb)
+	require.Equal(t, v1alpha1.KindMCPServer, seen.Kind)
+	require.Equal(t, "default", seen.Namespace)
+	require.Equal(t, "test-mcp-server", seen.Name)
+	require.Equal(t, v1alpha1store.DefaultTag(), seen.Tag)
+}
+
+// TestRegisterApply_DeniesKindWithNoAuthorizer pins the apply-side
+// fail-closed contract: when ApplyConfig.Authorizers is non-empty
+// (i.e. authz is wired) but the doc's kind has no entry, the doc
+// fails with "no authorizer wired" rather than silently authorizing.
+//
+// Mirrors the import-handler N1 fix in `f8682fb`. Without this, an
+// operator who misconfigures PerKindHooks — wires an authorizer for
+// some kinds but forgets others — would silently bypass authz on the
+// /v0/apply path for the missing kinds.
+func TestRegisterApply_DeniesKindWithNoAuthorizer(t *testing.T) {
+	pool := v1alpha1store.NewTestPool(t)
+	agents := v1alpha1store.NewStore(pool, v1alpha1store.TestSchema(), "agents")
+	mcps := v1alpha1store.NewStore(pool, v1alpha1store.TestSchema(), "mcp_servers")
+
+	_, api := humatest.New(t)
+	resource.RegisterApply(api, resource.ApplyConfig{
+		BasePrefix: "/v0",
+		Stores: map[string]*v1alpha1store.Store{
+			v1alpha1.KindAgent:     agents,
+			v1alpha1.KindMCPServer: mcps,
+		},
+		// Authorizers wired for Agent only; MCPServer intentionally absent.
+		Authorizers: map[string]func(context.Context, resource.AuthorizeInput) error{
+			v1alpha1.KindAgent: func(_ context.Context, _ resource.AuthorizeInput) error { return nil },
+		},
+	})
+
+	yaml := []byte(`apiVersion: ar.dev/v1alpha1
+kind: MCPServer
+metadata:
+  namespace: default
+  name: should-be-denied
+spec:
+  title: Should be denied
+`)
+	resp := api.Post("/v0/apply", "Content-Type: application/yaml", strings.NewReader(string(yaml)))
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	var out struct {
+		Results []arv0.ApplyResult `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.Len(t, out.Results, 1)
+	require.Equal(t, arv0.ApplyStatusFailed, out.Results[0].Status)
+	require.Contains(t, out.Results[0].Error, `no authorizer wired for kind "MCPServer"`)
+
+	// And the row didn't land in the store.
+	_, err := mcps.Get(t.Context(), "default", "should-be-denied", "1")
+	require.Error(t, err, "fail-closed must short-circuit before Upsert")
+}

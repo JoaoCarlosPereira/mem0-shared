@@ -198,3 +198,7 @@ testing.ipynb
 # pnpm local store (never commit)
 .pnpm-store/
 **/.pnpm-store/
+
+# Local runtime artifacts (do not commit)
+.tmp-artifacts/
+openmemory/backups/

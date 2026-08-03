@@ -1,0 +1,85 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
+	"sigs.k8s.io/yaml"
+
+	"github.com/agentregistry-dev/agentregistry/internal/registry/api/router"
+	"github.com/agentregistry-dev/agentregistry/internal/registry/config"
+	"github.com/agentregistry-dev/agentregistry/internal/version"
+	arv0 "github.com/agentregistry-dev/agentregistry/pkg/api/v0"
+	pkgdb "github.com/agentregistry-dev/agentregistry/pkg/registry/database"
+	"github.com/agentregistry-dev/agentregistry/pkg/registry/v1alpha1store"
+)
+
+func main() {
+	outputPath := flag.String("output", "openapi.yaml", "Output path for OpenAPI spec")
+	versionOverride := flag.String("version", "", "Override the API version (defaults to version.Version)")
+	flag.Parse()
+
+	apiVersion := version.Version
+	if *versionOverride != "" {
+		apiVersion = *versionOverride
+	}
+
+	spec := generateSpec(apiVersion)
+
+	yamlData, err := yaml.Marshal(spec)
+	if err != nil {
+		log.Fatalf("Failed to marshal OpenAPI spec to YAML: %v", err)
+	}
+
+	if err := os.WriteFile(*outputPath, yamlData, 0644); err != nil {
+		log.Fatalf("Failed to write OpenAPI spec to %s: %v", *outputPath, err)
+	}
+
+	absPath, err := filepath.Abs(*outputPath)
+	if err != nil {
+		absPath = *outputPath
+	}
+	fmt.Printf("OpenAPI spec generated: %s\n", absPath)
+}
+
+// generateSpec creates a Huma API, registers all routes, and returns the
+// OpenAPI spec.
+func generateSpec(apiVersion string) *huma.OpenAPI {
+	mux := http.NewServeMux()
+
+	humaConfig := huma.DefaultConfig("AgentRegistry", apiVersion)
+	humaConfig.Info.Description = "AgentRegistry API for managing MCP servers, agents, skills, and deployments."
+	// Disable $schema property injection in responses
+	humaConfig.CreateHooks = []func(huma.Config) huma.Config{}
+
+	api := humago.New(mux, humaConfig)
+
+	cfg := &config.Config{
+		// Force-enable the read-only MCP Registry v0.1 compatibility routes so
+		// the generated spec always documents them. The runtime default is OFF
+		// (opt-in via AGENT_REGISTRY_MCP_REGISTRY_COMPAT_ENABLED); documenting
+		// the surface regardless keeps the published OpenAPI complete.
+		MCPRegistryCompatEnabled: true,
+	}
+
+	// Register all routes. Services and metrics are nil because they are only
+	// captured in handler closures and invoked at request time, not during
+	// route registration.
+	if err := router.RegisterRoutes(api, cfg, nil, &arv0.VersionBody{
+		Version:   apiVersion,
+		GitCommit: version.GitCommit,
+		BuildTime: version.BuildDate,
+	}, &router.RouteOptions{
+		Stores: v1alpha1store.NewStores(nil, pkgdb.OSSSchemaRegistry()),
+	}); err != nil {
+		panic(fmt.Sprintf("router.RegisterRoutes: %v", err))
+	}
+
+	return api.OpenAPI()
+}

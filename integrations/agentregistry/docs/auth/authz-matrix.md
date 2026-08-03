@@ -1,0 +1,97 @@
+# AuthZ Matrix
+
+Permissions listed are what the configured `AuthzProvider` is called with. The OSS public provider allows everything; the matrix describes what a non-public provider evaluates.
+
+Resource types recognized by the authz system: `agent`, `server` (MCP server), `plugin`, `skill`, `prompt`, `provider`, `runtime`, `model`. **There is no `deployment` resource type**: deployment endpoints authorize against the underlying MCP server or agent the deployment references.
+
+## Agents, servers, plugins, skills, prompts
+
+These five kinds share the same endpoint shape. `{kind}` = `agent` | `server` | `plugin` | `skill` | `prompt`.
+
+| Operation | HTTP | Required permissions | Notes |
+| --- | --- | --- | --- |
+| List | `GET /v0/{kind}s` | none | Filtering is delegated to the provider implementation; the list boundary intentionally skips checks. |
+| Get latest tag | `GET /v0/{kind}s/{name}` | `Read` on `{kind}:{name}` | Resolves the literal `latest` tag. |
+| Get exact tag | `GET /v0/{kind}s/{name}/{tag}` | `Read` on `{kind}:{name}` | |
+| List tags | `GET /v0/{kind}s/{name}/tags` | `Read` on `{kind}:{name}` | |
+| Apply | `POST /v0/apply` | `Read` + `Publish` or `Read` + `Edit` on `{kind}:{name}` | Creates or replaces `metadata.tag`; omitted tags resolve to literal `latest`. |
+| Delete latest tag | `DELETE /v0/{kind}s/{name}` | `Delete` on `{kind}:{name}` | Deletes the literal `latest` tag. |
+| Delete exact tag | `DELETE /v0/{kind}s/{name}/{tag}` | `Delete` on `{kind}:{name}` | |
+
+## Runtimes
+
+**NOTE**: Keyed by `runtimeId`, not name. No edit endpoint is exposed (a DB-layer `UpdateRuntime` method exists but no HTTP route calls it).
+
+| Operation | HTTP | Required permissions | Notes |
+| --- | --- | --- | --- |
+| List | `GET /v0/runtimes` | none | Filtering is delegated to the runtime implementation; the list boundary intentionally skips checks. |
+| Create | `POST /v0/runtimes` | `Publish` on `runtime:{id}` | |
+| Get | `GET /v0/runtimes/{runtimeId}` | `Read` on `runtime:{id}` | |
+| Delete | `DELETE /v0/runtimes/{runtimeId}` | `Read` + `Delete` on `runtime:{id}` | Service resolves the runtime before deletion, requiring `read`. |
+
+## Models
+
+Model is a tagged catalog kind. Each tag versions provider identity together with platform connection posture (auth strategy, endpoint, secret refs), allowing Deployments to pin the complete configuration they consume. Models are intended to be admin-writable, so a non-public provider should grant `Publish`/`Edit`/`Delete` on `model:{name}` to platform admins only. Secret values never live on the Model — only `SecretKeyRef` names — so `Read` does not expose key material. A harness Agent Deployment that omits `spec.modelRef` selects `Model/<deployment namespace>/default@latest`; platform administrators therefore own both creation and mutation of each namespace's `default` Model.
+
+| Operation | HTTP | Required permissions | Notes |
+| --- | --- | --- | --- |
+| List | `GET /v0/models` | none | Filtering is delegated to the provider implementation; the list boundary intentionally skips checks. |
+| Get latest | `GET /v0/models/{name}` | `Read` on `model:{name}` | Resolves the literal `latest` tag. |
+| List tags | `GET /v0/models/{name}/tags` | `Read` on `model:{name}` | |
+| Get tag | `GET /v0/models/{name}/{tag}` | `Read` on `model:{name}` | |
+| Apply | `POST /v0/apply` | `Read` + `Publish` (new tag) or `Read` + `Edit` (existing tag) on `model:{name}` | Omitted `metadata.tag` defaults to `latest`. |
+| Delete tag | `DELETE /v0/models/{name}/{tag}` | `Delete` on `model:{name}` | Batch delete with an omitted tag deletes every tag for the name. |
+
+## Deployments
+
+Deployments are identified by `{namespace}/{name}` and authz always evaluates against the underlying artifact (`server` or `agent`) the deployment references. Artifact kind is inferred from `Deployment.Spec.TargetRef.Kind`.
+
+Every deployment lifecycle operation — launching, undeploying, cancelling — gates on `Deploy` against the underlying artifact. The `Delete` verb is reserved for deleting the artifact itself (e.g. `DELETE /v0/servers/{name}/{tag}`), not tearing down a running deployment of it.
+
+| Operation | HTTP | Required permissions |
+| --- | --- | --- |
+| List | `GET /v0/deployments` | none — filtering delegated to provider implementation |
+| Get | `GET /v0/deployments/{name}?namespace={namespace}` | `Read` on target `{agent,server}:{name}` |
+| Create / update desired state | `PUT /v0/deployments/{name}?namespace={namespace}` | `Read` on `provider:{id}`; `Read` + `Deploy` on target |
+| Delete | `DELETE /v0/deployments/{name}?namespace={namespace}` | `Read` + `Deploy` on target |
+| Logs | `GET /v0/deployments/{name}/logs?namespace={namespace}` | `Read` on target |
+
+Agent deployments additionally invoke `Read` on each referenced `plugin:{ref}`, `skill:{ref}`, and `prompt:{ref}` when the runtime adapter resolves the agent's manifest and harness composition before deploying. These reads run under the caller's session (not a system context), so the user triggering the deployment must have `Read` on every referenced plugin, skill, and prompt.
+
+**Partial permissions leave stale `Failed` rows.** The Deployment resource row is written before the adapter resolves manifest references. A missing `Read` on any plugin/skill/prompt fails inside adapter apply, the caller gets 403, and the row is then patched to a failed condition under system context. No runtime resources are created.
+
+## Batch (apply)
+
+| Operation | HTTP | Required permissions | Notes |
+| --- | --- | --- | --- |
+| Apply | `POST /v0/apply` | Per-document; depends on kind and whether the row already exists | Each document dispatches to its kind handler individually; partial failure is allowed. Artifacts (`agent`/`server`/`model`/`plugin`/`skill`/`prompt`): `Read` + `Publish` if the tag is new, `Read` + `Edit` if it already exists. `provider`: `Read` + `Edit` if it exists, `Read` + `Publish` if new. `deployment`: same as `PUT /v0/deployments/{name}?namespace={namespace}`. |
+| Delete | `DELETE /v0/apply` | Per-document; depends on kind | Artifacts and `model`: `Delete` on `{kind}:{name}`. `provider`: `Read` + `Delete` on `provider:{name}`. `deployment`: `Deploy` on target (see Deployments section). |
+
+## Public
+
+| Operation | HTTP |
+| --- | --- |
+| Health | `GET /v0/health` |
+| Ping | `GET /v0/ping` |
+| Version | `GET /v0/version` |
+| Docs | `GET /docs` |
+| Metrics | `GET /metrics` |
+| Logging | `/logging` (localhost-only) |
+
+## MCP Registry v0.1 compatibility (read-only)
+
+The compatibility shim (`docs/mcp-registry-compatibility.md`) re-exposes MCPServer rows in the official `server.json` shape. It reuses the **same per-kind `ListFilter` + `Authorize` hooks as the native MCPServer read path** (`crud.PerKindHooks`): the list endpoint applies the kind's `ListFilter`, and the single-server reads apply its `Authorize` (a forbidden or unauthenticated read returns 404). In the public OSS build those hooks are absent, so the catalogue is unfiltered across all namespaces (matching the `List` boundary above); a downstream provider that gates MCPServer reads gates these endpoints identically. The routes are registered as authn **public paths**: where an authn provider is configured, requests under them bypass credential authentication and instead carry an `auth.PublicSession`, so the hooks still receive a session and decide what the public catalogue exposes (OSS configures no authn provider, so the routes are anonymous either way). Because enabling the shim makes these routes reachable without credentials, the feature is **off by default** — enable it (`AGENT_REGISTRY_MCP_REGISTRY_COMPAT_ENABLED=true`) only where a public catalogue, as scoped by your wired hooks, is acceptable.
+
+| Operation | HTTP | Required permissions | Notes |
+| --- | --- | --- | --- |
+| List servers | `GET /v0.1/servers` | none | Flattened all-namespace catalogue; no per-row filtering. |
+| List versions | `GET /v0.1/servers/{serverName}/versions` | none | |
+| Get version | `GET /v0.1/servers/{serverName}/versions/{version}` | none | `{version}` accepts `latest`. |
+
+## Known gaps
+
+Direct-DB CLI commands that construct `auth.Authorizer{Authz: nil}` and therefore short-circuit every DB-layer `Check` to allow. Not a regression vs the trust model of these commands (both require `DATABASE_URL`), but a real gap for audit visibility and for deployments where DB credentials are not equivalent to registry admin.
+
+| Command | What gets bypassed | Permissions that would apply post-refactor |
+| --- | --- | --- |
+| `arctl export` | Every individual readme fetch (`GetServerReadme`). List is not a regression because List intentionally skips checks. | `Read` on `server:{name}` per server whose readme is exported. |
