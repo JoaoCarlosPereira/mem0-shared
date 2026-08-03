@@ -25,18 +25,26 @@ from typing import Callable, Optional
 
 from app.database import SessionLocal
 from app.models import TaskCard, TaskCardStatus, get_current_utc_time
+from app.utils.claim_lease import DEFAULT_TIMEOUT_HOURS as _DEFAULT_TIMEOUT_HOURS
+from app.utils.claim_lease import TIMEOUT_ACTOR as _TIMEOUT_ACTOR
+from app.utils.claim_lease import claim_timeout_hours
 from app.utils.task_lock import release_task as _default_release_task
 
 logger = logging.getLogger(__name__)
 
 # Limite padrão de inatividade antes da liberação automática (ADR-007) e cadência
 # de varredura. Ambos ajustáveis por env var, sem novo deploy de código.
-DEFAULT_TIMEOUT_HOURS = 24.0
+# O limite vem de ``app.utils.claim_lease``, que é a mesma fonte usada para
+# responder ``claim_expires_at`` ao cliente — duas cópias divergiriam no primeiro
+# ajuste de env, e o prazo informado deixaria de bater com o prazo aplicado.
+DEFAULT_TIMEOUT_HOURS = _DEFAULT_TIMEOUT_HOURS
 DEFAULT_POLL_SECONDS = 3600.0
 
 # Ator gravado em TaskStatusHistory.changed_by — distingue automação de release
-# manual (que usa o hostname/e-mail do ator humano).
-TIMEOUT_ACTOR = "system:timeout"
+# manual (que usa o hostname/e-mail do ator humano). Definido em claim_lease para
+# que o router reconheça o sentinela sem importar a camada de workers; reexportado
+# aqui porque testes e chamadores existentes o referenciam por este módulo.
+TIMEOUT_ACTOR = _TIMEOUT_ACTOR
 
 
 class SpecTaskTimeoutWorker:
@@ -157,7 +165,7 @@ def _env_float(name: str, default: float) -> float:
 def worker_from_env() -> SpecTaskTimeoutWorker:
     """Constrói o worker a partir de variáveis de ambiente (ajuste sem deploy)."""
     return SpecTaskTimeoutWorker(
-        timeout_hours=_env_float("SPEC_TASK_TIMEOUT_HOURS", DEFAULT_TIMEOUT_HOURS),
+        timeout_hours=claim_timeout_hours(),
         poll_seconds=_env_float("SPEC_TASK_TIMEOUT_POLL_SECONDS", DEFAULT_POLL_SECONDS),
     )
 

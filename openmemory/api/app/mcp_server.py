@@ -1253,7 +1253,7 @@ async def create_task(
         return f"Error: {e}"
 
 
-@mcp.tool(description="Claim a task so you become its assignee and it moves to 'em_andamento'. On success the JSON includes kanban={column,label,means,do_now,next_column,next_action,pipeline,pipeline_rule} — you MUST follow do_now before advancing. This CAN FAIL by exclusivity: if the task is already active with another assignee, claimed=false — do NOT retry blindly. Pipeline: em_andamento → revisao_codigo → fase_teste → concluido (never skip).")
+@mcp.tool(description="Claim a task so you become its assignee and it moves to 'em_andamento'. On success the JSON includes kanban={column,label,means,do_now,next_column,next_action,pipeline,pipeline_rule} — you MUST follow do_now before advancing. IDEMPOTENT FOR YOU: if you are already the assignee, calling this again re-claims the card from ANY column and renews the lease — that is how you send a card back from revisao_codigo/fase_teste to em_andamento when a check failed, and how you renew a claim before it expires. It only fails by exclusivity when the card is active with a DIFFERENT assignee (claimed=false) — do NOT retry blindly. LEASE: a claim expires after a window of inactivity (SPEC_TASK_TIMEOUT_HOURS, default 24h) and the card returns to the backlog; the response carries claim_expires_at, and any action on the card (status change, edit, re-claim) renews it. Pipeline: em_andamento → revisao_codigo → fase_teste → concluido (never skip).")
 async def claim_task(task_id: str) -> str:
     try:
         from fastapi import HTTPException
@@ -1283,9 +1283,13 @@ async def claim_task(task_id: str) -> str:
                             "assignee": claimant,
                             "version": result.version,
                             "status": "em_andamento",
+                            # Prazo do lease: passado este ponto sem atividade, o
+                            # card volta ao backlog sozinho.
+                            "claim_expires_at": result.expires_at,
                         },
                         "em_andamento",
-                    )
+                    ),
+                    default=str,
                 )
             return json.dumps(
                 {
@@ -1293,8 +1297,8 @@ async def claim_task(task_id: str) -> str:
                     "current_assignee": result.current_assignee,
                     "version": result.version,
                     "message": (
-                        "Task já está ativa com outro responsável — escolha outra. "
-                        "Consulte o quadro (list_spec_workspaces) antes de tentar de novo."
+                        "Task já está ativa com OUTRO responsável — escolha outra. "
+                        "Consulte o quadro (list_tasks) antes de tentar de novo."
                     ),
                 }
             )
@@ -1558,6 +1562,100 @@ async def list_tasks(
                     data.pop("description", None)
                 results.append(data)
             return json.dumps({"results": results}, default=str)
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="Edit a task card's title, description and/or branch_ref. Use it when a decision changes after the cards were created — in a Spec-Driven flow it is normal and desirable for the spec to change when a measurement contradicts the hypothesis, and a card whose title no longer matches what has to be done misleads whoever picks it up. Omitted fields are left untouched. Pass expected_version = the version you last read; on a version conflict this returns {conflict: true, current_version, ...} and changes NOTHING — re-read with get_task and retry. Editing also renews the claim lease.")
+async def update_task(
+    task_id: str,
+    expected_version: int,
+    title: str | None = None,
+    description: str | None = None,
+    branch_ref: str | None = None,
+) -> str:
+    try:
+        from fastapi import HTTPException
+
+        from app.models import TaskCard
+        from app.routers.specs import _assert_access
+        from app.utils.task_lock import update_task_metadata
+
+        db = SessionLocal()
+        try:
+            tid = uuid.UUID(task_id)
+            task = db.query(TaskCard).filter(TaskCard.id == tid).first()
+            if task is None:
+                return f"Error: task {task_id} não encontrada"
+            try:
+                _assert_access(db, task.workspace_id)
+            except HTTPException as he:
+                return f"Error: {he.detail}"
+
+            if title is None and description is None and branch_ref is None:
+                return json.dumps(
+                    {
+                        "error": "nada a atualizar",
+                        "hint": "informe title, description e/ou branch_ref",
+                    }
+                )
+
+            result = update_task_metadata(
+                db,
+                tid,
+                expected_version,
+                title=title,
+                description=description,
+                branch_ref=branch_ref,
+            )
+            if result.conflict:
+                return json.dumps(
+                    {
+                        "conflict": True,
+                        "expected_version": expected_version,
+                        "current_version": result.version,
+                        "current_title": result.title,
+                        "current_description": result.description,
+                        "current_branch_ref": result.branch_ref,
+                    },
+                    default=str,
+                )
+            return json.dumps(
+                {
+                    "updated": True,
+                    "version": result.version,
+                    "title": result.title,
+                    "description": result.description,
+                    "branch_ref": result.branch_ref,
+                },
+                default=str,
+            )
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="List a task card's column-change history, oldest first. Each entry has old_status, new_status, changed_by, changed_at and by_timeout. Use it to tell an automatic lease expiry (by_timeout=true, changed_by='system:timeout') apart from someone releasing the card on purpose — a card that went back to the backlog on its own is otherwise indistinguishable from one that was released. Returns a JSON list; empty when the card never changed column (never an error).")
+async def list_task_history(task_id: str) -> str:
+    try:
+        from fastapi import HTTPException
+
+        from app.routers.specs import list_task_history as _list_history_endpoint
+
+        db = SessionLocal()
+        try:
+            try:
+                rows = _list_history_endpoint(uuid.UUID(task_id), db=db)
+            except HTTPException as he:
+                return f"Error: {he.detail}"
+            return json.dumps(
+                {"results": [r.model_dump(mode="json") for r in rows]}, default=str
+            )
         finally:
             db.close()
     except Exception as e:  # noqa: BLE001
