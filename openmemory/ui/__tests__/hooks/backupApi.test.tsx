@@ -95,18 +95,33 @@ describe("useBackupApi", () => {
     expect(store.getState().backup.error).toMatch(/Reten/);
   });
 
-  it("runBackup faz POST /admin/backup/run", async () => {
+  it("runBackup faz POST /admin/backup/run e espera a cópia", async () => {
+    jest.useFakeTimers();
+    mockedAxios.get
+      .mockResolvedValueOnce({
+        data: { ...status, archives: 0, last_backup: null },
+      })
+      .mockResolvedValueOnce({
+        data: { ...status, archives: 1, last_backup: "20260618-030000.zip" },
+      })
+      .mockResolvedValue({ data: { archives: [] } }); // fetchList
     mockedAxios.post.mockResolvedValue({ data: { status: "accepted" } });
     const store = makeStore();
     const { result } = renderHook(() => useBackupApi({ poll: false }), {
       wrapper: wrapperFor(store),
     });
+    let ok: boolean | undefined;
     await act(async () => {
-      await result.current.runBackup();
+      const pending = result.current.runBackup();
+      await jest.advanceTimersByTimeAsync(3000);
+      ok = await pending;
     });
+    expect(ok).toBe(true);
     expect(mockedAxios.post).toHaveBeenCalledWith(
       expect.stringContaining("/admin/backup/run"),
     );
+    expect(store.getState().backup.status?.archives).toBe(1);
+    jest.useRealTimers();
   });
 
   it("restore faz POST /admin/backup/restore com archive e confirm", async () => {

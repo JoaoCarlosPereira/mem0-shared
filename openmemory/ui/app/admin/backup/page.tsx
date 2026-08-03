@@ -88,9 +88,11 @@ export default function BackupPage() {
             <dt className="text-zinc-500">Cópias</dt>
             <dd>{status?.archives ?? 0}</dd>
           </div>
-          <div>
+          <div className="col-span-2 sm:col-span-4">
             <dt className="text-zinc-500">Último erro</dt>
-            <dd>{status?.last_error ?? "—"}</dd>
+            <dd className={status?.last_error ? "text-red-300 break-all" : undefined}>
+              {status?.last_error ?? "—"}
+            </dd>
           </div>
         </dl>
         <Button className="mt-3" disabled={loading} onClick={() => runBackup()}>

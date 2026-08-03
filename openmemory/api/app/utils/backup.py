@@ -112,9 +112,9 @@ class BackupService:
         if qc is None:
             return out
         for name in self._collections(qc):
-            snapshot = qc.create_snapshot(collection_name=name)
+            snapshot_name = _create_collection_snapshot(qc, collection_name=name)
             out[name] = _download_collection_snapshot(
-                qc, collection_name=name, snapshot_name=_snap_name(snapshot)
+                qc, collection_name=name, snapshot_name=snapshot_name
             )
         return out
 
@@ -247,6 +247,63 @@ def _snap_name(snapshot) -> str:
     return getattr(snapshot, "name", snapshot) if snapshot is not None else ""
 
 
+def _qdrant_snapshot_timeout() -> float:
+    """Timeout (s) para create/download de snapshot — o client default (~5s) é curto demais."""
+    raw = (os.getenv("QDRANT_SNAPSHOT_TIMEOUT") or "").strip()
+    if raw:
+        try:
+            return max(30.0, float(raw))
+        except ValueError:
+            pass
+    return 600.0
+
+
+def _is_real_qdrant_client(qc) -> bool:
+    """True para ``QdrantClient`` de produção; False para fakes/mocks de teste."""
+    try:
+        from qdrant_client import QdrantClient
+    except ImportError:  # pragma: no cover
+        return False
+    return isinstance(qc, QdrantClient)
+
+
+def _create_collection_snapshot_http(collection_name: str) -> str:
+    """Cria snapshot via REST com timeout longo (evita ``ResponseHandlingException: timed out``)."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    host = os.getenv("QDRANT_HOST", "localhost")
+    port = os.getenv("QDRANT_PORT", "6333")
+    api_key = os.getenv("QDRANT_API_KEY", "")
+    url = f"http://{host}:{port}/collections/{collection_name}/snapshots"
+    req = urllib.request.Request(url, data=b"", method="POST")
+    req.add_header("Content-Type", "application/json")
+    if api_key:
+        req.add_header("api-key", api_key)
+    try:
+        with urllib.request.urlopen(req, timeout=_qdrant_snapshot_timeout()) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"qdrant snapshot create failed ({exc.code}): {body}"
+        ) from exc
+    result = payload.get("result") if isinstance(payload, dict) else None
+    name = result.get("name") if isinstance(result, dict) else None
+    if not name:
+        raise RuntimeError(f"qdrant snapshot create returned no name: {payload}")
+    return str(name)
+
+
+def _create_collection_snapshot(qc, *, collection_name: str) -> str:
+    """Nome do snapshot criado — HTTP em produção; método do client em testes."""
+    if _is_real_qdrant_client(qc):
+        return _create_collection_snapshot_http(collection_name)
+    snapshot = qc.create_snapshot(collection_name=collection_name)
+    return _snap_name(snapshot)
+
+
 def _download_qdrant_snapshot_http(collection_name: str, snapshot_name: str) -> bytes:
     """Baixa snapshot via REST — ``QdrantClient`` expõe ``create_snapshot`` mas não ``download_snapshot``."""
     import urllib.error
@@ -260,7 +317,7 @@ def _download_qdrant_snapshot_http(collection_name: str, snapshot_name: str) -> 
     if api_key:
         req.add_header("api-key", api_key)
     try:
-        with urllib.request.urlopen(req, timeout=600) as resp:
+        with urllib.request.urlopen(req, timeout=_qdrant_snapshot_timeout()) as resp:
             return resp.read()
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
@@ -270,6 +327,6 @@ def _download_qdrant_snapshot_http(collection_name: str, snapshot_name: str) -> 
 def _download_collection_snapshot(qc, collection_name: str, snapshot_name: str) -> bytes:
     """Download de snapshot: método do client (mocks/testes) ou HTTP (produção)."""
     downloader = getattr(qc, "download_snapshot", None)
-    if callable(downloader):
+    if callable(downloader) and not _is_real_qdrant_client(qc):
         return downloader(collection_name=collection_name, snapshot_name=snapshot_name)
     return _download_qdrant_snapshot_http(collection_name, snapshot_name)

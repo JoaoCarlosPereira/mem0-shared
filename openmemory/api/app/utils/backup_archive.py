@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 MANIFEST_NAME = "manifest.json"
+_LAST_ERROR_NAME = ".last_error"
 _TS_FMT = "%Y%m%d-%H%M%S"
 # Arquivo regular de backup: <timestamp>.zip (sem prefixo de tag).
 _REGULAR_RE = re.compile(r"^\d{8}-\d{6}\.zip$")
@@ -112,12 +113,14 @@ class BackupArchive:
             if tag is None:
                 result.pruned = self.prune()
 
+            self._clear_last_error()
             BACKUP_DURATION_SECONDS.set(time.perf_counter() - started)
             BACKUP_LAST_SUCCESS_TIMESTAMP.set(ts.timestamp())
             return result
-        except Exception:
+        except Exception as exc:
             BACKUP_ERRORS_TOTAL.inc()
             logger.exception("backup archive create failed")
+            self._write_last_error(str(exc) or exc.__class__.__name__)
             if os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)
@@ -273,9 +276,15 @@ class BackupArchive:
 
     def status(self) -> dict:
         """Resumo para a UI/worker: último backup, idade (RPO), nº de cópias."""
+        last_error = self._read_last_error()
         infos = [i for i in self.list() if i.location == "local"]
         if not infos:
-            return {"last_backup": None, "rpo_age_seconds": None, "archives": 0, "last_error": None}
+            return {
+                "last_backup": None,
+                "rpo_age_seconds": None,
+                "archives": 0,
+                "last_error": last_error,
+            }
         newest = max(infos, key=lambda i: i.created_at or datetime.min.replace(tzinfo=UTC))
         age = None
         if newest.created_at is not None:
@@ -284,8 +293,36 @@ class BackupArchive:
             "last_backup": newest.name,
             "rpo_age_seconds": age,
             "archives": len(infos),
-            "last_error": None,
+            "last_error": last_error,
         }
+
+    def _last_error_path(self) -> str:
+        return os.path.join(self._policy.local_dir, _LAST_ERROR_NAME)
+
+    def _write_last_error(self, message: str) -> None:
+        try:
+            os.makedirs(self._policy.local_dir, exist_ok=True)
+            with open(self._last_error_path(), "w", encoding="utf-8") as fh:
+                fh.write((message or "backup failed")[:2000])
+        except OSError:
+            logger.warning("could not persist backup last_error", exc_info=True)
+
+    def _clear_last_error(self) -> None:
+        try:
+            os.remove(self._last_error_path())
+        except OSError:
+            pass
+
+    def _read_last_error(self) -> Optional[str]:
+        path = self._last_error_path()
+        if not os.path.isfile(path):
+            return None
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read().strip()
+            return text or None
+        except OSError:
+            return None
 
     def prune(self) -> List[str]:
         """Remove cópias regulares além de ``retention`` (FIFO), local + S3 espelho."""

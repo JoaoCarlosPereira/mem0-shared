@@ -177,8 +177,33 @@ def test_create_failure_increments_metric_and_cleans_temp(tmp_path):
     with pytest.raises(RuntimeError):
         arc.create()
     assert BACKUP_ERRORS_TOTAL._value.get() == before + 1
-    # nenhum .zip nem .tmp deixado para trás
-    assert [f for f in os.listdir(tmp_path)] == []
+    # nenhum .zip nem .tmp; só o marcador de erro para a UI
+    leftover = sorted(os.listdir(tmp_path))
+    assert leftover == [".last_error"]
+    assert "pg_dump down" in arc.status()["last_error"]
+
+
+def test_status_clears_last_error_after_success(tmp_path):
+    def boom(url):
+        raise RuntimeError("pg_dump down")
+
+    svc = BackupService(
+        s3_client=FakeS3(),
+        bucket="b",
+        db_url=_PG_URL,
+        qdrant_client_provider=lambda: FakeQdrant(),
+        pg_dump_runner=boom,
+    )
+    policy = BackupPolicySchema(local_dir=str(tmp_path), retention=5)
+    broken = BackupArchive(svc, policy, clock=IncClock(), openmemory_version="test")
+    with pytest.raises(RuntimeError):
+        broken.create()
+    assert broken.status()["last_error"]
+
+    ok = _archive(tmp_path, FakeS3(), FakeQdrant())
+    ok.create()
+    assert ok.status()["last_error"] is None
+    assert ok.status()["archives"] == 1
 
 
 def test_list_returns_local_archives(tmp_path):

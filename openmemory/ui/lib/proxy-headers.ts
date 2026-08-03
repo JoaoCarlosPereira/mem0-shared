@@ -26,6 +26,36 @@ export function sanitizeUpstreamHeaders(input: Headers): Headers {
   return out;
 }
 
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * Em UI legado (sem sessão Google), mutações ``/admin/*`` exigem
+ * ``X-Admin-Token`` / sessão JWT. O browser não deve receber ``ADMIN_TOKEN``;
+ * o proxy injeta o segredo server-side quando a chamada chega sem credencial.
+ *
+ * Não sobrescreve Authorization / X-Admin-Token já enviados (sessão Google ou
+ * token explícito do operador).
+ */
+export function applyLegacyAdminToken(
+  headers: Headers,
+  options: {
+    method: string;
+    pathSegments: string[];
+    adminToken?: string;
+  },
+): Headers {
+  const token = (options.adminToken ?? process.env.ADMIN_TOKEN ?? "").trim();
+  if (!token) return headers;
+  if (!MUTATING_METHODS.has(options.method.toUpperCase())) return headers;
+  if (options.pathSegments[0] !== "admin") return headers;
+  if (headers.get("x-admin-token")?.trim()) return headers;
+  if (headers.get("authorization")?.trim()) return headers;
+
+  const out = new Headers(headers);
+  out.set("x-admin-token", token);
+  return out;
+}
+
 /**
  * Rewrite upstream redirect targets (Docker-internal API URL) to same-origin
  * ``/api-proxy`` so the browser never follows ``openmemory-mcp:8765``.

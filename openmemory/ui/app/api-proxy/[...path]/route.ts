@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import {
+  applyLegacyAdminToken,
   rewriteUpstreamRedirectLocation,
   sanitizeUpstreamHeaders,
 } from "@/lib/proxy-headers";
@@ -19,7 +20,10 @@ async function proxyRequest(
   const suffix = pathSegments.length ? `/${pathSegments.join("/")}` : "";
   const target = `${internalBase()}${suffix}${req.nextUrl.search}`;
 
-  const headers = sanitizeUpstreamHeaders(req.headers);
+  const headers = applyLegacyAdminToken(sanitizeUpstreamHeaders(req.headers), {
+    method: req.method,
+    pathSegments,
+  });
 
   const hasBody = req.method !== "GET" && req.method !== "HEAD";
   // Follow redirects server-side for GET/HEAD: FastAPI trailing-slash 307s point at

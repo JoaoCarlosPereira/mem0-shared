@@ -4,6 +4,7 @@
  */
 import {
   HOP_BY_HOP_HEADERS,
+  applyLegacyAdminToken,
   rewriteUpstreamRedirectLocation,
   sanitizeUpstreamHeaders,
 } from "@/lib/proxy-headers";
@@ -44,6 +45,58 @@ describe("sanitizeUpstreamHeaders", () => {
     const input = new Headers({ connection: "close", authorization: "Bearer x" });
     sanitizeUpstreamHeaders(input);
     expect(input.get("connection")).toBe("close");
+  });
+});
+
+describe("applyLegacyAdminToken", () => {
+  const token = "test-admin-secret";
+
+  it("injeta X-Admin-Token em POST /admin/* sem credencial", () => {
+    const out = applyLegacyAdminToken(new Headers(), {
+      method: "POST",
+      pathSegments: ["admin", "backup", "run"],
+      adminToken: token,
+    });
+    expect(out.get("x-admin-token")).toBe(token);
+  });
+
+  it("não injeta em GET", () => {
+    const out = applyLegacyAdminToken(new Headers(), {
+      method: "GET",
+      pathSegments: ["admin", "backup", "status"],
+      adminToken: token,
+    });
+    expect(out.has("x-admin-token")).toBe(false);
+  });
+
+  it("não sobrescreve Authorization existente", () => {
+    const input = new Headers({ authorization: "Bearer jwt-session" });
+    const out = applyLegacyAdminToken(input, {
+      method: "POST",
+      pathSegments: ["admin", "backup", "run"],
+      adminToken: token,
+    });
+    expect(out.has("x-admin-token")).toBe(false);
+    expect(out.get("authorization")).toBe("Bearer jwt-session");
+  });
+
+  it("não sobrescreve X-Admin-Token existente", () => {
+    const input = new Headers({ "x-admin-token": "explicit" });
+    const out = applyLegacyAdminToken(input, {
+      method: "PUT",
+      pathSegments: ["admin", "backup", "policy"],
+      adminToken: token,
+    });
+    expect(out.get("x-admin-token")).toBe("explicit");
+  });
+
+  it("ignora rotas fora de /admin", () => {
+    const out = applyLegacyAdminToken(new Headers(), {
+      method: "POST",
+      pathSegments: ["api", "v1", "memories"],
+      adminToken: token,
+    });
+    expect(out.has("x-admin-token")).toBe(false);
   });
 });
 

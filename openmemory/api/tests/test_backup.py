@@ -135,3 +135,37 @@ def test_restore_recovers_qdrant_and_postgres(monkeypatch):
 def test_restore_missing_prefix_raises():
     with pytest.raises(KeyError):
         _service(FakeS3(), FakeQdrant()).restore("backups/nope")
+
+
+def test_create_snapshot_http_uses_long_timeout(monkeypatch):
+    """Produção: create via REST evita o timeout ~5s do QdrantClient."""
+    import urllib.request
+
+    from app.utils.backup import _create_collection_snapshot_http
+
+    calls = {}
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"result":{"name":"openmemory-snap.snapshot"},"status":"ok"}'
+
+    def fake_urlopen(req, timeout=None):
+        calls["url"] = req.full_url
+        calls["timeout"] = timeout
+        return FakeResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("QDRANT_HOST", "mem0_store")
+    monkeypatch.setenv("QDRANT_PORT", "6333")
+    monkeypatch.setenv("QDRANT_SNAPSHOT_TIMEOUT", "120")
+
+    name = _create_collection_snapshot_http("openmemory")
+    assert name == "openmemory-snap.snapshot"
+    assert "mem0_store:6333/collections/openmemory/snapshots" in calls["url"]
+    assert calls["timeout"] == 120.0

@@ -36,6 +36,13 @@ Recomendado em LAN de produção: `AUTH_MODE=enforce` + `ADMIN_TOKEN` forte.
 | (vazio) + sem `GOOGLE_CLIENT_ID` | Mesmo comportamento legado (auto-detect). |
 | `AUTH_UI_REQUIRED=1` ou Google configurado | UI exige sessão Google. |
 
+No modo legado, o container da UI recebe `ADMIN_TOKEN` (server-only) e o
+route handler `/api-proxy` injeta `X-Admin-Token` nas mutações `/admin/*`
+quando a requisição chega sem `Authorization` nem `X-Admin-Token`. Assim
+Backup / Restore / write-queue admin funcionam sem login Google, sem expor o
+segredo no bundle `NEXT_PUBLIC_*`. Com sessão Google, o Bearer da sessão
+prevalece e o proxy não sobrescreve.
+
 ### CORS
 
 `CORS_ORIGINS` — lista separada por vírgula (ex.: `http://localhost:3000,http://192.168.2.184:3000`).
