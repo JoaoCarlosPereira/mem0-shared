@@ -44,7 +44,8 @@ def test_api_env_defaults_are_fail_closed(compose):
     env = compose["x-api-common"]["environment"]
     # Sem valor no .env, o default é vazio => login Google desabilitado
     # (fail-closed), nunca um segredo embutido no repositório.
-    assert env["AUTH_JWT_SECRET"] == "${AUTH_JWT_SECRET:-}"
+    # AUTH_JWT_SECRET pode cair para NEXTAUTH_SECRET; ambos vazios => fail-closed.
+    assert env["AUTH_JWT_SECRET"] == "${AUTH_JWT_SECRET:-${NEXTAUTH_SECRET:-}}"
     assert env["AUTH_ALLOWED_DOMAIN"] == "${AUTH_ALLOWED_DOMAIN:-}"
 
 

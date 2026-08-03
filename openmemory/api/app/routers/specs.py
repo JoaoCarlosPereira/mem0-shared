@@ -401,7 +401,7 @@ def _task_response(
         data.members = members
     if labels is not None:
         data.labels = labels
-        data.label_ids = [l.id for l in labels]
+        data.label_ids = [label.id for label in labels]
     if checklist_done is not None:
         data.checklist_done = checklist_done
     if checklist_total is not None:
