@@ -45,9 +45,13 @@ Atualização (preserva memórias):
   python install.py --update --no-pull                # rebuild sem 'git pull' (código atual)
   python install.py --update --backup-dir /srv/mem0-backups   # define o destino dos .zip
 
-  O --update faz: git pull (best-effort) → rebuild das imagens → migrations
-  aditivas (produção) → recria os containers no lugar. NUNCA remove volumes,
-  então Qdrant + SQLite/PostgreSQL e os segredos do .env permanecem intactos.
+  O --update faz: git pull (best-effort) → rebuild só de API/UI → migrations
+  aditivas (produção) → recria os containers de app no lugar → sobe sidecars
+  (agentregistry/planka, profile ``sidecars``). NUNCA remove volumes, então
+  Qdrant + SQLite/PostgreSQL e os segredos do .env permanecem intactos.
+  Não para Qdrant/Postgres/Redis no meio do rebuild (se o build falhar, dados
+  continuam no ar). Preenche defaults vazios de S3/MinIO e PLANKA no .env
+  (sem sobrescrever valores já definidos).
   Funcionalidades novas que exigem configuração (ex.: login Google) são
   perguntadas SÓ se ainda não configuradas (Enter em branco pula; flags
   --google-domain/--google-client-id/--google-client-secret/--ui-url para
@@ -483,7 +487,15 @@ def set_env(file_path, key, value):
     """Idempotently set KEY=VALUE in a .env file (replace or append)."""
     lines = []
     if file_path.exists():
-        lines = file_path.read_text(encoding="utf-8").splitlines()
+        try:
+            lines = file_path.read_text(encoding="utf-8").splitlines()
+        except PermissionError:
+            die(
+                f"Sem permissão para ler {file_path}. Ajuste com:\n"
+                f"    sudo chown root:$USER {file_path}\n"
+                f"    sudo chmod 640 {file_path}\n"
+                f"    sudo setfacl -m u:$USER:rw {file_path}"
+            )
     prefix = key + "="
     replaced = False
     for i, line in enumerate(lines):
@@ -494,7 +506,15 @@ def set_env(file_path, key, value):
             break
     if not replaced:
         lines.append(f"{key}={value}")
-    file_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:
+        file_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except PermissionError:
+        die(
+            f"Sem permissão para gravar {file_path}. Ajuste com:\n"
+            f"    sudo chown root:$USER {file_path}\n"
+            f"    sudo chmod 640 {file_path}\n"
+            f"    sudo setfacl -m u:$USER:rw {file_path}"
+        )
 
 
 def ensure_browser_api_proxy(compose_env):
@@ -571,6 +591,65 @@ def ensure_backup_dir(compose_env, args):
     if args.backup_dir:
         set_env(compose_env, "LOCAL_BACKUP_DIR", configured)
     ok(f"Backup local: {host_path} (montado em /mnt/backups na API e no worker).")
+
+
+def ensure_update_ops_env(compose_env):
+    """Preenche chaves de ops vazias no .env do --update (nunca sobrescreve).
+
+    Evita regressões vistas em produção: MinIO sem S3_* → 500 na aba Backup;
+    PLANKA_PUBLIC_URL absoluto cross-origin → CSP no Kanban; mirror sem token;
+    PLANKA_BASE_URL relativo → crash do app PLANKA.
+    """
+    defaults = {
+        "S3_ACCESS_KEY": "minioadmin",
+        "S3_SECRET_KEY": "minioadmin",
+        "S3_BUCKET": "mem0-backups",
+        "S3_ENDPOINT": "http://minio:9000",
+        "PLANKA_INTERNAL_URL": "http://planka:1337",
+        "PLANKA_PUBLIC_URL": "/planka",
+        "PLANKA_MIRROR_SYNC": "1",
+        "PLANKA_INTERNAL_ACCESS_TOKEN": "local",
+        "INTERNAL_ACCESS_TOKEN": "local",
+    }
+    filled = []
+    for key, value in defaults.items():
+        if not (read_env(compose_env, key) or "").strip():
+            set_env(compose_env, key, value)
+            filled.append(key)
+
+    base = (read_env(compose_env, "PLANKA_BASE_URL") or "").strip()
+    if not base or base.startswith("/"):
+        nextauth = (read_env(compose_env, "NEXTAUTH_URL") or "").rstrip("/")
+        absolute = f"{nextauth}/planka" if nextauth else "https://memorias.sysmo.com.br/planka"
+        set_env(compose_env, "PLANKA_BASE_URL", absolute)
+        filled.append("PLANKA_BASE_URL")
+
+    if filled:
+        ok("Defaults de ops preenchidos (só chaves vazias): " + ", ".join(filled))
+
+
+def ensure_sidecars_after_update(dc):
+    """Sobe Store (agentregistry) + Kanban (planka) com profile ``sidecars``.
+
+    O ``compose up`` sem profile para containers de serviços com profile
+    inativo — isso derrubava Store/Kanban após --update. Aqui reativamos
+    explicitamente (best-effort; falha não aborta a atualização das memórias).
+    """
+    log("Subindo sidecars Store/Kanban (profile sidecars: agentregistry + planka)")
+    rc = dc(
+        "--profile", "sidecars",
+        "up", "-d", "--no-deps", "--build",
+        "agentregistry", "planka",
+    ).returncode
+    if rc != 0:
+        warn(
+            "Sidecars não subiram (Store/Kanban podem ficar 502). Suba depois com:\n"
+            "    COMPOSE_PROFILES=sidecars docker compose -f docker-compose.scale.yml "
+            "up -d --no-deps --build agentregistry planka"
+        )
+        return False
+    ok("Sidecars agentregistry + planka no ar (ou já estavam).")
+    return True
 
 
 def detect_ollama_models(ollama_url):
@@ -853,7 +932,16 @@ def read_env(file_path, key):
     if not file_path.exists():
         return None
     prefix = key + "="
-    for line in file_path.read_text(encoding="utf-8").splitlines():
+    try:
+        lines = file_path.read_text(encoding="utf-8").splitlines()
+    except PermissionError:
+        die(
+            f"Sem permissão para ler {file_path}. Ajuste com:\n"
+            f"    sudo chown root:$USER {file_path}\n"
+            f"    sudo chmod 640 {file_path}\n"
+            f"    sudo setfacl -m u:$USER:rw {file_path}"
+        )
+    for line in lines:
         s = line.strip()
         if s.startswith(prefix):
             return s[len(prefix):]
@@ -1126,8 +1214,12 @@ def _rebuild_with_retry(dc):
     Em caso de falha, remove as tags conflitantes e tenta mais uma vez. O ``rmi``
     age SOMENTE na imagem (untag/rebuild) — NUNCA toca em volumes ou dados; as
     memórias do Qdrant/SQLite/PostgreSQL permanecem intactas.
+
+    Só reconstrói API/UI (imagem compartilhada pelos workers). Sidecars
+    (agentregistry/planka) ficam em profile ``sidecars`` e não bloqueiam o update.
     """
-    if dc("build", "--pull").returncode == 0:
+    build_services = ("openmemory-mcp", "openmemory-ui")
+    if dc("build", "--pull", *build_services).returncode == 0:
         return True
     warn("O build falhou ao re-taggar a imagem (bug conhecido do image store do "
          "Docker/containerd). Removendo as tags conflitantes e tentando de novo "
@@ -1137,7 +1229,7 @@ def _rebuild_with_retry(dc):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     run(["docker", "builder", "prune", "-f"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return dc("build").returncode == 0
+    return dc("build", *build_services).returncode == 0
 
 
 def run_update(args):
@@ -1169,6 +1261,9 @@ def run_update(args):
     #    (serviço openmemory-backup-worker + volume /mnt/backups são criados pelo
     #    force-recreate a partir do compose atual; aqui só preparamos o diretório).
     ensure_backup_dir(compose_env, args)
+    # Defaults de MinIO/PLANKA se o .env legado deixou chaves vazias (Backup 500,
+    # Store/Kanban 502, CSP no iframe).
+    ensure_update_ops_env(compose_env)
 
     # 0.5 Funcionalidade nova — login Google na UI: se ainda não configurado,
     #     pergunta o necessário (domínio, client id/secret, URL da UI) e gera os
@@ -1204,10 +1299,20 @@ def run_update(args):
     else:
         log("'git pull' pulado (--no-pull): usando o código já presente.")
 
-    # Parar os containers antes de reconstruir as imagens evita erros de tag em
-    # uso/bloqueio (ex.: "AlreadyExists") no image store containerd do Docker.
-    log("Parando os containers em execução para liberar as imagens para rebuild")
-    dc("stop")
+    # Parar só os serviços de aplicação antes do rebuild. NÃO parar Qdrant/
+    # PostgreSQL/Redis/PgBouncer: se o build falhar no meio, o stack de dados
+    # continua no ar (e a salvaguarda de points_count permanece mensurável).
+    # Containers de app não guardam estado próprio — dados vivem nos volumes.
+    app_services = [
+        "openmemory-mcp",
+        "openmemory-write-worker",
+        "openmemory-governance-worker",
+        "openmemory-backup-worker",
+        "openmemory-ui",
+    ]
+    log("Parando serviços de aplicação para liberar imagens no rebuild "
+        "(Qdrant/PostgreSQL/Redis/PgBouncer permanecem no ar)")
+    dc("stop", *app_services)
 
     # 2. Reconstrói as imagens (API + workers + UI) com o código novo ---------
     log("Reconstruindo as imagens (docker compose build --pull)")
@@ -1238,13 +1343,6 @@ def run_update(args):
     # aplicação — que não guardam estado próprio (os dados vivem em Qdrant/Postgres)
     # — sobem na imagem nova. Isso evita reiniciar/recriar o mem0_store (Qdrant)
     # por engano (regra CRITICAL de proteção de memórias).
-    app_services = [
-        "openmemory-mcp",
-        "openmemory-write-worker",
-        "openmemory-governance-worker",
-        "openmemory-backup-worker",
-        "openmemory-ui",
-    ]
     log("Recriando apenas os serviços de aplicação na versão nova "
         "(Qdrant/PostgreSQL/Redis/PgBouncer preservados — sem recreate)")
     if dc("up", "-d", "--no-deps", "--force-recreate", *app_services).returncode != 0:
@@ -1252,9 +1350,12 @@ def run_update(args):
     # Garante o restante do stack no ar (Traefik, observabilidade, MinIO) SEM
     # force-recreate: containers já em execução (inclui os com estado) ficam
     # intocados; --remove-orphans só remove serviços que saíram do compose.
+    # Profile sidecars ativo para NÃO derrubar agentregistry/planka.
     log("Subindo serviços auxiliares (sem recreate dos containers já no ar)")
-    if dc("up", "-d", "--remove-orphans").returncode != 0:
+    if dc("--profile", "sidecars", "up", "-d", "--remove-orphans").returncode != 0:
         die("Falha ao subir os serviços auxiliares do stack.")
+    # Sidecars Store/Kanban: build+up explícito (imagens locais).
+    ensure_sidecars_after_update(dc)
     port = int(args.proxy_port)
 
     # 5. Validação ------------------------------------------------------------
@@ -1292,8 +1393,12 @@ def run_update(args):
   UI/Admin:   http://localhost:3000   (painel em /admin → Backup)
   Proxy MCP:  http://localhost:{port}
   Health:     http://localhost:{port}/health
+  Store:      /store  (agentregistry via /registry-api)
+  Kanban:     /docs   (PLANKA via /planka, same-origin)
   Dados preservados: Qdrant + PostgreSQL (volume mem0_pgdata) + segredos do .env.
-  Backup: configure destino/agenda/retenção e restore na aba Admin → Backup.""")
+  Backup: configure destino/agenda/retenção e restore na aba Admin → Backup.
+  Se o Kanban estiver vazio após um PLANKA novo: POST /admin/planka/resync
+  (espelha Spec → PLANKA; Spec permanece SoT).""")
     return 0
 
 

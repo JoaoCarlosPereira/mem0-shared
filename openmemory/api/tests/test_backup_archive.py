@@ -241,3 +241,16 @@ def test_list_returns_local_archives(tmp_path):
     assert len(infos) == 2
     assert all(i.location == "local" for i in infos)
     assert all(i.points_count == 6 for i in infos)
+
+
+def test_list_survives_s3_failure_when_mirror_enabled(tmp_path):
+    class BoomS3(FakeS3):
+        def list_objects_v2(self, *, Bucket, Prefix):
+            raise RuntimeError("InvalidAccessKeyId")
+
+    arc = _archive(tmp_path, BoomS3(), FakeQdrant(), mirror_s3=True)
+    arc.create()
+    infos = arc.list()
+    assert len(infos) == 1
+    assert infos[0].location == "local"
+    assert arc.status()["archives"] == 1

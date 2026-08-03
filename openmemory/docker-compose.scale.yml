@@ -85,7 +85,7 @@ x-api-common: &api-common
     # Kanban PLANKA sidecar (schema Postgres `planka`; sem Qdrant).
     PLANKA_BASE_URL: ${PLANKA_INTERNAL_URL:-${PLANKA_BASE_URL:-http://planka:1337}}
     PLANKA_INTERNAL_URL: ${PLANKA_INTERNAL_URL:-http://planka:1337}
-    PLANKA_PUBLIC_URL: ${PLANKA_PUBLIC_URL:-http://192.168.2.184:8765/planka}
+    PLANKA_PUBLIC_URL: ${PLANKA_PUBLIC_URL:-/planka}
     PLANKA_MIRROR_SYNC: ${PLANKA_MIRROR_SYNC:-1}
     PLANKA_INTERNAL_ACCESS_TOKEN: ${PLANKA_INTERNAL_ACCESS_TOKEN:-${INTERNAL_ACCESS_TOKEN:-}}
     NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-}
@@ -309,11 +309,15 @@ services:
 
   # Catálogo da loja interna (AgentRegistry / mem0registry). Schema PostgreSQL
   # `agentregistry` no mesmo DB openmemory. NÃO usa Qdrant / mem0_store.
+  # Profile ``sidecars``: build multi-stage (Dockerfile.mem0). O ``install.py
+  # --update`` não rebuilda este serviço (só mcp+ui); suba com:
+  #   COMPOSE_PROFILES=sidecars docker compose -f docker-compose.scale.yml up -d agentregistry planka
   agentregistry:
+    profiles: ["sidecars"]
     container_name: openmemory_agentregistry
     build:
       context: ../integrations/agentregistry
-      dockerfile: docker/Dockerfile.mem0.runtime
+      dockerfile: docker/Dockerfile.mem0
     image: mem0/agentregistry:local
     restart: unless-stopped
     environment:
@@ -348,7 +352,9 @@ services:
 
   # Kanban PLANKA sidecar (vendor em integrations/planka/). Schema PostgreSQL
   # `planka` no mesmo DB openmemory. Anexos em volume dedicado — NÃO usa Qdrant / mem0_store.
+  # Profile ``sidecars``: mesmo motivo do agentregistry — não bloquear install --update.
   planka:
+    profiles: ["sidecars"]
     container_name: openmemory_planka
     build:
       context: ../integrations/planka
@@ -356,7 +362,9 @@ services:
     image: mem0/planka:local
     restart: unless-stopped
     environment:
-      BASE_URL: ${PLANKA_PUBLIC_URL:-${PLANKA_BASE_URL:-http://192.168.2.184:8765/planka}}
+      # BASE_URL do app PLANKA precisa ser URL absoluta (new URL() no custom.js).
+      # O embed da UI usa PLANKA_PUBLIC_URL (caminho relative /planka) via API.
+      BASE_URL: ${PLANKA_BASE_URL:-${NEXTAUTH_URL:-https://memorias.sysmo.com.br}/planka}
       # Postgres direto (migrações Knex); schema isolado via MEM0_PG_SCHEMA + search_path.
       DATABASE_URL: postgres://${POSTGRES_USER:-mem0}:${POSTGRES_PASSWORD:-mem0}@postgres:5432/${POSTGRES_DB:-openmemory}?sslmode=disable
       MEM0_PG_SCHEMA: planka

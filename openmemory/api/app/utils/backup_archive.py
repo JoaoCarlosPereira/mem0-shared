@@ -255,7 +255,12 @@ class BackupArchive:
                     )
                 )
         if self._policy.mirror_s3:
-            infos.extend(self._list_s3())
+            try:
+                infos.extend(self._list_s3())
+            except Exception as exc:
+                # Fail-open: status/list da UI e o worker não podem cair com 500
+                # se o MinIO estiver com credenciais erradas — o local continua válido.
+                logger.warning("backup S3 list failed (using local only): %s", exc)
         return infos
 
     def _list_s3(self) -> List[BackupArchiveInfo]:
