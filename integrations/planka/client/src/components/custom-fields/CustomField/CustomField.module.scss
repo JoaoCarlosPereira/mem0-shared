@@ -1,0 +1,63 @@
+/*!
+ * Copyright (c) 2024 PLANKA Software GmbH
+ * Licensed under the Fair Use License: https://github.com/plankanban/planka/blob/master/LICENSE.md
+ */
+
+:global(#app) {
+  .copyButton {
+    background: #ebeef0;
+    box-shadow: none;
+    border-radius: 3px;
+    box-sizing: content-box;
+    color: #516b7a;
+    display: none;
+    height: 30px;
+    margin: 0;
+    min-height: auto;
+    outline: none;
+    padding: 4px;
+    position: absolute;
+    right: 0;
+    top: 0;
+    transition: background 85ms ease;
+    width: 20px;
+
+    &:hover {
+      background: #dfe3e6;
+      color: #4c4c4c;
+    }
+  }
+
+  .name {
+    color: #6b808c;
+    font-size: 13px;
+    line-height: 1;
+    margin-bottom: 6px;
+    padding: 1px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .value {
+    background: rgba(9, 30, 66, 0.04);
+    border: 1px solid transparent;
+    border-radius: 3px;
+    color: #17394d;
+    line-height: 20px;
+    opacity: 0.45;
+    overflow: hidden;
+    padding: 8px 12px;
+    text-overflow: ellipsis;
+  }
+
+  .valueWrapper {
+    position: relative;
+
+    &:hover:not(:has(input:focus)) {
+      .copyButton {
+        display: block;
+      }
+    }
+  }
+}

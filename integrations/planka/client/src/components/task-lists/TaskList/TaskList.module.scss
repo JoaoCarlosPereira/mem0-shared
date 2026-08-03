@@ -1,0 +1,60 @@
+/*!
+ * Copyright (c) 2024 PLANKA Software GmbH
+ * Licensed under the Fair Use License: https://github.com/plankanban/planka/blob/master/LICENSE.md
+ */
+
+:global(#app) {
+  .count {
+    color: #8c8c8c;
+    font-size: 14px;
+    line-height: 14px;
+  }
+
+  .progress {
+    margin: 0;
+  }
+
+  .progressRow {
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+
+  .progressWrapper {
+    padding: 3px 0;
+    width: 100%;
+  }
+
+  .tasks {
+    min-height: 1px;
+  }
+
+  .taskButton {
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    color: #6b808c;
+    cursor: pointer;
+    display: block;
+    margin-top: 6px;
+    min-height: 54px;
+    outline: none;
+    padding: 8px 12px;
+    position: relative;
+    text-align: left;
+    text-decoration: none;
+    width: 100%;
+
+    &:hover {
+      background: rgba(9, 30, 66, 0.04);
+      color: #092d42;
+    }
+  }
+
+  .taskButtonText {
+    font-size: 14px;
+    position: absolute;
+    top: 12px;
+  }
+}

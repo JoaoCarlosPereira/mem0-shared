@@ -1,0 +1,144 @@
+/*!
+ * Unit tests for Mem0 PLANKA auth bridge (no Sails lift).
+ * Run: npm test -- --grep mem0-auth  (from server/) or:
+ *   node --test test/unit/mem0-auth.test.js
+ */
+
+'use strict';
+
+const assert = require('assert');
+const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const { describe, it } = require('node:test');
+
+const {
+  bearerToken,
+  authenticateMem0Request,
+  authenticateOmtk,
+} = require('../../api/hooks/mem0-auth/lib/validate-auth');
+
+const SECRET = 'unit-test-secret-value-32bytes!!';
+
+describe('mem0-auth validate-auth', () => {
+  it('bearerToken parses Authorization header', () => {
+    assert.strictEqual(bearerToken('Bearer abc'), 'abc');
+    assert.strictEqual(bearerToken('bearer xyz'), 'xyz');
+    assert.strictEqual(bearerToken(''), '');
+    assert.strictEqual(bearerToken(undefined), '');
+  });
+
+  it('bridge disabled when AUTH_JWT_SECRET empty', () => {
+    const r = authenticateMem0Request({
+      authorizationHeader: '',
+      env: { AUTH_JWT_SECRET: '' },
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.method, 'disabled');
+  });
+
+  it('rejects missing token when secret set (fail-closed)', () => {
+    const r = authenticateMem0Request({
+      authorizationHeader: '',
+      env: { AUTH_JWT_SECRET: SECRET },
+    });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.reason, 'missing_token');
+  });
+
+  it('accepts HS256 JWT with sub', () => {
+    const token = jwt.sign({ sub: 'user-1', email: 'a@example.com' }, SECRET, {
+      algorithm: 'HS256',
+    });
+    const r = authenticateMem0Request({
+      authorizationHeader: `Bearer ${token}`,
+      env: { AUTH_JWT_SECRET: SECRET },
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.method, 'jwt');
+    assert.strictEqual(r.subject, 'user-1');
+  });
+
+  it('rejects JWT signed with wrong secret', () => {
+    const token = jwt.sign({ sub: 'user-1' }, 'other-secret-other-secret-xxxx', {
+      algorithm: 'HS256',
+    });
+    const r = authenticateMem0Request({
+      authorizationHeader: `Bearer ${token}`,
+      env: { AUTH_JWT_SECRET: SECRET },
+    });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.reason, 'invalid_jwt');
+  });
+
+  it('rejects JWT without sub', () => {
+    const token = jwt.sign({ email: 'a@example.com' }, SECRET, { algorithm: 'HS256' });
+    const r = authenticateMem0Request({
+      authorizationHeader: `Bearer ${token}`,
+      env: { AUTH_JWT_SECRET: SECRET },
+    });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.reason, 'missing_sub');
+  });
+
+  it('accepts Bearer local when MEM0_AUTH_ALLOW_LEGACY=1', () => {
+    const r = authenticateMem0Request({
+      authorizationHeader: 'Bearer local',
+      env: { AUTH_JWT_SECRET: SECRET, MEM0_AUTH_ALLOW_LEGACY: '1' },
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.method, 'legacy');
+  });
+
+  it('rejects Bearer local when legacy disabled', () => {
+    const r = authenticateMem0Request({
+      authorizationHeader: 'Bearer local',
+      env: { AUTH_JWT_SECRET: SECRET, MEM0_AUTH_ALLOW_LEGACY: '0' },
+    });
+    assert.strictEqual(r.ok, false);
+  });
+
+  it('accepts INTERNAL_ACCESS_TOKEN', () => {
+    const r = authenticateMem0Request({
+      authorizationHeader: 'Bearer super-internal',
+      env: { AUTH_JWT_SECRET: SECRET, INTERNAL_ACCESS_TOKEN: 'super-internal' },
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.method, 'internal');
+  });
+
+  it('flags omtk_ for async lookup', () => {
+    const r = authenticateMem0Request({
+      authorizationHeader: 'Bearer omtk_abc',
+      env: { AUTH_JWT_SECRET: SECRET },
+    });
+    assert.strictEqual(r.needsOmtkLookup, true);
+    assert.strictEqual(r.token, 'omtk_abc');
+  });
+
+  it('authenticateOmtk accepts valid non-revoked token', async () => {
+    const raw = 'omtk_testtoken';
+    const digest = crypto.createHash('sha256').update(raw, 'utf8').digest('hex');
+    const db = {
+      async query(sql, params) {
+        assert.ok(sql.includes('agent_tokens'));
+        assert.strictEqual(params[0], digest);
+        return { rows: [{ user_id: 'agent-9', revoked_at: null }] };
+      },
+    };
+    const r = await authenticateOmtk(raw, db);
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.method, 'omtk_');
+    assert.strictEqual(r.subject, 'agent-9');
+  });
+
+  it('authenticateOmtk rejects revoked token', async () => {
+    const db = {
+      async query() {
+        return { rows: [{ user_id: 'agent-9', revoked_at: new Date() }] };
+      },
+    };
+    const r = await authenticateOmtk('omtk_x', db);
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.reason, 'omtk_invalid');
+  });
+});

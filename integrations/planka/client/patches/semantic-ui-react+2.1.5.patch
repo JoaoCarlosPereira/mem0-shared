@@ -1,0 +1,144 @@
+diff --git a/node_modules/semantic-ui-react/dist/es/lib/doesNodeContainClick.js b/node_modules/semantic-ui-react/dist/es/lib/doesNodeContainClick.js
+index 6d06078..e22d4f0 100644
+--- a/node_modules/semantic-ui-react/dist/es/lib/doesNodeContainClick.js
++++ b/node_modules/semantic-ui-react/dist/es/lib/doesNodeContainClick.js
+@@ -17,13 +17,7 @@ var doesNodeContainClick = function doesNodeContainClick(node, e) {
+   if (_some([e, node], _isNil)) return false; // if there is an e.target and it is in the document, use a simple node.contains() check
+ 
+   if (e.target) {
+-    _invoke(e.target, 'setAttribute', 'data-suir-click-target', true);
+-
+-    if (document.querySelector('[data-suir-click-target=true]')) {
+-      _invoke(e.target, 'removeAttribute', 'data-suir-click-target');
+-
+-      return node.contains(e.target);
+-    }
++    return node.contains(e.target);
+   } // Below logic handles cases where the e.target is no longer in the document.
+   // The result of the click likely has removed the e.target node.
+   // Instead of node.contains(), we'll identify the click by X/Y position.
+diff --git a/node_modules/semantic-ui-react/dist/es/modules/Dropdown/Dropdown.js b/node_modules/semantic-ui-react/dist/es/modules/Dropdown/Dropdown.js
+index 1cc1bab..0e178ee 100644
+--- a/node_modules/semantic-ui-react/dist/es/modules/Dropdown/Dropdown.js
++++ b/node_modules/semantic-ui-react/dist/es/modules/Dropdown/Dropdown.js
+@@ -342,7 +342,7 @@ var Dropdown = /*#__PURE__*/function (_Component) {
+         return;
+       }
+ 
+-      if (searchQuery.length >= minCharacters || minCharacters === 1) {
++      if (searchQuery.length >= minCharacters || minCharacters === 0) {
+         _this.open(e);
+ 
+         return;
+@@ -480,7 +480,7 @@ var Dropdown = /*#__PURE__*/function (_Component) {
+       } // close search dropdown if search query is too small
+ 
+ 
+-      if (open && minCharacters !== 1 && newQuery.length < minCharacters) _this.close();
++      if (open && minCharacters !== 0 && newQuery.length < minCharacters) _this.close();
+     };
+ 
+     _this.handleKeyDown = function (e) {
+@@ -1048,7 +1048,7 @@ var Dropdown = /*#__PURE__*/function (_Component) {
+ 
+     if (!prevState.focus && this.state.focus) {
+       if (!this.isMouseDown) {
+-        var openable = !search || search && minCharacters === 1 && !this.state.open;
++        var openable = !search || search && minCharacters === 0 && !this.state.open;
+         if (openOnFocus && openable) this.open();
+       }
+     } else if (prevState.focus && !this.state.focus) {
+@@ -1436,7 +1436,7 @@ Dropdown.defaultProps = {
+   closeOnEscape: true,
+   deburr: false,
+   icon: 'dropdown',
+-  minCharacters: 1,
++  minCharacters: 0,
+   noResultsMessage: 'No results found.',
+   openOnFocus: true,
+   renderLabel: renderItemContent,
+diff --git a/node_modules/semantic-ui-react/dist/es/modules/Modal/Modal.js b/node_modules/semantic-ui-react/dist/es/modules/Modal/Modal.js
+index a39f694..c9c616a 100644
+--- a/node_modules/semantic-ui-react/dist/es/modules/Modal/Modal.js
++++ b/node_modules/semantic-ui-react/dist/es/modules/Modal/Modal.js
+@@ -20,6 +20,7 @@ import ModalDescription from './ModalDescription';
+ import ModalDimmer from './ModalDimmer';
+ import ModalHeader from './ModalHeader';
+ import { canFit, getLegacyStyles, isLegacy } from './utils';
++var IS_WINDOWS = navigator.platform.startsWith('Win');
+ 
+ /**
+  * A modal displays content that temporarily blocks interactions with the main view of a site.
+@@ -41,6 +42,7 @@ var Modal = /*#__PURE__*/function (_Component) {
+     _this.ref = /*#__PURE__*/createRef();
+     _this.dimmerRef = /*#__PURE__*/createRef();
+     _this.latestDocumentMouseDownEvent = null;
++    _this.latestWindowFocusTimeOnWindows = null;
+ 
+     _this.getMountNode = function () {
+       return isBrowser() ? _this.props.mountNode || document.body : null;
+@@ -68,11 +70,17 @@ var Modal = /*#__PURE__*/function (_Component) {
+       }));
+     };
+ 
++    _this.handleWindowFocusOnWindows = function () {
++      _this.latestWindowFocusTimeOnWindows = Date.now();
++    };
++
+     _this.handleDocumentMouseDown = function (e) {
++      if (_this.latestWindowFocusTimeOnWindows && Date.now() - _this.latestWindowFocusTimeOnWindows < 50) return;
+       _this.latestDocumentMouseDownEvent = e;
+     };
+ 
+     _this.handleDocumentClick = function (e) {
++      if (!_this.latestDocumentMouseDownEvent) return;
+       var closeOnDimmerClick = _this.props.closeOnDimmerClick;
+       var currentDocumentMouseDownEvent = _this.latestDocumentMouseDownEvent;
+       _this.latestDocumentMouseDownEvent = null;
+@@ -116,6 +124,13 @@ var Modal = /*#__PURE__*/function (_Component) {
+ 
+       _this.setPositionAndClassNames();
+ 
++      if (IS_WINDOWS) {
++        eventStack.sub('focus', _this.handleWindowFocusOnWindows, {
++          pool: eventPool,
++          target: window
++        });
++      }
++
+       eventStack.sub('mousedown', _this.handleDocumentMouseDown, {
+         pool: eventPool,
+         target: _this.dimmerRef.current
+@@ -131,6 +146,14 @@ var Modal = /*#__PURE__*/function (_Component) {
+     _this.handlePortalUnmount = function (e) {
+       var eventPool = _this.props.eventPool;
+       cancelAnimationFrame(_this.animationRequestId);
++
++      if (IS_WINDOWS) {
++        eventStack.unsub('focus', _this.handleWindowFocusOnWindows, {
++          pool: eventPool,
++          target: window
++        });
++      }
++
+       eventStack.unsub('mousedown', _this.handleDocumentMouseDown, {
+         pool: eventPool,
+         target: _this.dimmerRef.current
+diff --git a/node_modules/semantic-ui-react/src/lib/doesNodeContainClick.js b/node_modules/semantic-ui-react/src/lib/doesNodeContainClick.js
+index d1ae271..43e1170 100644
+--- a/node_modules/semantic-ui-react/src/lib/doesNodeContainClick.js
++++ b/node_modules/semantic-ui-react/src/lib/doesNodeContainClick.js
+@@ -14,12 +14,7 @@ const doesNodeContainClick = (node, e) => {
+ 
+   // if there is an e.target and it is in the document, use a simple node.contains() check
+   if (e.target) {
+-    _.invoke(e.target, 'setAttribute', 'data-suir-click-target', true)
+-
+-    if (document.querySelector('[data-suir-click-target=true]')) {
+-      _.invoke(e.target, 'removeAttribute', 'data-suir-click-target')
+-      return node.contains(e.target)
+-    }
++    return node.contains(e.target)
+   }
+ 
+   // Below logic handles cases where the e.target is no longer in the document.

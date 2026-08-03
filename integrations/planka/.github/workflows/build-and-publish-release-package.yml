@@ -1,0 +1,58 @@
+name: Build and Publish Release Package
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build-and-publish-release-package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install server dependencies
+        run: npm install --omit=prod --ignore-scripts
+        working-directory: ./server
+
+      - name: Build server
+        run: npm run build
+        working-directory: ./server
+
+      - name: Install client dependencies
+        run: npm install --omit=dev
+        working-directory: ./client
+
+      - name: Build client
+        run: INDEX_FORMAT=ejs DISABLE_ESLINT_PLUGIN=true npm run build
+        working-directory: ./client
+
+      - name: Include licenses into dist
+        run: |
+          mv LICENSE.md server/dist
+          mv "LICENSES/PLANKA Community License DE.md" server/dist/LICENSE_DE.md
+
+      - name: Include built client into dist
+        run: |
+          mv ../../client/dist/* public
+          mv public/index.ejs views
+        working-directory: ./server/dist
+
+      - name: Create release package
+        run: |
+          mv dist planka
+          zip -r planka-prebuild.zip planka
+        working-directory: ./server
+
+      - name: Publish release package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload ${{ github.event.release.tag_name }} planka-prebuild.zip
+        working-directory: ./server

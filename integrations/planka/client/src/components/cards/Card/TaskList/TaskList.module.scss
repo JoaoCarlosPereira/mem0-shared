@@ -1,0 +1,61 @@
+/*!
+ * Copyright (c) 2024 PLANKA Software GmbH
+ * Licensed under the Fair Use License: https://github.com/plankanban/planka/blob/master/LICENSE.md
+ */
+
+:global(#app) {
+  .count {
+    color: #888;
+    font-size: 12px;
+    line-height: 12px;
+
+    &:after {
+      content: "";
+      opacity: 0.4;
+    }
+  }
+
+  .countOpenable {
+    &:after {
+      margin-left: 2px;
+    }
+
+    &:hover {
+      opacity: 0.75;
+    }
+  }
+
+  .countOpened:after {
+    background: url("data:image/gif;base64,R0lGODlhCwALAJEAAAAAAP///xUVFf///yH5BAEAAAMALAAAAAALAAsAAAIPnI+py+0/hJzz0IruwjsVADs=") no-repeat center right;
+    padding: 6px 6px 0px;
+  }
+
+  .countClosed:after {
+    background: url("data:image/gif;base64,R0lGODlhCwALAJEAAAAAAP///xUVFf///yH5BAEAAAMALAAAAAALAAsAAAIRnC2nKLnT4or00Puy3rx7VQAAOw==") no-repeat center right;
+    padding: 0 6px 6px;
+  }
+
+  .progress {
+    margin: 0;
+  }
+
+  .progressRow {
+    display: flex;
+    gap: 8px;
+    justify-content: space-between;
+    margin: 0 -8px;
+    padding: 0px 8px 8px;
+  }
+
+  .progressWrapper {
+    padding: 3px 0;
+    width: 100%;
+  }
+
+  .tasks {
+    color: #333;
+    list-style: none;
+    margin: -2px 0 0;
+    padding-left: 0;
+  }
+}

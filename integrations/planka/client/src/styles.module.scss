@@ -1,0 +1,742 @@
+/*!
+ * Copyright (c) 2024 PLANKA Software GmbH
+ * Licensed under the Fair Use License: https://github.com/plankanban/planka/blob/master/LICENSE.md
+ */
+
+:global {
+  #app {
+    background: #22252a;
+    overflow-x: auto;
+
+    &::-webkit-scrollbar {
+      height: auto;
+    }
+
+    .mentions-input {
+      &__highlighter {
+        line-height: 1.4;
+        padding: 8px 12px;
+      }
+
+      &__suggestions {
+        border: 1px solid #d4d4d5;
+        border-radius: 3px;
+        border-width: 0;
+        box-shadow: 0 8px 16px -4px rgba(9, 45, 66, 0.25),
+          0 0 0 1px rgba(9, 45, 66, 0.08);
+        max-height: 200px;
+        overflow-y: auto;
+
+        &__item {
+          padding: 8px 12px;
+
+          &--focused {
+            background-color: rgba(0, 0, 0, 0.05);
+            color: rgba(0, 0, 0, 0.95);
+          }
+        }
+      }
+    }
+
+    .react-datepicker {
+      border: 0;
+      color: #444444;
+      font-size: 14px;
+      font-family: "Nunitoga", "Helvetica Neue", Arial, Helvetica, sans-serif;
+      padding-bottom: 8px;
+    }
+
+    .react-datepicker__current-month,
+    .react-datepicker-time__header {
+      color: #444;
+      font-weight: normal;
+      font-size: 14px;
+      line-height: 32px;
+      padding-bottom: 4px;
+      text-transform: capitalize;
+    }
+
+    .react-datepicker__header {
+      background: #fff;
+      border: 0;
+      padding: 0;
+    }
+
+    .react-datepicker__day-name,
+    .react-datepicker__day,
+    .react-datepicker__time-name {
+      color: #444;
+      width: 40px;
+      margin: 0;
+      border-style: solid;
+      border-width: 0 0 1px 1px;
+      border-color: rgba(34, 36, 38, 0.15);
+    }
+
+    .react-datepicker__day--selected,
+    .react-datepicker__day--in-selecting-range,
+    .react-datepicker__day--in-range {
+      border-radius: 0;
+      color: #fff;
+    }
+
+    .react-datepicker__day-names,
+    .react-datepicker__week {
+      border-right: 1px solid #c2ccd1;
+    }
+
+    .react-datepicker__day-names {
+      background: #ebeef0;
+      border-top: 1px solid #c2ccd1;
+    }
+
+    .react-datepicker__day--outside-month {
+      color: rgba(68, 68, 68, 0.3);
+    }
+
+    .react-datepicker__month {
+      margin: 8px 0 0;
+    }
+
+    .react-datepicker__navigation--previous,
+    .react-datepicker__navigation--next {
+      outline: none;
+    }
+
+    .react-datepicker__navigation--previous {
+      left: 0;
+    }
+
+    .react-datepicker__navigation--next {
+      right: 0;
+    }
+
+    .react-datepicker__navigation {
+      top: 0;
+    }
+
+    .react-datepicker__day {
+      outline: none;
+
+      &:hover {
+        border-radius: 0;
+      }
+    }
+
+    .pswp .pswp__img--placeholder {
+      display: none !important;
+    }
+
+    .ui.input.error > input {
+      background-color: #fff6f6 !important;
+      border-color: #e0b4b4 !important;
+      color: #9f3a38 !important;
+      -webkit-box-shadow: none !important;
+      box-shadow: none !important;
+    }
+
+    .ui.page.dimmer {
+      -webkit-perspective: none;
+      perspective: none;
+    }
+  }
+
+  #root {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
+  .g-root {
+    --g-font-family-monospace: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace !important;
+    --g-font-family-sans: "Nunitoga", "Helvetica Neue", Arial, Helvetica, sans-serif !important;
+
+    .g-md-settings-content__separator,
+    .g-md-settings-content__toolbar,
+    .g-md-settings-content__version {
+      display: none;
+    }
+  }
+
+  .yfm {
+    --yfm-color-accent: #2185d0 !important;
+    --yfm-color-link: #1e70bf !important;
+    --yfm-color-text: #17394d !important;
+    --yfm-font-family-monospace: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace !important;
+    --yfm-font-family-sans: "Nunitoga", "Helvetica Neue", Arial, Helvetica, sans-serif !important;
+
+    font-size: 1em !important;
+
+    a:hover {
+      color: var(--yfm-color-link) !important;
+      text-decoration: underline;
+    }
+
+    h1,
+    h2,
+    h3,
+    h4,
+    h5,
+    h6 {
+      line-height: 1.25 !important;
+    }
+
+    h1 {
+      font-size: 2em !important;
+    }
+
+    h2 {
+      font-size: 1.5em !important;
+    }
+
+    h3 {
+      font-size: 1.25em !important;
+    }
+
+    h4 {
+      font-size: 1em !important;
+    }
+
+    h5 {
+      font-size: .875em !important;
+    }
+
+    h6 {
+      font-size: .85em !important;
+    }
+
+    .mention {
+      color: #0366d6;
+      background-color: #f1f8ff;
+      border-radius: 3px;
+      padding: 0 2px;
+    }
+
+    .yfm-clipboard:hover {
+      .yfm-clipboard-button {
+        min-height: auto;
+        min-width: auto;
+      }
+    }
+
+    .yfm-note {
+      min-height: 60px;
+    }
+  }
+
+  .hljs {
+    display: block;
+    overflow-x: auto;
+    padding: .5em;
+    color: #333;
+    background: #f8f8f8
+  }
+
+  .hljs-comment,
+  .hljs-quote {
+    color: #998;
+    font-style: italic
+  }
+
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-subst {
+    color: #333;
+    font-weight: bold;
+  }
+
+  .hljs-literal,
+  .hljs-number,
+  .hljs-tag .hljs-attr,
+  .hljs-template-variable,
+  .hljs-variable {
+    color: teal
+  }
+
+  .hljs-doctag,
+  .hljs-string {
+    color: #d14
+  }
+
+  .hljs-section,
+  .hljs-selector-id,
+  .hljs-title {
+    color: #900;
+    font-weight: bold;
+  }
+
+  .hljs-subst {
+    font-weight: normal
+  }
+
+  .hljs-class .hljs-title,
+  .hljs-type {
+    color: #458;
+    font-weight: bold;
+  }
+
+  .hljs-attribute,
+  .hljs-name,
+  .hljs-tag {
+    color: navy;
+    font-weight: normal
+  }
+
+  .hljs-link,
+  .hljs-regexp {
+    color: #009926
+  }
+
+  .hljs-bullet,
+  .hljs-symbol {
+    color: #990073
+  }
+
+  .hljs-built_in,
+  .hljs-builtin-name {
+    color: #0086b3
+  }
+
+  .hljs-meta {
+    color: #999;
+    font-weight: bold;
+  }
+
+  .hljs-deletion {
+    background: #fdd
+  }
+
+  .hljs-addition {
+    background: #dfd
+  }
+
+  .hljs-emphasis {
+    font-style: italic
+  }
+
+  .hljs-strong {
+    font-weight: bold;
+  }
+
+  ::-webkit-scrollbar {
+    height: 10px;
+    width: 10px;
+    -webkit-appearance: none;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 0px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 5px;
+    cursor: pointer;
+    transition: color 0.2s ease;
+    -webkit-transition: color 0.2s ease;
+  }
+
+  ::-webkit-scrollbar-thumb:window-inactive {
+    background: rgba(0, 0, 0, 0.15);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(128, 135, 139, 0.8);
+  }
+}
+
+:global(#app) {
+  &.dragging > * {
+    pointer-events: none;
+  }
+
+  &.dragScrolling > * {
+    pointer-events: none;
+    user-select: none;
+  }
+
+  /* Backgrounds */
+
+  .backgroundMuddyGrey {
+    background: #69655a !important;
+  }
+
+  .backgroundAutumnLeafs {
+    background: #c9b037 !important;
+  }
+
+  .backgroundMorningSky {
+    background: #52b9d5 !important;
+  }
+
+  .backgroundAntiqueBlue {
+    background: #6c99bb !important;
+  }
+
+  .backgroundAntiqueBlueSoft {
+    background: #c7dcee !important;
+  }
+
+  .backgroundEggYellow {
+    background: #f9c423 !important;
+  }
+
+  .backgroundDesertSand {
+    background: #fad371 !important;
+  }
+
+  .backgroundDarkGranite {
+    background: #8b8680 !important;
+  }
+
+  .backgroundDarkGraniteSoft {
+    background: #d8d6d3 !important;
+  }
+
+  .backgroundFreshSalad {
+    background: #ced85e !important;
+  }
+
+  .backgroundLagoonBlue {
+    background: #109dc0 !important;
+  }
+
+  .backgroundLagoonBlueSoft {
+    background: #bfe3ee !important;
+  }
+
+  .backgroundMidnightBlue {
+    background: #0a63a0 !important;
+  }
+
+  .backgroundLightOrange {
+    background: #fdae5f !important;
+  }
+
+  .backgroundPumpkinOrange {
+    background: #ed9223 !important;
+  }
+
+  .backgroundPumpkinOrangeSoft {
+    background: #f6d2a8 !important;
+  }
+
+  .backgroundLightConcrete {
+    background: #afb0a4 !important;
+  }
+
+  .backgroundSunnyGrass {
+    background: #beca02 !important;
+  }
+
+  .backgroundNavyBlue {
+    background: #1d7299 !important;
+  }
+
+  .backgroundLilacEyes {
+    background: #406cbd !important;
+  }
+
+  .backgroundApricotRed {
+    background: #fc736c !important;
+  }
+
+  .backgroundOrangePeel {
+    background: #de692f !important;
+  }
+
+  .backgroundOrangePeelSoft {
+    background: #f2c6ae !important;
+  }
+
+  .backgroundSilverGlint {
+    background: linear-gradient(160deg, #adadad, #92908d, #e2e2e2, #928e8e, #726f6e) !important;
+  }
+
+  .backgroundBrightMoss {
+    background: #96b352 !important;
+  }
+
+  .backgroundBrightMossSoft {
+    background: #d7e4b6 !important;
+  }
+
+  .backgroundDeepOcean {
+    background: #004c70 !important;
+  }
+
+  .backgroundSummerSky {
+    background: #5d9cec !important;
+  }
+
+  .backgroundBerryRed {
+    background: #e83855 !important;
+  }
+
+  .backgroundBerryRedSoft {
+    background: #f6c6cf !important;
+  }
+
+  .backgroundLightCocoa {
+    background: #a85540 !important;
+  }
+
+  .backgroundGreyStone {
+    background: #aab2bd !important;
+  }
+
+  .backgroundTankGreen {
+    background: #8aa177 !important;
+  }
+
+  .backgroundCoralGreen {
+    background: #2b6a6c !important;
+  }
+
+  .backgroundSugarPlum {
+    background: #7e86c7 !important;
+  }
+
+  .backgroundPinkTulip {
+    background: #e34f7c !important;
+  }
+
+  .backgroundPinkTulipSoft {
+    background: #f2c1d3 !important;
+  }
+
+  .backgroundShadyRust {
+    background: #87564a !important;
+  }
+
+  .backgroundWetRock {
+    background: #83949b !important;
+  }
+
+  .backgroundWetMoss {
+    background: #4a8753 !important;
+  }
+
+  .backgroundTurquoiseSea {
+    background: #00858a !important;
+  }
+
+  .backgroundTurquoiseSeaSoft {
+    background: #b7e1e3 !important;
+  }
+
+  .backgroundLavenderFields {
+    background: #b287bd !important;
+  }
+
+  .backgroundPiggyRed {
+    background: #f97394 !important;
+  }
+
+  .backgroundLightMud {
+    background: #c7a57a !important;
+  }
+
+  .backgroundLightMudSoft {
+    background: #e6d4bc !important;
+  }
+
+  .backgroundGunMetal {
+    background: #4f6573 !important;
+  }
+
+  .backgroundModernGreen {
+    background: #77ce87 !important;
+  }
+
+  .backgroundFrenchCoast {
+    background: #00b4b1 !important;
+  }
+
+  .backgroundSweetLilac {
+    background: #975298 !important;
+  }
+
+  .backgroundRedBurgundy {
+    background: #ad5f7d !important;
+  }
+
+  .backgroundPirateGold {
+    background: linear-gradient(160deg, #a54e07, #b47e11, #fef1a2, #bc881b, #a54e07) !important;
+  }
+
+  .backgroundOceanDive {
+    background: linear-gradient(to top, #062e53, #1ad0e0) !important;
+  }
+
+  .backgroundOldLime {
+    background: linear-gradient(to bottom, #7b920a, #add100) !important;
+  }
+
+  .backgroundTzepeschStyle {
+    background: linear-gradient(to bottom, #190a05, #870000) !important;
+  }
+
+  .backgroundJungleMesh {
+    background: linear-gradient(to bottom, #727a17, #414d0b) !important;
+  }
+
+  .backgroundBlueDanube {
+    background: radial-gradient(circle, rgba(9, 9, 121, 1) 0%, rgba(2, 0, 36, 1) 0%, rgba(2, 29, 66, 1) 0%, rgba(2, 41, 78, 1) 0%, rgba(2, 57, 95, 1) 0%, rgba(1, 105, 144, 1) 100%, rgba(1, 151, 192, 1) 100%, rgba(0, 212, 255, 1) 100%) !important;
+  }
+
+  .backgroundSundownStripe {
+    background: linear-gradient(22deg, rgba(31, 30, 30, 1) 0%, rgba(255, 128, 0, 1) 10%, rgba(255, 128, 0, 1) 41%, rgba(0, 0, 0, 1) 41%, rgba(0, 102, 204, 1) 89%) !important;
+  }
+
+  .backgroundMagicalDawn {
+    background: radial-gradient(circle, rgba(0, 107, 141, 1) 0%, rgba(0, 69, 91, 1) 90%) !important;
+  }
+
+  .backgroundStrawberryDust {
+    background: linear-gradient(180deg, rgba(172, 79, 115, 1) 0%, rgba(254, 158, 150, 1) 66%) !important;
+  }
+
+  .backgroundPurpleRose {
+    background: linear-gradient(128deg, rgba(116, 43, 62, 1) 19%, rgba(192, 71, 103, 1) 90%) !important;
+  }
+
+  .backgroundSunScream {
+    background: linear-gradient(112deg, rgba(251, 221, 19, 1) 19%, rgba(255, 153, 1, 1) 62%) !important;
+  }
+
+  .backgroundWarmRust {
+    background: linear-gradient(141deg, rgba(255, 90, 8, 1) 0%, rgba(88, 0, 0, 1) 96%) !important;
+  }
+
+  .backgroundSkyChange {
+    background: linear-gradient(135deg, rgba(0, 52, 89, 1) 0%, rgba(0, 168, 232, 1) 90%) !important;
+  }
+
+  .backgroundGreenEyes {
+    background: linear-gradient(138deg, rgba(19, 170, 82, 1) 0%, rgba(0, 102, 43, 1) 90%) !important;
+  }
+
+  .backgroundBlueXchange {
+    background: radial-gradient(circle, #294f83, #162c4a) !important;
+  }
+
+  .backgroundBloodOrange {
+    background: linear-gradient(360deg, #d64759 10%, #da7352 360%) !important;
+  }
+
+  .backgroundSourPeel {
+    background: linear-gradient(360deg, #fd6f46 10%, #fb9832 360%) !important;
+  }
+
+  .backgroundGreenNinja {
+    background: linear-gradient(360deg, #224e4d 10%, #083023 360%) !important;
+  }
+
+  .backgroundIceBlue {
+    background: linear-gradient(360deg, #38aecc 10%, #347fb9 360%) !important;
+  }
+
+  .backgroundEpicGreen {
+    background: linear-gradient(360deg, #01a99c 10%, #0698b1 360%) !important;
+  }
+
+  .backgroundAlgaeGreen {
+    background: radial-gradient(circle farthest-corner at 10% 20%, rgba(0, 95, 104, 1) 0%, rgba(15, 156, 168, 1) 90%) !important;
+  }
+
+  .backgroundCoralReef {
+    background: linear-gradient(110.3deg, rgba(238, 179, 123, 1) 8.7%, rgba(216, 103, 77, 1) 47.5%, rgba(114, 43, 54, 1) 89.1%) !important;
+  }
+
+  .backgroundSteelGrey {
+    background: radial-gradient(circle farthest-corner at -4% -12.9%, rgba(74, 98, 110, 1) 0.3%, rgba(30, 33, 48, 1) 90.2%) !important;
+  }
+
+  .backgroundHeatWaves {
+    background: linear-gradient(to right, #12c2e9, #c471ed, #f64f59) !important;
+  }
+
+  .backgroundWowBlue {
+    background: linear-gradient(111.8deg, rgba(0, 104, 155, 1) 19.8%, rgba(0, 173, 239, 1) 92.1%) !important;
+  }
+
+  .backgroundVelvetLounge {
+    background: radial-gradient(circle farthest-corner at 10% 20%, rgba(151, 10, 130, 1) 0%, rgba(33, 33, 33, 1) 100.2%) !important;
+  }
+
+  .backgroundLagoon {
+    background: radial-gradient(circle farthest-corner at 10% 20%, rgba(0, 107, 141, 1) 0%, rgba(0, 69, 91, 1) 90%) !important;
+  }
+
+  .backgroundPurpleRain {
+    background: linear-gradient(91.7deg, rgba(50, 25, 79, 1) -4.3%, rgba(122, 101, 149, 1) 101.8%) !important;
+  }
+
+  .backgroundBlueSteel {
+    background: linear-gradient(to top, #09203f 0%, #537895 100%) !important;
+  }
+
+  .backgroundBlueishCurve {
+    background: linear-gradient(171.8deg, rgba(5, 111, 146, 1) 13.5%, rgba(6, 57, 84, 1) 78.6%) !important;
+  }
+
+  .backgroundPrismLight {
+    background: linear-gradient(111.7deg, rgba(251, 198, 6, 1) 2.4%, rgba(224, 82, 95, 1) 28.3%, rgba(194, 78, 154, 1) 46.2%, rgba(32, 173, 190, 1) 79.4%, rgba(22, 158, 95, 1) 100.2%) !important;
+  }
+
+  .backgroundTheBow {
+    background: radial-gradient(circle farthest-corner at -8.9% 51.2%, rgba(255, 124, 0, 1) 0%, rgba(255, 124, 0, 1) 15.9%, rgba(255, 163, 77, 1) 15.9%, rgba(255, 163, 77, 1) 24.4%, rgba(19, 30, 37, 1) 24.5%, rgba(19, 30, 37, 1) 66%) !important;
+  }
+
+  .backgroundGreenMist {
+    background: linear-gradient(180.5deg, rgba(0, 128, 128, 1) 8.5%, rgba(174, 206, 100, 1) 118.2%) !important;
+  }
+
+  .backgroundRedCurtain {
+    background: radial-gradient(circle at 2.9% 14.3%, rgba(255, 0, 102, 1) 0%, rgba(80, 5, 35, 1) 100.7%) !important;
+  }
+
+  /* Colors */
+
+  .colorBerryRed {
+    color: #e83855 !important;
+  }
+
+  .colorPumpkinOrange {
+    color: #ed9223 !important;
+  }
+
+  .colorLagoonBlue {
+    color: #109dc0 !important;
+  }
+
+  .colorPinkTulip {
+    color: #e34f7c !important;
+  }
+
+  .colorLightMud {
+    color: #c7a57a !important;
+  }
+
+  .colorOrangePeel {
+    color: #de692f !important;
+  }
+
+  .colorBrightMoss {
+    color: #96b352 !important;
+  }
+
+  .colorAntiqueBlue {
+    color: #6c99bb !important;
+  }
+
+  .colorDarkGranite {
+    color: #8b8680 !important;
+  }
+
+  .colorTurquoiseSea {
+    color: #00858a !important;
+  }
+}

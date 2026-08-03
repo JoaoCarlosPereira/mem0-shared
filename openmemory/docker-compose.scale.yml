@@ -82,6 +82,9 @@ x-api-common: &api-common
     # Loja interna (AgentRegistry) — hostname interno do Compose, sem Traefik.
     AGENT_REGISTRY_BASE_URL: ${AGENT_REGISTRY_BASE_URL:-http://agentregistry:8080}
     AGENT_REGISTRY_INTERNAL_URL: ${AGENT_REGISTRY_INTERNAL_URL:-http://agentregistry:8080}
+    # Kanban PLANKA sidecar (schema Postgres `planka`; sem Qdrant).
+    PLANKA_BASE_URL: ${PLANKA_BASE_URL:-http://planka:1337}
+    PLANKA_INTERNAL_URL: ${PLANKA_INTERNAL_URL:-http://planka:1337}
     # Object store para backup/cold tier (task_02/07 / ADR-003).
     S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
     S3_BUCKET: ${S3_BUCKET:-mem0-backups}
@@ -331,6 +334,52 @@ services:
       - traefik.http.routers.agentregistry.middlewares=agentregistry-strip
       - traefik.http.services.agentregistry.loadbalancer.server.port=8080
 
+  # Kanban PLANKA sidecar (vendor em integrations/planka/). Schema PostgreSQL
+  # `planka` no mesmo DB openmemory. Anexos em volume dedicado — NÃO usa Qdrant / mem0_store.
+  planka:
+    container_name: openmemory_planka
+    build:
+      context: ../integrations/planka
+      dockerfile: docker/Dockerfile.mem0.runtime
+    image: mem0/planka:local
+    restart: unless-stopped
+    environment:
+      BASE_URL: ${PLANKA_BASE_URL:-http://planka:1337}
+      # Postgres direto (migrações Knex); schema isolado via MEM0_PG_SCHEMA + search_path.
+      DATABASE_URL: postgres://${POSTGRES_USER:-mem0}:${POSTGRES_PASSWORD:-mem0}@postgres:5432/${POSTGRES_DB:-openmemory}?sslmode=disable
+      MEM0_PG_SCHEMA: planka
+      SECRET_KEY: ${PLANKA_SECRET_KEY:-${NEXTAUTH_SECRET:-${AUTH_JWT_SECRET:-}}}
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-${NEXTAUTH_SECRET:-}}
+      MEM0_AUTH_ALLOW_LEGACY: ${MEM0_AUTH_ALLOW_LEGACY:-1}
+      INTERNAL_ACCESS_TOKEN: ${PLANKA_INTERNAL_ACCESS_TOKEN:-${INTERNAL_ACCESS_TOKEN:-}}
+      TRUST_PROXY: "true"
+      DEFAULT_ADMIN_EMAIL: ${PLANKA_DEFAULT_ADMIN_EMAIL:-}
+      DEFAULT_ADMIN_PASSWORD: ${PLANKA_DEFAULT_ADMIN_PASSWORD:-}
+      DEFAULT_ADMIN_NAME: ${PLANKA_DEFAULT_ADMIN_NAME:-Mem0 Admin}
+      DEFAULT_ADMIN_USERNAME: ${PLANKA_DEFAULT_ADMIN_USERNAME:-admin}
+    volumes:
+      - planka_attachments:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:1337/ >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+    expose:
+      - "1337"
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.planka.rule=PathPrefix(`/planka-api`)
+      - traefik.http.routers.planka.entrypoints=web
+      - traefik.http.routers.planka.priority=90
+      - traefik.http.middlewares.planka-strip.stripprefix.prefixes=/planka-api
+      - traefik.http.routers.planka.middlewares=planka-strip
+      - traefik.http.services.planka.loadbalancer.server.port=1337
+
 volumes:
   mem0_storage:
+  planka_attachments:
 

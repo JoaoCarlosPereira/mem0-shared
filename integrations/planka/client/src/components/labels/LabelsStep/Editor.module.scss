@@ -1,0 +1,67 @@
+/*!
+ * Copyright (c) 2024 PLANKA Software GmbH
+ * Licensed under the Fair Use License: https://github.com/plankanban/planka/blob/master/LICENSE.md
+ */
+
+:global(#app) {
+  .colorButton {
+    margin: 0;
+    position: relative;
+
+    &:hover {
+      opacity: 0.9;
+    }
+  }
+
+  .colorButtonActive:before {
+    color: #ffffff;
+    content: "Г";
+    font-size: 16px;
+    line-height: 32px;
+    position: absolute;
+    right: calc(50% - 5px);
+    text-align: center;
+    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.2);
+    top: calc(50% - 17px);
+    transform: rotate(-135deg);
+  }
+
+  .colorButtons {
+    display: grid;
+    gap: 6px;
+    grid-template-columns: repeat(auto-fill, minmax(40px, 1fr));
+    margin-bottom: 12px;
+    max-height: 60vh;
+    overflow-y: auto;
+
+    @supports (-moz-appearance: none) {
+      scrollbar-color: rgba(0, 0, 0, 0.32) transparent;
+      scrollbar-width: thin;
+    }
+
+    &::-webkit-scrollbar {
+      width: 9px;
+    }
+
+    &::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    &::-webkit-scrollbar-thumb {
+      background-clip: padding-box;
+      border-left: 0.25em transparent solid;
+      border-radius: 3px;
+    }
+  }
+
+  .field {
+    margin-bottom: 8px;
+  }
+
+  .text {
+    color: #444444;
+    font-size: 12px;
+    font-weight: bold;
+    padding-bottom: 6px;
+  }
+}

@@ -10,6 +10,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-openmemory}
     volumes:
       - mem0_pgdata:/var/lib/postgresql/data
+      # PLANKA schema (kanban-planka). Only applied on empty PG data dir;
+      # existing volumes rely on integrations/planka ensure-schema at boot.
+      - ../../integrations/planka/docker/postgres-init/01-create-planka-schema.sql:/docker-entrypoint-initdb.d/01-create-planka-schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mem0} -d ${POSTGRES_DB:-openmemory}"]
       interval: 5s
