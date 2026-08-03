@@ -784,6 +784,9 @@ class TaskCard(Base):
     version = Column(Integer, nullable=False, default=1, server_default="1")
     last_activity_at = Column(DateTime, nullable=True, index=True)
     branch_ref = Column(Text, nullable=True)
+    # Campos ricos do Kanban (kanban-planka / ADR-005) — Spec continua SoT.
+    due_at = Column(DateTime, nullable=True, index=True)
+    position = Column(sa.Float, nullable=False, default=65536.0, server_default="65536")
     created_at = Column(DateTime, default=get_current_utc_time, index=True)
     updated_at = Column(DateTime,
                         default=get_current_utc_time,
@@ -853,6 +856,72 @@ class SpecComment(Base):
 
     __table_args__ = (
         Index("idx_spec_comment_target", "target_type", "target_id"),
+    )
+
+
+class TaskLabel(Base):
+    """Etiqueta de workspace (Kanban rico — Spec SoT)."""
+    __tablename__ = "task_labels"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    workspace_id = Column(UUID, ForeignKey("spec_workspaces.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    color = Column(String, nullable=True)
+    created_at = Column(DateTime, default=get_current_utc_time)
+
+    __table_args__ = (
+        sa.UniqueConstraint("workspace_id", "name", name="uq_task_label_workspace_name"),
+    )
+
+
+class TaskCardLabel(Base):
+    """Associação N:N card ↔ label."""
+    __tablename__ = "task_card_labels"
+    task_id = Column(UUID, ForeignKey("task_cards.id"), primary_key=True)
+    label_id = Column(UUID, ForeignKey("task_labels.id"), primary_key=True)
+
+
+class TaskChecklist(Base):
+    __tablename__ = "task_checklists"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    task_id = Column(UUID, ForeignKey("task_cards.id"), nullable=False, index=True)
+    title = Column(String, nullable=False, default="Checklist")
+    position = Column(sa.Float, nullable=False, default=65536.0, server_default="65536")
+    created_at = Column(DateTime, default=get_current_utc_time)
+
+
+class TaskChecklistItem(Base):
+    __tablename__ = "task_checklist_items"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    checklist_id = Column(UUID, ForeignKey("task_checklists.id"), nullable=False, index=True)
+    title = Column(String, nullable=False)
+    is_completed = Column(Boolean, nullable=False, default=False, server_default=sa.false())
+    position = Column(sa.Float, nullable=False, default=65536.0, server_default="65536")
+    created_at = Column(DateTime, default=get_current_utc_time)
+
+
+class TaskAttachment(Base):
+    """Metadados de anexo; bytes em volume/MinIO (nunca Qdrant)."""
+    __tablename__ = "task_attachments"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    task_id = Column(UUID, ForeignKey("task_cards.id"), nullable=False, index=True)
+    filename = Column(String, nullable=False)
+    content_type = Column(String, nullable=True)
+    size_bytes = Column(sa.BigInteger, nullable=False, default=0, server_default="0")
+    storage_key = Column(String, nullable=False)
+    uploaded_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=get_current_utc_time)
+
+
+class TaskMember(Base):
+    """Membros adicionais além de ``TaskCard.assignee``."""
+    __tablename__ = "task_members"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    task_id = Column(UUID, ForeignKey("task_cards.id"), nullable=False, index=True)
+    member = Column(String, nullable=False)
+    created_at = Column(DateTime, default=get_current_utc_time)
+
+    __table_args__ = (
+        sa.UniqueConstraint("task_id", "member", name="uq_task_member"),
     )
 
 

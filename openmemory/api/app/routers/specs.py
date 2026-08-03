@@ -128,6 +128,9 @@ class TaskResponse(BaseModel):
     version: int
     last_activity_at: Optional[datetime] = None
     branch_ref: Optional[str] = None
+    due_at: Optional[datetime] = None
+    position: float = 65536.0
+    members: list[str] = []
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -169,10 +172,14 @@ class TaskCreate(BaseModel):
 
 
 class TaskUpdate(BaseModel):
-    """Atualização parcial de metadados da task (título/descrição/branch)."""
+    """Atualização parcial de metadados da task (título/descrição/branch/due/position)."""
     title: Optional[str] = None
     description: Optional[str] = None
     branch_ref: Optional[str] = None
+    due_at: Optional[datetime] = None
+    clear_due_at: bool = False
+    position: Optional[float] = None
+    members: Optional[list[str]] = None
     expected_version: int
 
 
@@ -280,21 +287,37 @@ def _document_response(
     return data
 
 
+def _task_members(db: Session, task_id: UUID) -> list[str]:
+    from app.models import TaskMember
+
+    rows = (
+        db.query(TaskMember.member)
+        .filter(TaskMember.task_id == task_id)
+        .order_by(TaskMember.created_at.asc())
+        .all()
+    )
+    return [r[0] for r in rows]
+
+
 def _task_response(
     task: TaskCard,
     identities: Optional[dict[str, CreatorIdentity]] = None,
+    *,
+    members: Optional[list[str]] = None,
 ) -> TaskResponse:
     data = TaskResponse.model_validate(task)
     identity = identity_for_actor(task.assignee, identities or {})
     if identity is not None:
         data.assignee_display_name = identity.display_name
         data.assignee_avatar_url = identity.avatar_url
+    if members is not None:
+        data.members = members
     return data
 
 
 def _enrich_task(db: Session, task: TaskCard) -> TaskResponse:
     identities = resolve_actor_identities_with_db(db, [task.assignee])
-    return _task_response(task, identities)
+    return _task_response(task, identities, members=_task_members(db, task.id))
 
 
 def get_or_create_workspace(
@@ -569,6 +592,7 @@ def get_workspace_board(
     tasks = (
         db.query(TaskCard)
         .filter(TaskCard.workspace_id == workspace_id)
+        .order_by(TaskCard.position.asc(), TaskCard.created_at.asc())
         .all()
     )
     identities = resolve_actor_identities_with_db(
@@ -578,7 +602,9 @@ def get_workspace_board(
     return WorkspaceBoardResponse(
         workspace=ws,
         documents=[_document_response(d, identities) for d in documents],
-        tasks=[_task_response(t, identities) for t in tasks],
+        tasks=[
+            _task_response(t, identities, members=_task_members(db, t.id)) for t in tasks
+        ],
     )
 
 
@@ -762,7 +788,9 @@ def list_workspace_tasks(
     tasks = query.order_by(TaskCard.created_at.asc()).all()
 
     identities = resolve_actor_identities_with_db(db, [t.assignee for t in tasks])
-    return [_task_response(t, identities) for t in tasks]
+    return [
+        _task_response(t, identities, members=_task_members(db, t.id)) for t in tasks
+    ]
 
 
 @router.patch("/tasks/{task_id}", response_model=TaskResponse)
@@ -771,9 +799,19 @@ def update_task(
     payload: TaskUpdate,
     db: Session = Depends(get_db),
 ) -> TaskResponse:
-    """Atualiza título/descrição/branch com concorrência otimista atômica (ADR-005)."""
+    """Atualiza título/descrição/branch/due/position com OCC atômica (ADR-005)."""
+    from app.models import TaskMember
+
     task = _get_task_or_404(db, task_id)
     _assert_access(db, task.workspace_id)
+
+    # Members: aplicar após OCC bem-sucedido (mesma versão esperada).
+    # due_at só muda se veio no payload ou clear_due_at=true (sentinel ...).
+    due_kwargs: dict = {}
+    if payload.clear_due_at:
+        due_kwargs["clear_due_at"] = True
+    elif "due_at" in payload.model_fields_set:
+        due_kwargs["due_at"] = payload.due_at
 
     result = update_task_metadata(
         db,
@@ -782,6 +820,8 @@ def update_task(
         title=payload.title,
         description=payload.description,
         branch_ref=payload.branch_ref,
+        position=payload.position,
+        **due_kwargs,
     )
     if result.conflict:
         raise HTTPException(
@@ -793,6 +833,19 @@ def update_task(
                 "description": result.description,
             },
         )
+
+    if payload.members is not None:
+        db.query(TaskMember).filter(TaskMember.task_id == task_id).delete()
+        for member in payload.members:
+            name = (member or "").strip()
+            if not name:
+                continue
+            db.add(TaskMember(task_id=task_id, member=name))
+        db.commit()
+        from app.utils.planka_hooks import mirror_task
+
+        mirror_task(db, task_id)
+
     db.refresh(task)
     return _enrich_task(db, task)
 
@@ -806,9 +859,34 @@ def delete_task(
     task = _get_task_or_404(db, task_id)
     _assert_access(db, task.workspace_id)
 
+    from app.models import (
+        TaskAttachment,
+        TaskCardLabel,
+        TaskChecklist,
+        TaskChecklistItem,
+        TaskMember,
+    )
     from app.utils.planka_hooks import mirror_delete_task
+    from app.utils.spec_attachments import delete_file
 
     mirror_delete_task(db, task_id)
+    checklist_ids = [
+        c.id
+        for c in db.query(TaskChecklist.id).filter(TaskChecklist.task_id == task_id).all()
+    ]
+    if checklist_ids:
+        db.query(TaskChecklistItem).filter(
+            TaskChecklistItem.checklist_id.in_(checklist_ids)
+        ).delete(synchronize_session=False)
+    db.query(TaskChecklist).filter(TaskChecklist.task_id == task_id).delete()
+    db.query(TaskCardLabel).filter(TaskCardLabel.task_id == task_id).delete()
+    db.query(TaskMember).filter(TaskMember.task_id == task_id).delete()
+    for att in db.query(TaskAttachment).filter(TaskAttachment.task_id == task_id).all():
+        try:
+            delete_file(att.storage_key)
+        except OSError:
+            pass
+        db.delete(att)
     db.query(TaskStatusHistory).filter(TaskStatusHistory.task_id == task_id).delete()
     db.query(SpecComment).filter(
         SpecComment.target_type == CommentTargetType.task,

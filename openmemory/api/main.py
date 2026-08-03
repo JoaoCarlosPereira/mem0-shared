@@ -38,6 +38,7 @@ from app.routers import (
     ops_metrics_router,
     provision_router,
     specs_router,
+    specs_rich_router,
     stats_router,
     store_router,
 )
@@ -167,6 +168,7 @@ app.include_router(governance_project_merge_router)
 app.include_router(governance_schedule_router)
 app.include_router(groups_router)
 app.include_router(specs_router)
+app.include_router(specs_rich_router)
 app.include_router(user_analytics_router)
 app.include_router(memories_router)
 app.include_router(apps_router)

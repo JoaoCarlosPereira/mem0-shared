@@ -19,6 +19,7 @@ from .mcp_oauth_compat import router as mcp_oauth_compat_router
 from .ops_metrics import router as ops_metrics_router
 from .provision import router as provision_router
 from .specs import router as specs_router
+from .specs_rich import router as specs_rich_router
 from .stats import router as stats_router
 from .store import router as store_router
 
@@ -45,5 +46,6 @@ __all__ = [
     "groups_router",
     "user_analytics_router",
     "specs_router",
+    "specs_rich_router",
     "store_router",
 ]

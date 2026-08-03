@@ -51,6 +51,8 @@ class UpdateTaskMetadataResult:
     title: str
     description: str | None
     branch_ref: str | None
+    due_at: object | None = None
+    position: float | None = None
 
 
 class TaskStatusPolicyError(ValueError):
@@ -363,11 +365,15 @@ def update_task_metadata(
     title: str | None = None,
     description: str | None = None,
     branch_ref: str | None = None,
+    due_at: object | None = ...,
+    position: float | None = None,
+    clear_due_at: bool = False,
 ) -> UpdateTaskMetadataResult:
     """Atualiza metadados com ``UPDATE … WHERE version = :expected`` atômico.
 
     Também renova ``last_activity_at`` para que edições contem como atividade
-    perante o timeout worker.
+    perante o timeout worker. ``due_at`` usa sentinel ``...`` para "não alterar";
+    ``clear_due_at=True`` zera o prazo.
     """
     task = db.get(TaskCard, task_id)
     if task is None:
@@ -385,6 +391,12 @@ def update_task_metadata(
         values["description"] = description
     if branch_ref is not None:
         values["branch_ref"] = branch_ref
+    if clear_due_at:
+        values["due_at"] = None
+    elif due_at is not ...:
+        values["due_at"] = due_at
+    if position is not None:
+        values["position"] = position
 
     result = db.execute(
         sa.update(TaskCard)
@@ -405,6 +417,8 @@ def update_task_metadata(
             title=fresh.title,
             description=fresh.description,
             branch_ref=fresh.branch_ref,
+            due_at=fresh.due_at,
+            position=fresh.position,
         )
 
     db.commit()
@@ -419,4 +433,6 @@ def update_task_metadata(
         title=fresh.title,
         description=fresh.description,
         branch_ref=fresh.branch_ref,
+        due_at=fresh.due_at,
+        position=fresh.position,
     )

@@ -156,24 +156,33 @@ class PlankaMirrorHttpClient:
         board_id = await self.ensure_workspace_board(task.workspace_id)
         list_id = await self._list_id_for_status(task.workspace_id, board_id, task.status.value)
         existing = self._get_map(ENTITY_TASK, task_id)
-        body = {
+        position = float(task.position) if task.position is not None else float(_LIST_POSITION_STEP)
+        body: dict[str, Any] = {
             "name": _truncate(task.title, 1024),
             "description": task.description,
             "type": "project",
+            "position": position,
         }
+        if task.due_at is not None:
+            body["dueDate"] = task.due_at.isoformat()
+        else:
+            body["dueDate"] = None
         if existing:
             await self._request(
                 "PATCH",
                 f"/api/cards/{existing.planka_id}",
-                json={**body, "listId": list_id, "position": _LIST_POSITION_STEP},
+                json={**body, "listId": list_id},
             )
         else:
             created = await self._request(
                 "POST",
                 f"/api/lists/{list_id}/cards",
-                json={**body, "position": _LIST_POSITION_STEP},
+                json=body,
             )
             self._upsert_map(ENTITY_TASK, task_id, _item_id(created))
+        task_map = self._get_map(ENTITY_TASK, task_id)
+        if task_map:
+            await self._mirror_task_checklists(task_id, task_map.planka_id)
         self.db.commit()
 
     async def mirror_task_status(self, task_id: UUID) -> None:
@@ -250,6 +259,56 @@ class PlankaMirrorHttpClient:
                 raise
         self.db.delete(existing)
         self.db.commit()
+
+    async def _mirror_task_checklists(self, task_id: UUID, planka_card_id: str) -> None:
+        """Best-effort: projeta itens de checklist Spec como tasks do card PLANKA.
+
+        PLANKA usa ``/api/cards/:id/tasks`` para checklist items. Falhas 4xx
+        além de 404 são propagadas; ausência de API não deve quebrar o espelho
+        principal (já feito via dueDate/position no card).
+        """
+        from app.models import TaskChecklist, TaskChecklistItem
+
+        checklists = (
+            self.db.query(TaskChecklist)
+            .filter(TaskChecklist.task_id == task_id)
+            .order_by(TaskChecklist.position.asc())
+            .all()
+        )
+        for checklist in checklists:
+            items = (
+                self.db.query(TaskChecklistItem)
+                .filter(TaskChecklistItem.checklist_id == checklist.id)
+                .order_by(TaskChecklistItem.position.asc())
+                .all()
+            )
+            for item in items:
+                entity = "checklist_item"
+                mapped = self._get_map(entity, item.id)
+                body = {
+                    "name": _truncate(item.title, 1024),
+                    "isCompleted": bool(item.is_completed),
+                    "position": float(item.position or _LIST_POSITION_STEP),
+                }
+                try:
+                    if mapped:
+                        await self._request(
+                            "PATCH",
+                            f"/api/tasks/{mapped.planka_id}",
+                            json=body,
+                        )
+                    else:
+                        created = await self._request(
+                            "POST",
+                            f"/api/cards/{planka_card_id}/tasks",
+                            json=body,
+                        )
+                        self._upsert_map(entity, item.id, _item_id(created))
+                except PlankaMirrorError as exc:
+                    if exc.status_code in (404, 400, 405):
+                        # Sidecar sem endpoint de tasks — campos ricos ficam só no Spec.
+                        return
+                    raise
 
     async def _ensure_pipeline_lists(self, workspace_id: UUID, board_id: str) -> None:
         for index, status in enumerate(SPEC_STATUS_TO_LIST_NAME):
