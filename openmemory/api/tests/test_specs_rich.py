@@ -74,22 +74,22 @@ class TestLabels:
 
         listed = client.get(f"/api/v1/specs/workspaces/{ws['id']}/labels")
         assert listed.status_code == 200
-        assert any(l["name"] == "bug" for l in listed.json())
+        assert any(label["name"] == "bug" for label in listed.json())
 
         attach = client.post(f"/api/v1/specs/tasks/{task['id']}/labels/{label_id}")
         assert attach.status_code == 200
         assert label_id in [str(x) for x in attach.json().get("label_ids", [])] or any(
-            str(l["id"]) == label_id for l in attach.json().get("labels", [])
+            str(label["id"]) == label_id for label in attach.json().get("labels", [])
         )
 
         task_labels = client.get(f"/api/v1/specs/tasks/{task['id']}/labels")
         assert task_labels.status_code == 200
-        assert any(l["id"] == label_id for l in task_labels.json())
+        assert any(label["id"] == label_id for label in task_labels.json())
 
         board = client.get(f"/api/v1/specs/workspaces/{ws['id']}")
         assert board.status_code == 200
         card = next(t for t in board.json()["tasks"] if t["id"] == task["id"])
-        assert any(l["id"] == label_id for l in card.get("labels", []))
+        assert any(label["id"] == label_id for label in card.get("labels", []))
 
         detach = client.delete(f"/api/v1/specs/tasks/{task['id']}/labels/{label_id}")
         assert detach.status_code == 204

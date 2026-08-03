@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
-from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.models import SpecPlankaIdMap, TaskCard, TaskCardStatus
-from app.utils.planka import ENTITY_TASK, list_entity_type
+from app.utils.planka import ENTITY_TASK
 from app.utils.task_lock import (
     ClaimTaskResult,
     TaskStatusPolicyError,
