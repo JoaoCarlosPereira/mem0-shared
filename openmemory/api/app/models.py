@@ -856,6 +856,29 @@ class SpecComment(Base):
     )
 
 
+class SpecPlankaIdMap(Base):
+    """Correlação UUID Spec ↔ snowflake PLANKA (ADR-005 / kanban-planka).
+
+    ``entity_type`` identifica o tipo espelhado (``project``, ``board``,
+    ``list:<status>``, ``task``, ``document``). ``spec_id`` é o UUID Spec
+    (workspace/task/document); para listas usa o ``workspace_id``.
+    """
+    __tablename__ = "spec_planka_id_map"
+    id = Column(UUID, primary_key=True, default=lambda: uuid.uuid4())
+    entity_type = Column(String, nullable=False, index=True)
+    spec_id = Column(UUID, nullable=False, index=True)
+    planka_id = Column(String, nullable=False, index=True)
+    created_at = Column(DateTime, default=get_current_utc_time)
+    updated_at = Column(DateTime,
+                        default=get_current_utc_time,
+                        onupdate=get_current_utc_time)
+
+    __table_args__ = (
+        sa.UniqueConstraint("entity_type", "spec_id", name="uq_spec_planka_entity_spec"),
+        sa.UniqueConstraint("entity_type", "planka_id", name="uq_spec_planka_entity_planka"),
+    )
+
+
 def categorize_memory(memory: Memory, db: Session) -> None:
     """Categorize a memory using OpenAI and store the categories in the database."""
     try:
