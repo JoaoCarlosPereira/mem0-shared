@@ -32,6 +32,40 @@ class TestStoragePreservesExisting:
         install.configure_storage_scale(None, interactive=False, compose_env=compose_env)
         assert install.read_env(compose_env, "QDRANT_STORAGE") == "mem0_storage"
 
+    def test_volume_nomeado_nao_vira_caminho(self, compose_env):
+        """``mem0_storage`` é nome de volume Docker, não caminho — não tem pai."""
+        install.set_env(compose_env, "QDRANT_STORAGE", "mem0_storage")
+        assert (
+            install.configure_storage_scale(
+                None, interactive=False, compose_env=compose_env
+            )
+            is None
+        )
+
+
+class TestStorageParent:
+    """O valor gravado no .env é caminho do HOST DE DEPLOY (Linux).
+
+    Derivar o pai com ``pathlib.Path`` ancora o caminho no sistema de quem roda o
+    instalador: no Windows, "/mnt/Dados/memorias/qdrant" virava
+    "D:\\mnt\\Dados\\memorias" — letra de unidade inventada e barras trocadas.
+    """
+
+    def test_caminho_posix_preserva_barras_e_nao_ganha_unidade(self):
+        assert install._storage_parent("/mnt/Dados/memorias/qdrant") == "/mnt/Dados/memorias"
+
+    def test_nao_depende_do_so_de_quem_roda_o_instalador(self):
+        resultado = install._storage_parent("/srv/mem0/qdrant")
+        assert resultado == "/srv/mem0"
+        assert "\\" not in resultado
+        assert ":" not in resultado
+
+    def test_caminho_raiz(self):
+        assert install._storage_parent("/qdrant") == "/"
+
+    def test_valor_com_barra_invertida_e_normalizado(self):
+        assert install._storage_parent("C:\\dados\\qdrant") == "C:/dados"
+
 
 class TestOllamaHostDetection:
     def test_inference_uses_host_ollama_from_env(self, compose_env):

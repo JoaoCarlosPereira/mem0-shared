@@ -77,7 +77,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent
@@ -1508,6 +1508,24 @@ def write_inference_scale(compose_env, llm_spec, emb_spec, args):
     return public
 
 
+def _storage_parent(existing):
+    """Diretório-pai de um QDRANT_STORAGE já gravado no .env do compose.
+
+    O valor é um caminho do HOST DE DEPLOY, que é Linux — não um caminho da
+    máquina onde o instalador roda. Derivar com ``Path`` ancora o caminho no
+    sistema local: no Windows, ``Path("/mnt/Dados/memorias/qdrant").resolve()``
+    devolve ``D:\\mnt\\Dados\\memorias\\qdrant``, inventando uma letra de unidade
+    e trocando as barras. A derivação aqui é textual, com ``PurePosixPath``.
+
+    Também não chama ``resolve()``: o caminho é do host remoto, então resolver
+    symlinks/relatividade contra o sistema de arquivos local não faz sentido.
+    """
+    valor = str(existing)
+    if valor.startswith("~"):
+        valor = os.path.expanduser(valor)
+    return str(PurePosixPath(valor.replace("\\", "/")).parent)
+
+
 def configure_storage_scale(data_dir, interactive, compose_env):
     """Define onde o Qdrant persiste (PostgreSQL usa o volume mem0_pgdata)."""
     if not data_dir and interactive:
@@ -1520,12 +1538,12 @@ def configure_storage_scale(data_dir, interactive, compose_env):
         data_dir = resp or None
         if not data_dir and existing:
             ok(f"Qdrant: mantendo {existing}. PostgreSQL: volume mem0_pgdata.")
-            return None if existing == "mem0_storage" else str(Path(existing).expanduser().resolve().parent)
+            return None if existing == "mem0_storage" else _storage_parent(existing)
     if not data_dir:
         existing = read_env(compose_env, "QDRANT_STORAGE")
         if existing:
             ok(f"Qdrant: mantendo {existing}. PostgreSQL: volume mem0_pgdata.")
-            return None if existing == "mem0_storage" else str(Path(existing).expanduser().resolve().parent)
+            return None if existing == "mem0_storage" else _storage_parent(existing)
         set_env(compose_env, "QDRANT_STORAGE", "mem0_storage")
         ok("Qdrant: volume Docker gerenciado. PostgreSQL: volume mem0_pgdata.")
         return None
