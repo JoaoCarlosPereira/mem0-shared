@@ -264,3 +264,76 @@ def _env_auth_token() -> Optional[str]:
         if token:
             return token
     return None
+
+
+def legacy_registry_auth_allowed() -> bool:
+    """Whether AgentRegistry should accept the same LAN legacy shim as OpenMemory.
+
+    AgentRegistry honors ``Bearer local`` only when ``MEM0_AUTH_ALLOW_LEGACY=1``
+    (compose default). OpenMemory ``AUTH_MODE=warn|off`` also lets hostname-only
+    MCP through — synthesize the shim so catalog tools match memory tools.
+    """
+    if (os.getenv("MEM0_AUTH_ALLOW_LEGACY") or "1").strip() == "1":
+        return True
+    mode = (os.getenv("AUTH_MODE") or "warn").strip().lower()
+    return mode in ("warn", "off")
+
+
+def auth_headers_from_http_request(request) -> Optional[dict[str, str]]:
+    """Extract registry credentials already present on an inbound HTTP request."""
+    headers: dict[str, str] = {}
+    authorization = request.headers.get("authorization")
+    if authorization:
+        headers["Authorization"] = authorization
+    api_key = request.headers.get("x-api-key")
+    if api_key:
+        headers["X-API-Key"] = api_key
+    if "Authorization" not in headers:
+        token = request.query_params.get("token")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    return headers or None
+
+
+def synthesize_registry_auth_headers() -> Optional[dict[str, str]]:
+    """Build AgentRegistry credentials from the OpenMemory auth context.
+
+    MCP/memory calls often arrive without an ``Authorization`` header (hostname
+    legacy URL, or Google session already validated by AuthMiddleware). The
+    AgentRegistry sidecar still requires a bearer it understands — JWT,
+    ``omtk_``, or ``Bearer local``. Re-issue or shim so the loja accepts the
+    same principals OpenMemory already accepted.
+    """
+    from app.utils.logging_context import (
+        auth_email_var,
+        auth_method_var,
+        auth_user_var,
+        team_var,
+    )
+    from app.utils.session_jwt import SessionJwtError, issue_session_jwt
+
+    method = (auth_method_var.get() or "").strip().lower()
+    user_id = (auth_user_var.get() or "").strip()
+    email = (auth_email_var.get() or "").strip()
+    if not user_id and team_var.get():
+        user_id = f"team:{team_var.get()}"
+
+    if method in ("session", "agent_token", "team") and user_id:
+        try:
+            token = issue_session_jwt(user_id=user_id, email=email, name="")
+            return {"Authorization": f"Bearer {token}"}
+        except SessionJwtError:
+            pass
+
+    if legacy_registry_auth_allowed():
+        return {"Authorization": "Bearer local"}
+    return None
+
+
+def resolve_registry_auth_headers(
+    explicit: Optional[dict[str, str]] = None,
+) -> Optional[dict[str, str]]:
+    """Prefer caller-supplied headers, else synthesize from the Mem0 session."""
+    if explicit:
+        return explicit
+    return synthesize_registry_auth_headers()

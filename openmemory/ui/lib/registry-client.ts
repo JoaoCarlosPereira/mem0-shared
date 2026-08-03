@@ -72,6 +72,8 @@ export interface PublishDraft {
   description: string;
   sourceRepository: string;
   promptContent: string;
+  /** Inline SKILL.md body (mem0 catalog) — preferred over git for LAN store. */
+  skillContent: string;
 }
 
 export function buildRegistryResourcePath(
@@ -93,12 +95,40 @@ export async function listRegistryResources(
     {
       params: {
         namespace: "all",
-        latestOnly: true,
+        // Do NOT pass latestOnly: the registry treats it as tag=latest literally,
+        // which hides catalog entries published as 1.0.0 / semver (mem0 skills).
         limit: 100,
       },
     },
   );
-  return normalizeRegistryItems(kind, response.data?.items ?? []);
+  return dedupeLatestResources(
+    normalizeRegistryItems(kind, response.data?.items ?? []),
+  );
+}
+
+/** Keep one row per (namespace, name) — prefer most recently updated tag. */
+export function dedupeLatestResources(
+  items: RegistryResource[],
+): RegistryResource[] {
+  const best = new Map<string, RegistryResource>();
+  for (const item of items) {
+    const key = `${registryResourceNamespace(item)}:${item.metadata.name}`;
+    const prev = best.get(key);
+    if (!prev) {
+      best.set(key, item);
+      continue;
+    }
+    const prevTs =
+      Date.parse(prev.metadata.updatedAt || prev.metadata.createdAt || "") || 0;
+    const nextTs =
+      Date.parse(item.metadata.updatedAt || item.metadata.createdAt || "") || 0;
+    if (nextTs >= prevTs) {
+      best.set(key, item);
+    }
+  }
+  return Array.from(best.values()).sort((a, b) =>
+    registryResourceTitle(a).localeCompare(registryResourceTitle(b), "pt"),
+  );
 }
 
 export async function listAllRegistryResources(): Promise<RegistryResource[]> {
@@ -144,6 +174,9 @@ export const INSTALL_TARGET_LABELS: Record<InstallTarget, string> = {
   claude: "Claude Code",
   codex: "Codex",
 };
+
+/** mem0 LAN catalog embeds the full SKILL.md in this annotation. */
+export const SKILL_MD_ANNOTATION = "agentregistry.mem0.ai/skill-md";
 
 export interface InstallRecipe {
   version: string;
@@ -253,6 +286,12 @@ export function registrySourceSummary(resource: RegistryResource): string[] {
   const remote = asRecord(spec.remote);
   const summaries: string[] = [];
 
+  const annotations = resource.metadata.annotations ?? {};
+  const skillMd = annotations[SKILL_MD_ANNOTATION];
+  if (typeof skillMd === "string" && skillMd.trim()) {
+    summaries.push("Conteúdo embutido (SKILL.md)");
+  }
+
   const repository = asRecord(source?.repository);
   const pluginGitRepository = asRecord(asRecord(asRecord(source?.git)?.repository));
   const packageSource = asRecord(source?.package);
@@ -310,6 +349,10 @@ export function validatePublishDraft(draft: PublishDraft): string[] {
     if (!draft.promptContent.trim()) {
       errors.push("Informe o conteúdo do prompt.");
     }
+  } else if (draft.kind === "skills") {
+    if (!draft.skillContent.trim() && !draft.sourceRepository.trim()) {
+      errors.push("Informe o conteúdo da skill (SKILL.md) ou a URL do repositório.");
+    }
   } else if (!draft.sourceRepository.trim()) {
     errors.push("Informe a URL do repositório de origem.");
   }
@@ -325,6 +368,7 @@ export function buildPublishManifest(draft: PublishDraft): string {
   const tagValue = yamlScalar(tag);
   const repositoryUrl = yamlScalar(draft.sourceRepository.trim());
   const promptContent = yamlBlock(draft.promptContent.trim());
+  const skillContent = yamlBlock(draft.skillContent.trim());
 
   const lines = [
     "apiVersion: ar.dev/v1alpha1",
@@ -332,9 +376,17 @@ export function buildPublishManifest(draft: PublishDraft): string {
     "metadata:",
     `  name: ${name}`,
     `  tag: ${tagValue}`,
-    "spec:",
-    `  title: ${title}`,
   ];
+
+  if (draft.kind === "skills" && draft.skillContent.trim()) {
+    lines.push(
+      "  annotations:",
+      `    ${SKILL_MD_ANNOTATION}: |`,
+      skillContent,
+    );
+  }
+
+  lines.push("spec:", `  title: ${title}`);
 
   if (draft.description.trim()) {
     lines.push(`  description: ${description}`);
@@ -342,6 +394,11 @@ export function buildPublishManifest(draft: PublishDraft): string {
 
   if (draft.kind === "prompts") {
     lines.push("  content: |", promptContent);
+    return lines.join("\n") + "\n";
+  }
+
+  if (draft.kind === "skills" && draft.skillContent.trim() && !draft.sourceRepository.trim()) {
+    // Inline-only skill — no git source required for the mem0 LAN catalog.
     return lines.join("\n") + "\n";
   }
 

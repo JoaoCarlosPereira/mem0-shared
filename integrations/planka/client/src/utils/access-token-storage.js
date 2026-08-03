@@ -7,6 +7,7 @@ import Cookies from 'js-cookie';
 import { jwtDecode } from 'jwt-decode';
 
 import Config from '../constants/Config';
+import { markMem0Embed } from './is-mem0-embed';
 
 const PATH = Config.BASE_PATH || '/';
 
@@ -31,6 +32,9 @@ export const setAccessToken = (accessToken) => {
 export const bootstrapMem0EmbedToken = () => {
   try {
     const params = new URLSearchParams(window.location.search);
+    if (params.get('embed') === '1') {
+      markMem0Embed();
+    }
     const token = params.get('mem0_token');
     if (!token) return;
     setAccessToken(token);

@@ -23,6 +23,11 @@ em log (``TokenMaskingFilter`` + logs deste módulo usam só o path).
 
 Modos (env ``AUTH_MODE``): ``off`` (bypass), ``warn`` (default), ``enforce``.
 Tokens de equipe: secret ``AUTH_TOKENS_FILE`` ou env ``AUTH_TOKENS``.
+
+Implementação ASGI pura (não ``BaseHTTPMiddleware``): o MCP SSE/streamable
+escreve direto em ``request._send``; buffering do BaseHTTPMiddleware causava
+``AssertionError: Unexpected message ... http.response.start`` (corpo ``null``)
+e derrubava a sessão — Cursor então reportava ``MCP server mem0 is not connected``.
 """
 
 from __future__ import annotations
@@ -36,8 +41,8 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.utils.agent_tokens import AGENT_TOKEN_PREFIX, resolve_agent_token
 from app.utils.logging_context import (
@@ -183,23 +188,31 @@ def resolve_bound_machine_hostname(
         return path_hostname
 
 
-class AuthMiddleware(BaseHTTPMiddleware):
+class AuthMiddleware:
+    """Pure ASGI auth middleware — safe for MCP SSE / streamable HTTP."""
+
     def __init__(
         self,
-        app,
+        app: ASGIApp,
         *,
         mode: Optional[str] = None,
         token_to_team: Optional[Dict[str, str]] = None,
     ):
-        super().__init__(app)
+        self.app = app
         self._mode = (mode or os.getenv("AUTH_MODE", "warn")).strip().lower()
         self._tokens = token_to_team if token_to_team is not None else load_team_tokens()
 
-    async def dispatch(self, request: Request, call_next):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive=receive)
         if self._mode == "off" or any(
             request.url.path.startswith(p) for p in _SKIP_PREFIXES
         ):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         path = request.url.path
 
@@ -208,7 +221,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
             request.query_params.get("token") if path.startswith("/mcp") else None
         )
         if query_token:
-            return await self._handle_agent_token(request, call_next, query_token)
+            await self._handle_agent_token(scope, receive, send, request, query_token)
+            return
 
         header_token = _extract_token(request)
         if header_token:
@@ -218,32 +232,41 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     claims = decode_session_jwt(header_token)
                 except SessionJwtError:
                     AUTH_DENIED_TOTAL.labels(mode=self._mode).inc()
-                    return self._unauthorized(request, "sessão inválida ou expirada")
+                    await self._send_unauthorized(
+                        scope, receive, send, request, "sessão inválida ou expirada"
+                    )
+                    return
                 AUTH_OK_TOTAL.labels(method="session").inc()
                 ctx = AuthContext(
                     method="session",
                     user_id=str(claims.get("sub") or ""),
                     email=str(claims.get("email") or ""),
                 )
-                return await self._call_with_context(request, call_next, ctx)
+                await self._call_with_context(scope, receive, send, ctx)
+                return
 
             # 3) Token de agente enviado por header (prefixo identificável).
             if header_token.startswith(AGENT_TOKEN_PREFIX):
-                return await self._handle_agent_token(request, call_next, header_token)
+                await self._handle_agent_token(
+                    scope, receive, send, request, header_token
+                )
+                return
 
             # 4) Token de equipe (comportamento original preservado).
             team = self._tokens.get(header_token)
             if team is not None:
                 AUTH_OK_TOTAL.labels(method="team").inc()
                 ctx = AuthContext(method="team", team=team)
-                return await self._call_with_context(request, call_next, ctx)
+                await self._call_with_context(scope, receive, send, ctx)
+                return
 
             # 4b) ADMIN_TOKEN via Bearer (mutações /admin — mesmo valor que X-Admin-Token).
             admin = (os.getenv("ADMIN_TOKEN") or "").strip()
             if admin and hmac.compare_digest(header_token, admin):
                 AUTH_OK_TOTAL.labels(method="admin_token").inc()
                 ctx = AuthContext(method="admin_token")
-                return await self._call_with_context(request, call_next, ctx)
+                await self._call_with_context(scope, receive, send, ctx)
+                return
 
             # 4c) PLANKA ↔ Spec bridge (ADR-007): Bearer INTERNAL / PLANKA_INTERNAL.
             # Sem isto, POST /api/v1/specs/planka/card-moved recebe 401 em AUTH_MODE
@@ -257,37 +280,64 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if internal and hmac.compare_digest(header_token, internal):
                 AUTH_OK_TOTAL.labels(method="internal").inc()
                 ctx = AuthContext(method="internal", team="planka-bridge")
-                return await self._call_with_context(request, call_next, ctx)
+                await self._call_with_context(scope, receive, send, ctx)
+                return
 
             # 5) Bearer local (shim OAuth) — legado documentado; só em warn/off.
             if header_token == LEGACY_MCP_BEARER:
-                return await self._handle_legacy(
-                    request, call_next, path, reason="Bearer local"
+                await self._handle_legacy(
+                    scope, receive, send, request, path, reason="Bearer local"
                 )
+                return
 
             # Credencial Bearer/X-API-Key presente mas inválida ⇒ 401 (mesmo em warn).
             AUTH_DENIED_TOTAL.labels(mode=self._mode).inc()
-            return self._unauthorized(request, "invalid or missing team token")
+            await self._send_unauthorized(
+                scope, receive, send, request, "invalid or missing team token"
+            )
+            return
 
         # 6) Sem header de credencial — caminho legado.
-        return await self._handle_legacy(request, call_next, path, reason="sem token")
+        await self._handle_legacy(
+            scope, receive, send, request, path, reason="sem token"
+        )
 
-    async def _handle_legacy(self, request, call_next, path: str, *, reason: str):
+    async def _handle_legacy(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        request: Request,
+        path: str,
+        *,
+        reason: str,
+    ) -> None:
         AUTH_DENIED_TOTAL.labels(mode=self._mode).inc()
         if self._mode == "enforce":
-            return self._unauthorized(request, "invalid or missing team token")
+            await self._send_unauthorized(
+                scope, receive, send, request, "invalid or missing team token"
+            )
+            return
         logger.warning("auth warn: requisição %s em %s", reason, path)
         ctx = AuthContext(method="legacy", machine_hostname=_mcp_hostname(path))
-        return await self._call_with_context(request, call_next, ctx)
+        await self._call_with_context(scope, receive, send, ctx)
 
-    async def _handle_agent_token(self, request: Request, call_next, raw_token: str):
+    async def _handle_agent_token(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        request: Request,
+        raw_token: str,
+    ) -> None:
         """Valida token de agente; explícito e inválido ⇒ 401 em qualquer modo."""
         user_id = resolve_agent_token(raw_token)
         if user_id is None:
             AUTH_DENIED_TOTAL.labels(mode=self._mode).inc()
-            return self._unauthorized(
-                request, "token de agente inválido ou revogado"
+            await self._send_unauthorized(
+                scope, receive, send, request, "token de agente inválido ou revogado"
             )
+            return
         AUTH_OK_TOTAL.labels(method="agent_token").inc()
         path_host = _mcp_hostname(request.url.path)
         ctx = AuthContext(
@@ -295,9 +345,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
             user_id=user_id,
             machine_hostname=resolve_bound_machine_hostname(user_id, path_host),
         )
-        return await self._call_with_context(request, call_next, ctx)
+        await self._call_with_context(scope, receive, send, ctx)
 
-    async def _call_with_context(self, request: Request, call_next, ctx: AuthContext):
+    async def _call_with_context(
+        self, scope: Scope, receive: Receive, send: Send, ctx: AuthContext
+    ) -> None:
         """Popula as contextvars de identidade com reset garantido no finally."""
         tokens = [
             (auth_method_var, auth_method_var.set(ctx.method)),
@@ -308,10 +360,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if ctx.team:
             tokens.append((team_var, team_var.set(ctx.team)))
         try:
-            return await call_next(request)
+            await self.app(scope, receive, send)
         finally:
             for var, token in reversed(tokens):
                 var.reset(token)
+
+    async def _send_unauthorized(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        request: Request,
+        detail: str,
+    ) -> None:
+        response = self._unauthorized(request, detail)
+        await response(scope, receive, send)
 
     def _unauthorized(self, request: Request, detail: str) -> JSONResponse:
         """401 com headers CORS ecoados — o middleware roda fora do CORSMiddleware."""

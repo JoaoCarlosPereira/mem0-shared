@@ -19,6 +19,8 @@ from app.utils.identity import resolve_hostname
 class CreatorIdentity:
     display_name: Optional[str] = None
     avatar_url: Optional[str] = None
+    # Google / person e-mail when known (prefer over hostname@mem0.local in PLANKA).
+    email: Optional[str] = None
 
 
 def _normalize_hostnames(hostnames: Iterable[Optional[str]]) -> list[str]:
@@ -48,7 +50,13 @@ def resolve_creator_identities_with_db(
 
     try:
         rows = (
-            db.query(Machine.hostname, User.display_name, User.avatar_url, User.name)
+            db.query(
+                Machine.hostname,
+                User.display_name,
+                User.avatar_url,
+                User.name,
+                User.email,
+            )
             .join(User, Machine.linked_user_id == User.id)
             .filter(
                 Machine.hostname.in_(keys),
@@ -61,8 +69,9 @@ def resolve_creator_identities_with_db(
             hostname: CreatorIdentity(
                 display_name=display_name or name,
                 avatar_url=avatar_url,
+                email=(email or "").strip().lower() or None,
             )
-            for hostname, display_name, avatar_url, name in rows
+            for hostname, display_name, avatar_url, name, email in rows
         }
     except Exception:  # noqa: BLE001 - enrichment is best-effort on read paths
         return {}
@@ -249,6 +258,7 @@ def resolve_actor_identities_with_db(
             identity = CreatorIdentity(
                 display_name=user.display_name or user.name,
                 avatar_url=user.avatar_url,
+                email=(user.email or "").strip().lower() or None,
             )
             result[str(user.id)] = identity
             if user.user_id:

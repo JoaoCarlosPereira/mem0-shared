@@ -42,6 +42,12 @@ def factory():
 @pytest.fixture(autouse=True)
 def _wire(factory, monkeypatch):
     monkeypatch.setattr(mcp_server, "SessionLocal", factory)
+    # Document post-write (index/mirror) is covered by test_spec_side_effects;
+    # skip the daemon thread here so SQLite teardown does not race it.
+    monkeypatch.setattr(
+        "app.utils.spec_side_effects.schedule_document_post_write",
+        lambda *a, **k: None,
+    )
     mcp_server.user_id_var.set("DESKTOP-01")
     mcp_server.client_name_var.set("cursor")
     yield

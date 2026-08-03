@@ -398,6 +398,61 @@ class TestNormalizeAssigneeEmail:
         assert normalize_assignee_email("e2e-smoke-agent") == "e2e-smoke-agent@mem0.local"
 
 
+@pytest.mark.asyncio
+async def test_mirror_assignee_prefers_linked_google_email(db_session, monkeypatch):
+    """Hostname Spec assignee → e-mail Google vinculado (não *@mem0.local)."""
+    from types import SimpleNamespace
+
+    from app.models import TaskCard, TaskCardStatus
+    from app.utils.planka import PlankaMirrorHttpClient
+
+    calls = []
+
+    class CaptureClient(PlankaMirrorHttpClient):
+        async def _request(self, method, path, **kwargs):
+            calls.append((method, path, kwargs.get("json")))
+            return {"item": {"id": "1"}}
+
+        def _get_map(self, *_a, **_k):
+            return None
+
+        def _upsert_map(self, *_a, **_k):
+            return None
+
+    ws = _mk_workspace(db_session)
+    task = TaskCard(
+        workspace_id=ws.id,
+        title="Assignee link",
+        status=TaskCardStatus.tasks,
+        assignee="S0293",
+    )
+    db_session.add(task)
+    db_session.commit()
+    db_session.refresh(task)
+
+    monkeypatch.setattr(
+        "app.utils.creator_identity.resolve_actor_identities_with_db",
+        lambda _db, _actors: {
+            "S0293": SimpleNamespace(
+                display_name="João Carlos Pereira",
+                avatar_url="https://example.com/j.jpg",
+                email="joaocarlos@sysmo.com.br",
+            )
+        },
+    )
+    monkeypatch.setattr(
+        "app.utils.creator_identity.identity_for_actor",
+        lambda actor, identities: identities.get(actor),
+    )
+
+    client = CaptureClient(db_session)
+    await client._mirror_task_assignee(task, "card-1")
+    assert calls
+    body = calls[0][2]
+    assert body["email"] == "joaocarlos@sysmo.com.br"
+    assert body["name"] == "João Carlos Pereira"
+
+
 class TestMirrorDocumentAndDelete:
     @pytest.mark.asyncio
     async def test_mirror_document(self, db_session, client):

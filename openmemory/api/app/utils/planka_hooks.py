@@ -27,16 +27,25 @@ def mirror_sync_enabled() -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
-def _run_async(coro: Awaitable[T]) -> T:
+# Cap how long a sync mirror may block the request thread. Individual HTTP calls
+# already use DEFAULT_PLANKA_TIMEOUT_SECONDS; this bounds the whole multi-call op
+# (ensure board + lists + card) so a wedged sidecar cannot hang MCP/REST forever.
+_MIRROR_OP_TIMEOUT_SECONDS = 30.0
+
+
+def _run_async(coro: Awaitable[T], *, timeout: float = _MIRROR_OP_TIMEOUT_SECONDS) -> T:
+    async def _bounded() -> T:
+        return await asyncio.wait_for(coro, timeout=timeout)
+
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(coro)
+        return asyncio.run(_bounded())
     # Already inside an event loop (e.g. MCP async tool): run in a fresh loop thread.
     import concurrent.futures
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(lambda: asyncio.run(coro)).result()
+        return pool.submit(lambda: asyncio.run(_bounded())).result(timeout=timeout + 1.0)
 
 
 async def _call(
@@ -58,6 +67,17 @@ def run_mirror(
         return None
     try:
         return _run_async(_call(db, op))
+    except (TimeoutError, asyncio.TimeoutError) as exc:
+        logger.error("planka_mirror_failed action=%s status=504 detail=op_timeout", action)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "mirror_failed": True,
+                "action": action,
+                "planka_status": 504,
+                "detail": "PLANKA mirror operation timed out",
+            },
+        ) from exc
     except PlankaMirrorError as exc:
         logger.error("planka_mirror_failed action=%s status=%s detail=%s", action, exc.status_code, exc.detail)
         raise HTTPException(
@@ -71,6 +91,22 @@ def run_mirror(
         ) from exc
 
 
+def run_mirror_best_effort(
+    db: Session,
+    op: Callable[[PlankaMirrorHttpClient], Awaitable[T]],
+    *,
+    action: str,
+) -> Optional[T]:
+    """Like ``run_mirror`` but logs failures instead of raising (MCP / background)."""
+    if not mirror_sync_enabled():
+        return None
+    try:
+        return _run_async(_call(db, op))
+    except Exception:  # noqa: BLE001 — caller already persisted Spec state
+        logger.warning("planka_mirror_best_effort_failed action=%s", action, exc_info=True)
+        return None
+
+
 def mirror_task(db: Session, task_id: UUID) -> None:
     run_mirror(db, lambda c: c.mirror_task(task_id), action="mirror_task")
 
@@ -81,6 +117,14 @@ def mirror_task_status(db: Session, task_id: UUID) -> None:
 
 def mirror_document(db: Session, workspace_id: UUID, doc_type: str) -> None:
     run_mirror(
+        db,
+        lambda c: c.mirror_document(workspace_id, doc_type),
+        action="mirror_document",
+    )
+
+
+def mirror_document_best_effort(db: Session, workspace_id: UUID, doc_type: str) -> None:
+    run_mirror_best_effort(
         db,
         lambda c: c.mirror_document(workspace_id, doc_type),
         action="mirror_document",

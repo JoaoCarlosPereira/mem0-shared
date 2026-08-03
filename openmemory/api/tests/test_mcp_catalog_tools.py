@@ -128,6 +128,27 @@ async def test_publish_catalog_resource_forwards_apply_payload_and_auth(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_publish_catalog_resource_synthesizes_legacy_auth_when_absent(monkeypatch):
+    """Hostname-only MCP (same as memories) must still authenticate to the loja."""
+    fake = FakeCatalogClient()
+    monkeypatch.setattr(mcp_server, "get_agent_registry_client", lambda: fake)
+    monkeypatch.setenv("MEM0_AUTH_ALLOW_LEGACY", "1")
+    method = mcp_server.auth_method_var.set("legacy")
+    try:
+        out = await mcp_server.publish_catalog_resource(
+            resource=_skill_resource("legacy-skill"),
+            dry_run=True,
+            confirm_user_requested=True,
+        )
+    finally:
+        mcp_server.auth_method_var.reset(method)
+
+    body = json.loads(out)
+    assert body["result"]["results"][0]["status"] == "created"
+    assert fake.calls[0][1]["auth_headers"] == {"Authorization": "Bearer local"}
+
+
+@pytest.mark.asyncio
 async def test_get_install_recipe_delegates_to_service_with_mcp_actor_and_auth(monkeypatch):
     service = FakeRecipeService()
     monkeypatch.setattr(mcp_server, "get_catalog_install_recipe_service", lambda: service)

@@ -35,6 +35,14 @@ TOKENS = {"tok-alpha": "alpha"}
 SECRET = "segredo-de-teste-com-32-bytes-ok!"
 
 
+def test_auth_middleware_is_pure_asgi_not_base_http():
+    """BaseHTTPMiddleware buffers responses and breaks MCP SSE (double response.start)."""
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    assert not issubclass(AuthMiddleware, BaseHTTPMiddleware)
+    assert callable(AuthMiddleware(lambda s, r, sn: None))
+
+
 def _build_app(mode: str) -> FastAPI:
     app = FastAPI()
     app.add_middleware(AuthMiddleware, mode=mode, token_to_team=TOKENS)

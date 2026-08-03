@@ -26,8 +26,10 @@ describe("shell-nav (ADR-008 Kanban)", () => {
   it("getPageTitle e isDocsBoardPath cobrem home Kanban full-bleed", () => {
     expect(getPageTitle("/docs")).toBe("Kanban");
     expect(getPageTitle("/docs/proj/ws")).toBe("Kanban");
+    expect(getPageTitle("/docs/boards/123")).toBe("Kanban");
     expect(isDocsBoardPath("/docs")).toBe(true);
     expect(isDocsBoardPath("/docs/x")).toBe(true);
+    expect(isDocsBoardPath("/docs/boards/123")).toBe(true);
     expect(isDocsBoardPath("/store")).toBe(false);
     expect(ADMIN_NAV_ITEM.href).toBe("/admin");
   });

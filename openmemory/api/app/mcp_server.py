@@ -940,13 +940,14 @@ async def write_spec_document(
                 db, doc.id, content, expected_version, hostname, DocumentOrigin.mcp
             )
             if not result.conflict:
-                # Indexa já, com o workspace ainda em andamento, para que a spec
-                # seja encontrável enquanto está sendo escrita. Best-effort.
-                from app.utils.spec_search import index_document_now
+                # Index + PLANKA mirror off the critical path: Ollama embed of a
+                # techspec routinely exceeds the MCP client ~30s timeout and would
+                # block the SSE loop even though Postgres already has the version.
+                from app.utils.spec_side_effects import schedule_document_post_write
 
-                ws = db.query(SpecWorkspace).filter(SpecWorkspace.id == ws_uuid).first()
-                if ws is not None:
-                    index_document_now(db, ws, doc)
+                schedule_document_post_write(
+                    ws_uuid, dtype.value, mirror=True
+                )
             if result.conflict:
                 return json.dumps(
                     {
@@ -1062,22 +1063,15 @@ def get_catalog_install_recipe_service():
 
 
 def _registry_auth_headers_from_request(request: Request) -> dict[str, str] | None:
-    headers: dict[str, str] = {}
-    authorization = request.headers.get("authorization")
-    if authorization:
-        headers["Authorization"] = authorization
-    api_key = request.headers.get("x-api-key")
-    if api_key:
-        headers["X-API-Key"] = api_key
-    if "Authorization" not in headers:
-        token = request.query_params.get("token")
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-    return headers or None
+    from app.utils.agentregistry import auth_headers_from_http_request
+
+    return auth_headers_from_http_request(request)
 
 
 def _registry_auth_headers_for_mcp() -> dict[str, str] | None:
-    return registry_auth_headers_var.get(None)
+    from app.utils.agentregistry import resolve_registry_auth_headers
+
+    return resolve_registry_auth_headers(registry_auth_headers_var.get(None))
 
 
 def _current_mcp_actor_id() -> str:
@@ -1730,6 +1724,20 @@ async def handle_sse(request: Request):
         user_id_var.reset(user_token)
         client_name_var.reset(client_token)
 
+    # Body already written via request._send — returning JSON null caused a second
+    # http.response.start (content-length 4) and killed the SSE session.
+    return _McpStreamAlreadySentResponse()
+
+
+class _McpStreamAlreadySentResponse(Response):
+    """No-op ASGI response when the MCP transport already wrote via ``request._send``."""
+
+    def __init__(self) -> None:
+        super().__init__(content=b"")
+
+    async def __call__(self, scope, receive, send) -> None:  # noqa: ANN001
+        return
+
 
 @mcp_router.post("/messages/")
 async def handle_get_message(request: Request):
@@ -1756,8 +1764,8 @@ async def _handle_post_message_impl(request: Request):
         # Call handle_post_message with the correct arguments
         await sse.handle_post_message(request.scope, receive, send)
 
-        # Return a success response
-        return {"status": "ok"}
+        # Accepted — do not emit a second JSON body that races the SSE writer.
+        return Response(status_code=202)
     finally:
         pass
 

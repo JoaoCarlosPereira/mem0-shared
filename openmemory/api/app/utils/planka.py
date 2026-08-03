@@ -234,9 +234,11 @@ class PlankaMirrorHttpClient:
         board_id = await self.ensure_workspace_board(workspace_id)
         docs_list_id = await self._ensure_document_list(workspace_id, board_id)
         title = f"[{resolved.value}] {workspace.name}"
+        # Full Spec bodies can be 30k+ chars; Planka card descriptions only need a
+        # readable preview — keep payloads small so mirror stays within HTTP timeouts.
         body = {
             "name": _truncate(title, 1024),
-            "description": document.current_content,
+            "description": _truncate(document.current_content, 8000),
             "type": "project",
         }
         existing = self._get_map(ENTITY_DOCUMENT, document.id)
@@ -282,9 +284,14 @@ class PlankaMirrorHttpClient:
         name: Optional[str] = None
         picture: Optional[str] = None
         if task.assignee:
-            email = normalize_assignee_email(task.assignee)
             identities = resolve_actor_identities_with_db(self.db, [task.assignee])
             identity = identity_for_actor(task.assignee, identities)
+            # Prefer e-mail Google da máquina vinculada — evita user duplicado
+            # s0293@mem0.local + joaocarlos@sysmo.com.br no mesmo board.
+            if identity is not None and identity.email:
+                email = identity.email
+            else:
+                email = normalize_assignee_email(task.assignee)
             if identity is not None:
                 name = identity.display_name or None
                 picture = identity.avatar_url or None

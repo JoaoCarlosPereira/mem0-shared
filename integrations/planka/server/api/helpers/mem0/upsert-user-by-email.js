@@ -20,7 +20,7 @@ module.exports = {
   },
 
   async fn(inputs) {
-    const email = String(inputs.email || '')
+    let email = String(inputs.email || '')
       .trim()
       .toLowerCase();
     if (!email || !email.includes('@')) {
@@ -30,6 +30,34 @@ module.exports = {
     const name = String(inputs.name || email.split('@')[0] || 'Mem0 User').trim().slice(0, 128);
     const picture = String(inputs.picture || '').trim();
     const avatar = picture ? { externalUrl: picture } : null;
+
+    // Hostname aliases (s0293@mem0.local) must not create a second board member
+    // when the Google-linked person already exists with the same avatar.
+    if (email.endsWith('@mem0.local') && picture) {
+      try {
+        const result = await sails.sendNativeQuery(
+          `SELECT id FROM planka.user_account
+           WHERE is_deactivated = false
+             AND email NOT LIKE '%@mem0.local'
+             AND avatar->>'externalUrl' = $1
+           ORDER BY id ASC
+           LIMIT 1`,
+          [picture],
+        );
+        const row = result && result.rows && result.rows[0];
+        if (row && row.id) {
+          const existingReal = await User.qm.getOneById(String(row.id));
+          if (existingReal) {
+            return existingReal;
+          }
+        }
+      } catch (err) {
+        sails.log.warn(
+          'mem0 upsert-user-by-email: alias→real lookup failed:',
+          err.message || err,
+        );
+      }
+    }
 
     let user = await User.qm.getOneByEmail(email);
     if (!user) {

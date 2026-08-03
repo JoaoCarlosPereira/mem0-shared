@@ -231,4 +231,34 @@ func TestSkillReconcile(t *testing.T) {
 			t.Errorf("missing-source must not pin a commit, got %+v", got.Status.ResolvedSource)
 		}
 	})
+
+	t.Run("inline skill-md annotation is Ready Inline", func(t *testing.T) {
+		store := newFakeSkillStore()
+		c := &SkillController{Store: store, Resolve: resolveTo("never-called")}
+		s := &v1alpha1.Skill{
+			Metadata: v1alpha1.ObjectMeta{
+				Namespace:  ns,
+				Name:       name,
+				Tag:        tag,
+				Generation: 7,
+				Annotations: map[string]string{
+					"agentregistry.mem0.ai/skill-md": "---\nname: demo\n---\n# Demo",
+				},
+			},
+		}
+		outcome, reason, err := c.reconcile(context.Background(), s)
+		if err != nil {
+			t.Fatalf("inline must succeed, got %v", err)
+		}
+		if outcome != "resolved" || reason != "" {
+			t.Fatalf("got (%q, %q), want (resolved, \"\")", outcome, reason)
+		}
+		got := store.skill(t, ns, name, tag)
+		if r := skillReadyReason(got); r != "Inline" {
+			t.Errorf("ready reason = %q, want Inline", r)
+		}
+		if cond := got.Status.GetCondition("Ready"); cond == nil || cond.Status != v1alpha1.ConditionTrue {
+			t.Fatalf("Ready must be True, got %+v", cond)
+		}
+	})
 }

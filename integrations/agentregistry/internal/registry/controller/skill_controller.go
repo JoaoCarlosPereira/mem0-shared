@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -286,14 +287,39 @@ func (c *SkillController) enqueueAll(ctx context.Context) error {
 
 const skillReadyCondition = "Ready"
 
+// mem0 LAN catalog stores the full SKILL.md in this annotation (see
+// integrations/agentregistry/scripts/seed-mem0-skills.py).
+const skillMdAnnotation = "agentregistry.mem0.ai/skill-md"
+
+func skillHasInlineContent(sk *v1alpha1.Skill) bool {
+	if sk == nil || sk.Metadata.Annotations == nil {
+		return false
+	}
+	v, ok := sk.Metadata.Annotations[skillMdAnnotation]
+	return ok && strings.TrimSpace(v) != ""
+}
+
 // skillReconciled reports whether the controller has already acted on the
 // skill's current generation. It gates on ObservedGeneration ALONE (not Ready),
 // because both success and terminal failure advance ObservedGeneration — a
 // terminally-failed skill must NOT be re-resolved on every resync tick.
 // Retryable failures intentionally leave ObservedGeneration behind so they are
 // re-enqueued (and the workqueue rate-limiter backs them off).
+//
+// Exception: SourceMissing that later gained inline SKILL.md content must be
+// reopened so Ready flips to Inline without forcing a republish.
 func skillReconciled(sk *v1alpha1.Skill) bool {
-	return sk.Metadata.Generation > 0 && sk.Status.ObservedGeneration >= sk.Metadata.Generation
+	if sk.Metadata.Generation == 0 || sk.Status.ObservedGeneration < sk.Metadata.Generation {
+		return false
+	}
+	cond := sk.Status.GetCondition(skillReadyCondition)
+	if cond != nil &&
+		cond.Status == v1alpha1.ConditionFalse &&
+		cond.Reason == "SourceMissing" &&
+		skillHasInlineContent(sk) {
+		return false
+	}
+	return true
 }
 
 func (c *SkillController) reconcileKey(ctx context.Context, key skillQueueKey) (outcome, message string, err error) {
@@ -324,6 +350,14 @@ func (c *SkillController) reconcileKey(ctx context.Context, key skillQueueKey) (
 func (c *SkillController) reconcile(ctx context.Context, sk *v1alpha1.Skill) (string, string, error) {
 	gen := sk.Metadata.Generation
 	ns, name, tag := sk.Metadata.NamespaceOrDefault(), sk.Metadata.Name, sk.Metadata.Tag
+
+	// A skill with embedded SKILL.md (mem0 LAN catalog) is already materializable —
+	// do not require a git repository URL.
+	if skillHasInlineContent(sk) {
+		return "resolved", "", c.patchStatus(ctx, ns, name, tag, gen, func(st *v1alpha1.SkillStatus) {
+			setSkillReady(st, v1alpha1.ConditionTrue, "Inline", "skill content embedded in metadata.annotations")
+		})
+	}
 
 	// A skill with no git source has nothing to pin — terminal, no retry.
 	if sk.Spec.Source == nil || sk.Spec.Source.Repository == nil || sk.Spec.Source.Repository.URL == "" {

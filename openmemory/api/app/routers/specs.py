@@ -41,7 +41,6 @@ from app.utils.spec_auth import resolve_spec_actor, resolve_spec_subject
 from app.utils.claim_lease import TIMEOUT_ACTOR, claim_expires_at
 from app.utils.spec_search import (
     index_completed_workspace,
-    index_document_now,
     search_specs,
 )
 from app.utils.spec_versioning import write_document_version
@@ -735,6 +734,12 @@ class KanbanHomeResponse(BaseModel):
     access_token: str
 
 
+class KanbanBoardResponse(BaseModel):
+    board_id: str
+    embed_url: str
+    access_token: str
+
+
 def _kanban_public_base() -> str:
     import os
 
@@ -743,6 +748,10 @@ def _kanban_public_base() -> str:
         or os.getenv("PLANKA_BASE_URL")
         or "http://127.0.0.1:8765/planka"
     ).rstrip("/")
+
+
+def _kanban_board_id_ok(board_id: str) -> bool:
+    return bool(board_id) and board_id.isdigit() and len(board_id) <= 32
 
 
 def _issue_kanban_access_token(db: Session) -> str:
@@ -828,6 +837,18 @@ def get_kanban_home(db: Session = Depends(get_db)) -> KanbanHomeResponse:
     """Home do SPA Kanban (ADR-008) — raiz do board, não um workspace isolado."""
     return KanbanHomeResponse(
         embed_url=f"{_kanban_public_base()}/",
+        access_token=_issue_kanban_access_token(db),
+    )
+
+
+@router.get("/kanban-boards/{board_id}", response_model=KanbanBoardResponse)
+def get_kanban_board(board_id: str, db: Session = Depends(get_db)) -> KanbanBoardResponse:
+    """Deep-link de um quadro Kanban (URL compartilhável /docs/boards/:id)."""
+    if not _kanban_board_id_ok(board_id):
+        raise HTTPException(status_code=400, detail="board_id inválido")
+    return KanbanBoardResponse(
+        board_id=board_id,
+        embed_url=f"{_kanban_public_base()}/boards/{board_id}",
         access_token=_issue_kanban_access_token(db),
     )
 
@@ -1004,10 +1025,11 @@ def write_workspace_document(
             },
         )
 
-    # Indexa a versão recém-gravada mesmo com o workspace em andamento, para que a
-    # spec seja encontrável enquanto está sendo escrita. Best-effort: não derruba
-    # a gravação se o backend de busca estiver fora.
-    index_document_now(db, ws, doc)
+    # Index off the request path (Ollama embed can take >30s). PLANKA mirror stays
+    # synchronous so API clients still get 502 when the sidecar is down (ADR-006).
+    from app.utils.spec_side_effects import schedule_document_post_write
+
+    schedule_document_post_write(workspace_id, document_type.value, mirror=False)
 
     from app.utils.planka_hooks import mirror_document
 

@@ -41,14 +41,12 @@ def _current_actor_id() -> str:
 
 
 def _registry_auth_headers(request: Request) -> Optional[dict[str, str]]:
-    headers: dict[str, str] = {}
-    authorization = request.headers.get("authorization")
-    if authorization:
-        headers["Authorization"] = authorization
-    api_key = request.headers.get("x-api-key")
-    if api_key:
-        headers["X-API-Key"] = api_key
-    return headers or None
+    from app.utils.agentregistry import (
+        auth_headers_from_http_request,
+        resolve_registry_auth_headers,
+    )
+
+    return resolve_registry_auth_headers(auth_headers_from_http_request(request))
 
 
 @router.post("/install-recipes")

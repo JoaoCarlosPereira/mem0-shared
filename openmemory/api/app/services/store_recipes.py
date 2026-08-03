@@ -218,10 +218,15 @@ def _registry_kind_name(kind: str) -> str:
     }[kind]
 
 
+CONTENT_ANNOTATION = "agentregistry.mem0.ai/skill-md"
+
+
 def _resolve_source(kind: str, resource: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
     source = spec.get("source") if isinstance(spec.get("source"), dict) else {}
     status = resource.get("status") if isinstance(resource.get("status"), dict) else {}
     resolved = status.get("resolvedSource") if isinstance(status.get("resolvedSource"), dict) else {}
+    metadata = resource.get("metadata") if isinstance(resource.get("metadata"), dict) else {}
+    annotations = metadata.get("annotations") if isinstance(metadata.get("annotations"), dict) else {}
 
     repository = _first_dict(
         source.get("repository"),
@@ -248,6 +253,11 @@ def _resolve_source(kind: str, resource: dict[str, Any], spec: dict[str, Any]) -
 
     if kind == "prompt" and isinstance(spec.get("content"), str):
         return {"type": "inline", "filename": "prompt.md", "content": spec["content"]}
+
+    if kind == "skill":
+        skill_md = annotations.get(CONTENT_ANNOTATION)
+        if isinstance(skill_md, str) and skill_md.strip():
+            return {"type": "inline", "filename": "SKILL.md", "content": skill_md}
 
     return {
         "type": "registry",
@@ -283,7 +293,11 @@ def _file_steps(
     source: dict[str, Any],
     spec: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    content = spec.get("content") if kind == "prompt" and isinstance(spec.get("content"), str) else None
+    content = None
+    if kind == "prompt" and isinstance(spec.get("content"), str):
+        content = spec["content"]
+    elif kind == "skill" and source.get("type") == "inline" and isinstance(source.get("content"), str):
+        content = source["content"]
     copy_step: dict[str, Any] = {
         "id": "copy-resource",
         "type": "copy",

@@ -13,6 +13,7 @@ import actions from '../../../actions';
 import api from '../../../api';
 import { getAccessToken } from '../../../utils/access-token-storage';
 import mergeRecords from '../../../utils/merge-records';
+import notifyMem0ParentPath from '../../../utils/notify-mem0-parent-path';
 import ActionTypes from '../../../constants/ActionTypes';
 import Paths from '../../../constants/Paths';
 
@@ -253,6 +254,13 @@ export function* handleLocationChange() {
       notificationsToDelete,
     ),
   );
+
+  // Shell Mem0: sincroniza /docs/boards/:id para link compartilhável.
+  yield call(notifyMem0ParentPath, {
+    boardId: currentBoardId,
+    cardId: currentCardId,
+    pathname: pathsMatch.pathname,
+  });
 }
 
 export default {

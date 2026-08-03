@@ -9,6 +9,7 @@ import { apiClient } from "@/lib/api-client";
 import {
   buildPublishManifest,
   buildRegistryResourcePath,
+  dedupeLatestResources,
   getRegistryResource,
   listRegistryResources,
   publishRegistryManifest,
@@ -28,7 +29,7 @@ describe("registry-client", () => {
     mockedApiClient.post.mockReset();
   });
 
-  it("monta URLs de list/detail com segmentos codificados", async () => {
+  it("lista sem latestOnly (tag semver não é 'latest')", async () => {
     mockedApiClient.get.mockResolvedValueOnce({
       data: { items: [] },
     });
@@ -40,14 +41,41 @@ describe("registry-client", () => {
       expect.objectContaining({
         params: expect.objectContaining({
           namespace: "all",
-          latestOnly: true,
           limit: 100,
         }),
       }),
     );
+    const params = mockedApiClient.get.mock.calls[0][1]?.params as Record<
+      string,
+      unknown
+    >;
+    expect(params.latestOnly).toBeUndefined();
     expect(buildRegistryResourcePath("skills", "team/skill", "v1")).toBe(
       "/registry-api/v0/skills/team%2Fskill/v1",
     );
+  });
+
+  it("dedupeLatestResources mantém a tag mais recente por nome", () => {
+    const items = dedupeLatestResources([
+      {
+        registryKind: "skills",
+        metadata: {
+          name: "commit",
+          tag: "1.0.0",
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+      },
+      {
+        registryKind: "skills",
+        metadata: {
+          name: "commit",
+          tag: "1.0.1",
+          updatedAt: "2026-06-01T00:00:00Z",
+        },
+      },
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0].metadata.tag).toBe("1.0.1");
   });
 
   it("busca detalhe preservando namespace quando informado", async () => {
@@ -93,12 +121,27 @@ describe("registry-client", () => {
         description: "",
         sourceRepository: "",
         promptContent: "",
+        skillContent: "",
       }),
     ).toEqual([
       "Informe o nome do recurso.",
       "Informe um título curto.",
-      "Informe a URL do repositório de origem.",
+      "Informe o conteúdo da skill (SKILL.md) ou a URL do repositório.",
     ]);
+
+    const inline = buildPublishManifest({
+      kind: "skills",
+      name: "demo",
+      tag: "1.0.0",
+      title: "Demo Skill",
+      description: "Ajuda em tarefas repetitivas",
+      sourceRepository: "",
+      promptContent: "",
+      skillContent: "---\nname: demo\n---\n# Demo",
+    });
+    expect(inline).toContain("kind: Skill");
+    expect(inline).toContain("agentregistry.mem0.ai/skill-md:");
+    expect(inline).not.toContain("source:");
 
     const manifest = buildPublishManifest({
       kind: "skills",
@@ -108,6 +151,7 @@ describe("registry-client", () => {
       description: "Ajuda em tarefas repetitivas",
       sourceRepository: "https://github.com/acme/demo",
       promptContent: "",
+      skillContent: "",
     });
 
     expect(manifest).toContain("kind: Skill");
@@ -148,5 +192,20 @@ describe("registry-client", () => {
       "Skill: skill-a@v1",
       "MCP: mcp-a",
     ]);
+  });
+
+  it("resume skill inline sem exigir git", () => {
+    expect(
+      registrySourceSummary({
+        registryKind: "skills",
+        metadata: {
+          name: "commit",
+          annotations: {
+            "agentregistry.mem0.ai/skill-md": "# Commit skill",
+          },
+        },
+        spec: { title: "Commit" },
+      }),
+    ).toEqual(["Conteúdo embutido (SKILL.md)"]);
   });
 });

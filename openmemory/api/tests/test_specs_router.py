@@ -705,6 +705,48 @@ class TestKanbanHomeIdentity:
         assert body["embed_url"].startswith("https://mem0.local/planka")
         assert isinstance(body["access_token"], str) and body["access_token"].count(".") == 2
 
+    def test_kanban_board_deep_link_embed_url(self, client, factory, monkeypatch):
+        import jwt as pyjwt
+        from app.models import User
+        from app.utils.logging_context import auth_email_var, auth_user_var
+
+        secret = "kanban-board-deeplink-secret-32by!!"
+        monkeypatch.setenv("AUTH_JWT_SECRET", secret)
+        monkeypatch.setenv("PLANKA_PUBLIC_URL", "/planka")
+        monkeypatch.delenv("NEXTAUTH_SECRET", raising=False)
+
+        person_id = uuid.uuid4()
+        s = factory()
+        try:
+            s.add(
+                User(
+                    id=person_id,
+                    user_id=f"google-{person_id}",
+                    email="joao@example.com",
+                    name="João",
+                    display_name="João Silva",
+                )
+            )
+            s.commit()
+        finally:
+            s.close()
+
+        tok_u = auth_user_var.set(str(person_id))
+        tok_e = auth_email_var.set("joao@example.com")
+        try:
+            bad = client.get("/api/v1/specs/kanban-boards/not-a-id")
+            assert bad.status_code == 400
+            r = client.get("/api/v1/specs/kanban-boards/1833672064557385241")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["board_id"] == "1833672064557385241"
+            assert body["embed_url"] == "/planka/boards/1833672064557385241"
+            claims = pyjwt.decode(body["access_token"], secret, algorithms=["HS256"])
+            assert claims["email"] == "joao@example.com"
+        finally:
+            auth_email_var.reset(tok_e)
+            auth_user_var.reset(tok_u)
+
 
 class TestProjectPanel:
     def test_painel_agrega_contagem_por_status(self, client, factory):

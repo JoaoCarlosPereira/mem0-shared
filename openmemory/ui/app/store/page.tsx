@@ -67,6 +67,7 @@ const DEFAULT_DRAFT: PublishDraft = {
   description: "",
   sourceRepository: "",
   promptContent: "",
+  skillContent: "",
 };
 
 type KindFilter = RegistryResourceKind | "all";
@@ -361,6 +362,42 @@ export default function StorePage() {
                       className="mt-1 min-h-24 border-slate-700 bg-slate-950 font-mono text-slate-100"
                     />
                   </label>
+                ) : draft.kind === "skills" ? (
+                  <>
+                    <label className="block text-sm font-medium text-slate-300">
+                      Conteúdo da skill (SKILL.md)
+                      <Textarea
+                        aria-label="Conteúdo da skill"
+                        value={draft.skillContent}
+                        onChange={(event) =>
+                          setDraft((current) => ({
+                            ...current,
+                            skillContent: event.target.value,
+                          }))
+                        }
+                        placeholder={"---\nname: minha-skill\ndescription: ...\n---\n\n# Instruções"}
+                        className="mt-1 min-h-32 border-slate-700 bg-slate-950 font-mono text-xs text-slate-100"
+                      />
+                      <span className="mt-1 block text-xs font-normal text-slate-500">
+                        Preferido na loja LAN — não exige repositório Git.
+                      </span>
+                    </label>
+                    <label className="block text-sm font-medium text-slate-300">
+                      Repositório de origem (opcional)
+                      <Input
+                        aria-label="Repositório de origem"
+                        value={draft.sourceRepository}
+                        onChange={(event) =>
+                          setDraft((current) => ({
+                            ...current,
+                            sourceRepository: event.target.value,
+                          }))
+                        }
+                        placeholder="https://github.com/org/repo (opcional)"
+                        className="mt-1 border-slate-700 bg-slate-950 text-slate-100"
+                      />
+                    </label>
+                  </>
                 ) : (
                   <label className="block text-sm font-medium text-slate-300">
                     Repositório de origem
