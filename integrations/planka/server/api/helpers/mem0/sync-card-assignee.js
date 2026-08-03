@@ -1,5 +1,8 @@
 /*!
  * Mem0 Shared — project Spec assignee onto PLANKA card_membership (single member).
+ *
+ * Uses CardMembership.qm directly (no Action/Notification side-effects) so the
+ * Spec mirror stays reliable when search_path/notifications misbehave.
  */
 
 module.exports = {
@@ -31,34 +34,34 @@ module.exports = {
       return exits.cardNotFound();
     }
 
-    const { card, list, board, project } = path;
+    const { card, board, project } = path;
     const existing = await CardMembership.qm.getByCardId(card.id);
 
-    const deleteMembership = async (membership) => {
-      const memberUser = await User.qm.getOneById(membership.userId);
-      if (!memberUser) {
-        await CardMembership.qm.deleteOne(membership.id);
-        return;
-      }
-      await sails.helpers.cardMemberships.deleteOne.with({
-        user: memberUser,
-        project,
-        board,
-        list,
-        card,
-        record: membership,
-        actorUser: inputs.actorUser,
-        request: inputs.request,
-      });
+    const broadcastDelete = (membership) => {
+      sails.sockets.broadcast(
+        `board:${board.id}`,
+        'cardMembershipDelete',
+        { item: membership },
+        inputs.request,
+      );
+    };
+
+    const broadcastCreate = (membership) => {
+      sails.sockets.broadcast(
+        `board:${board.id}`,
+        'cardMembershipCreate',
+        { item: membership },
+        inputs.request,
+      );
     };
 
     const rawEmail = inputs.email == null ? '' : String(inputs.email).trim();
     if (!rawEmail) {
-      // Release / no assignee → clear Spec-mirrored members.
       // eslint-disable-next-line no-restricted-syntax
       for (const membership of existing || []) {
         // eslint-disable-next-line no-await-in-loop
-        await deleteMembership(membership);
+        const deleted = await CardMembership.qm.deleteOne(membership.id);
+        if (deleted) broadcastDelete(deleted);
       }
       return exits.success({ cleared: true, userId: null });
     }
@@ -96,21 +99,23 @@ module.exports = {
     for (const membership of existing || []) {
       if (membership.userId === user.id) continue;
       // eslint-disable-next-line no-await-in-loop
-      await deleteMembership(membership);
+      const deleted = await CardMembership.qm.deleteOne(membership.id);
+      if (deleted) broadcastDelete(deleted);
     }
 
     const already = (existing || []).some((m) => m.userId === user.id);
     if (!already) {
-      await sails.helpers.cardMemberships.createOne
-        .with({
-          project,
-          board,
-          list,
-          values: { card, user },
-          actorUser: inputs.actorUser,
-          request: inputs.request,
-        })
-        .tolerate('userAlreadyCardMember', () => null);
+      try {
+        const created = await CardMembership.qm.createOne({
+          cardId: card.id,
+          userId: user.id,
+        });
+        broadcastCreate(created);
+      } catch (error) {
+        if (error.code !== 'E_UNIQUE') {
+          throw error;
+        }
+      }
     }
 
     return exits.success({ cleared: false, userId: user.id, email: user.email });
