@@ -1,11 +1,14 @@
 """Camada de empacotamento de backup em .zip unificado (task_02 / ADR-003).
 
 Reutiliza a coleta do :class:`~app.utils.backup.BackupService` (snapshot nativo do
-Qdrant + ``pg_dump``) e monta um único ``.zip`` por execução, contendo::
+Qdrant + ``pg_dump`` + anexos Spec/PLANKA) e monta um único ``.zip`` por execução,
+contendo::
 
     manifest.json
     qdrant/{collection}.snapshot
     postgres/dump.sql.gz
+    attachments/spec.tar.gz
+    attachments/planka.tar.gz
 
 O ``.zip`` é gravado no diretório local da política e, quando ``mirror_s3`` está
 ativo, o MESMO arquivo é espelhado no bucket S3/MinIO. A rotação FIFO mantém no
@@ -97,9 +100,10 @@ class BackupArchive:
         try:
             snapshots = self._service.collect_qdrant_snapshots()
             dump = self._service.collect_pg_dump()
+            attachments = self._service.collect_attachment_archives()
             points = self._service.qdrant_points_count()
 
-            zip_bytes = self._build_zip(ts, snapshots, dump, points)
+            zip_bytes = self._build_zip(ts, snapshots, dump, points, attachments)
             with open(tmp_path, "wb") as fh:
                 fh.write(zip_bytes)
             os.replace(tmp_path, final_path)
@@ -128,7 +132,7 @@ class BackupArchive:
                     logger.warning("could not remove temp archive %s", tmp_path)
             raise
 
-    def _build_zip(self, ts, snapshots, dump, points) -> bytes:
+    def _build_zip(self, ts, snapshots, dump, points, attachments=None) -> bytes:
         parts = []
         members = []  # (arcname, bytes)
         for col_name, data in snapshots.items():
@@ -139,6 +143,9 @@ class BackupArchive:
             arc = "postgres/dump.sql.gz"
             members.append((arc, dump))
             parts.append({"path": arc, "size": len(dump), "sha256": _sha256(dump)})
+        for arc, data in (attachments or {}).items():
+            members.append((arc, data))
+            parts.append({"path": arc, "size": len(data), "sha256": _sha256(data)})
 
         manifest = {
             "schema_version": SCHEMA_VERSION,
@@ -157,11 +164,12 @@ class BackupArchive:
 
     # -- restore (task_03 / ADR-005) --------------------------------------
     def restore(self, archive_path: str, *, safety_snapshot: bool = True) -> dict:
-        """Valida o ``.zip`` e restaura o estado (PostgreSQL → Qdrant).
+        """Valida o ``.zip`` e restaura o estado (PostgreSQL → Qdrant → anexos).
 
         Quando ``safety_snapshot`` é verdadeiro, um ``pre-restore-*.zip`` do estado
         atual é criado ANTES de sobrescrever (rede de segurança, fora da FIFO).
         Restore é sobrescrita idempotente — NÃO passa pela ``deletion_guard``.
+        Zips legados sem ``attachments/*.tar.gz`` restauram só PG + Qdrant.
         """
         if not os.path.exists(archive_path):
             raise FileNotFoundError(archive_path)
@@ -170,7 +178,7 @@ class BackupArchive:
         if safety_snapshot:
             self.create(tag="pre-restore")
 
-        restored: dict = {"postgres": None, "qdrant": []}
+        restored: dict = {"postgres": None, "qdrant": [], "attachments": []}
         dump = members.get("postgres/dump.sql.gz")
         if dump is not None:
             self._service.apply_pg_dump(dump)
@@ -180,6 +188,10 @@ class BackupArchive:
                 name = arc[len("qdrant/") : -len(".snapshot")]
                 self._service.recover_qdrant_snapshot(name, data)
                 restored["qdrant"].append(name)
+        for arc, data in members.items():
+            if arc.startswith("attachments/") and arc.endswith(".tar.gz"):
+                self._service.apply_attachment_archive(arc, data)
+                restored["attachments"].append(arc)
         return restored
 
     def _read_validated_members(self, archive_path: str) -> "dict[str, bytes]":

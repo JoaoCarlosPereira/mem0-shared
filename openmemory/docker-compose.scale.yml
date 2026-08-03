@@ -91,6 +91,8 @@ x-api-common: &api-common
     NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-}
     # Anexos de cards Spec (volume dedicado — nunca Qdrant / mem0_storage).
     SPEC_ATTACHMENTS_DIR: ${SPEC_ATTACHMENTS_DIR:-/mnt/spec-attachments}
+    # Anexos PLANKA (/app/data no sidecar) montados no mcp/worker para backup.
+    PLANKA_ATTACHMENTS_DIR: ${PLANKA_ATTACHMENTS_DIR:-/mnt/planka-attachments}
     # Object store para backup/cold tier (task_02/07 / ADR-003).
     S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
     S3_BUCKET: ${S3_BUCKET:-mem0-backups}
@@ -167,6 +169,7 @@ services:
     volumes:
       - ${LOCAL_BACKUP_DIR:-./backups}:/mnt/backups
       - spec_attachments:/mnt/spec-attachments
+      - planka_attachments:/mnt/planka-attachments
     # --no-access-log: o access log do uvicorn imprime a URL completa com query
     # string, o que vazaria o ?token= dos agentes (ADR-003). A observabilidade
     # de requisições vem do logging estruturado (request_id/auth_method) e das
@@ -225,6 +228,8 @@ services:
       BACKUP_WORKER_SLEEP: ${BACKUP_WORKER_SLEEP:-300}
     volumes:
       - ${LOCAL_BACKUP_DIR:-./backups}:/mnt/backups
+      - spec_attachments:/mnt/spec-attachments
+      - planka_attachments:/mnt/planka-attachments
     depends_on:
       mem0_store:
         condition: service_started

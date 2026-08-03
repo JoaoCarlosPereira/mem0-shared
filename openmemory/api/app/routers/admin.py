@@ -277,7 +277,7 @@ def backup_run(
     archive: BackupArchive = Depends(_backup_archive),
     _: None = Depends(require_admin),
 ) -> dict:
-    """Dispara um backup completo (Qdrant + PostgreSQL) em background."""
+    """Dispara um backup completo (Qdrant + PostgreSQL + anexos) em background."""
     background.add_task(archive.create)
     return {"status": "accepted"}
 
