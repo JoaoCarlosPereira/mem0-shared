@@ -106,3 +106,5 @@ Smoke:
 - Backup PostgreSQL (`pg_dump` do DB `openmemory`) inclui o schema `planka`.
 - Não commitar `.env` nem secrets neste diretório.
 - Fair Use: uso interno da equipe; notices em `LICENSE.md`.
+- Runbook cutover/rollback/resync: `openmemory/docs/runbooks/planka-cutover-rollback.md`
+- Gate go-live: `openmemory/docs/runbooks/planka-go-live-checklist.md`
