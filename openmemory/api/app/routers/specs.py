@@ -1000,7 +1000,9 @@ def write_workspace_document(
     db: Session = Depends(get_db),
 ) -> DocumentWriteResponse:
     """Grava uma nova versão do documento. 409 em conflito de versão (ADR-005)."""
-    ws = _get_workspace_or_404(db, workspace_id)
+    # Sem atribuição: a função existe pelo 404 que ela levanta. O ``ws`` era usado
+    # pela indexação síncrona, que saiu do caminho de request em ad77a0e9.
+    _get_workspace_or_404(db, workspace_id)
     _assert_access(db, workspace_id)
 
     doc = get_or_create_document(db, workspace_id, document_type)
