@@ -18,6 +18,7 @@ import pytest
 
 from app.utils.backup import BackupService
 from app.utils.backup_archive import BackupArchive
+from app.utils.backup_attachments import PLANKA_ARCNAME, SPEC_ARCNAME
 from app.utils.metrics import BACKUP_ERRORS_TOTAL
 from app.schemas import BackupPolicySchema
 
@@ -76,26 +77,40 @@ class IncClock:
         return self.t
 
 
-def _service(s3, qc):
+def _att_roots(tmp_path):
+    spec = tmp_path / "spec-att"
+    planka = tmp_path / "planka-att"
+    spec.mkdir(exist_ok=True)
+    planka.mkdir(exist_ok=True)
+    return {SPEC_ARCNAME: spec, PLANKA_ARCNAME: planka}
+
+
+def _service(s3, qc, tmp_path):
     return BackupService(
         s3_client=s3,
         bucket="b",
         db_url=_PG_URL,
         qdrant_client_provider=lambda: qc,
         pg_dump_runner=lambda url: gzip.compress(b"PGDUMP"),
+        attachment_roots=_att_roots(tmp_path),
     )
 
 
 def _archive(tmp_path, s3, qc, *, retention=5, mirror_s3=False, clock=None):
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(exist_ok=True)
     policy = BackupPolicySchema(
-        local_dir=str(tmp_path), retention=retention, mirror_s3=mirror_s3
+        local_dir=str(backup_dir), retention=retention, mirror_s3=mirror_s3
     )
     return BackupArchive(
-        _service(s3, qc), policy, clock=clock or IncClock(), openmemory_version="test"
+        _service(s3, qc, tmp_path),
+        policy,
+        clock=clock or IncClock(),
+        openmemory_version="test",
     )
 
 
-def test_create_produces_zip_with_three_part_groups(tmp_path):
+def test_create_produces_zip_with_qdrant_pg_and_attachments(tmp_path):
     arc = _archive(tmp_path, FakeS3(), FakeQdrant())
     result = arc.create()
     assert os.path.exists(result.path)
@@ -106,6 +121,8 @@ def test_create_produces_zip_with_three_part_groups(tmp_path):
         "qdrant/c1.snapshot",
         "qdrant/c2.snapshot",
         "postgres/dump.sql.gz",
+        SPEC_ARCNAME,
+        PLANKA_ARCNAME,
     }
 
 
@@ -115,10 +132,13 @@ def test_manifest_has_correct_checksums_and_points(tmp_path):
     with zipfile.ZipFile(result.path) as zf:
         manifest = json.loads(zf.read("manifest.json"))
         snap = zf.read("qdrant/c1.snapshot")
+        spec_tar = zf.read(SPEC_ARCNAME)
     assert manifest["points_count"] == 6  # 2 coleções x 3 pontos
     assert manifest["schema_version"] == 1
     part = next(p for p in manifest["parts"] if p["path"] == "qdrant/c1.snapshot")
     assert part["sha256"] == hashlib.sha256(snap).hexdigest()
+    att = next(p for p in manifest["parts"] if p["path"] == SPEC_ARCNAME)
+    assert att["sha256"] == hashlib.sha256(spec_tar).hexdigest()
 
 
 def test_mirror_s3_uploads_same_zip(tmp_path):
@@ -141,7 +161,8 @@ def test_fifo_keeps_retention_and_drops_oldest(tmp_path):
     clock = IncClock()
     arc = _archive(tmp_path, FakeS3(), FakeQdrant(), retention=5, clock=clock)
     names = [arc.create().name for _ in range(6)]
-    remaining = sorted(f for f in os.listdir(tmp_path) if f.endswith(".zip"))
+    backup_dir = tmp_path / "backups"
+    remaining = sorted(f for f in os.listdir(backup_dir) if f.endswith(".zip"))
     assert len(remaining) == 5
     assert names[0] not in remaining  # a mais antiga foi removida
     assert names[-1] in remaining
@@ -152,7 +173,7 @@ def test_tagged_archive_excluded_from_rotation(tmp_path):
     arc = _archive(tmp_path, FakeS3(), FakeQdrant(), retention=1, clock=clock)
     regular = arc.create().name
     pre = arc.create(tag="pre-restore").name
-    files = set(os.listdir(tmp_path))
+    files = set(os.listdir(tmp_path / "backups"))
     # pre-restore não dispara prune do regular; ambos permanecem.
     assert regular in files
     assert pre in files
@@ -163,14 +184,17 @@ def test_create_failure_increments_metric_and_cleans_temp(tmp_path):
     def boom(url):
         raise RuntimeError("pg_dump down")
 
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
     svc = BackupService(
         s3_client=FakeS3(),
         bucket="b",
         db_url=_PG_URL,
         qdrant_client_provider=lambda: FakeQdrant(),
         pg_dump_runner=boom,
+        attachment_roots=_att_roots(tmp_path),
     )
-    policy = BackupPolicySchema(local_dir=str(tmp_path), retention=5)
+    policy = BackupPolicySchema(local_dir=str(backup_dir), retention=5)
     arc = BackupArchive(svc, policy, clock=IncClock(), openmemory_version="test")
 
     before = BACKUP_ERRORS_TOTAL._value.get()
@@ -178,7 +202,7 @@ def test_create_failure_increments_metric_and_cleans_temp(tmp_path):
         arc.create()
     assert BACKUP_ERRORS_TOTAL._value.get() == before + 1
     # nenhum .zip nem .tmp; só o marcador de erro para a UI
-    leftover = sorted(os.listdir(tmp_path))
+    leftover = sorted(os.listdir(backup_dir))
     assert leftover == [".last_error"]
     assert "pg_dump down" in arc.status()["last_error"]
 
@@ -187,14 +211,17 @@ def test_status_clears_last_error_after_success(tmp_path):
     def boom(url):
         raise RuntimeError("pg_dump down")
 
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
     svc = BackupService(
         s3_client=FakeS3(),
         bucket="b",
         db_url=_PG_URL,
         qdrant_client_provider=lambda: FakeQdrant(),
         pg_dump_runner=boom,
+        attachment_roots=_att_roots(tmp_path),
     )
-    policy = BackupPolicySchema(local_dir=str(tmp_path), retention=5)
+    policy = BackupPolicySchema(local_dir=str(backup_dir), retention=5)
     broken = BackupArchive(svc, policy, clock=IncClock(), openmemory_version="test")
     with pytest.raises(RuntimeError):
         broken.create()

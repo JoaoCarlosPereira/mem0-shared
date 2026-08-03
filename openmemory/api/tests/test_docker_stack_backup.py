@@ -40,6 +40,20 @@ def test_compose_backup_volume_mounted_on_api_and_worker(compose):
     assert any(str(v).endswith(target) for v in worker_vols)
 
 
+def test_compose_attachment_volumes_mounted_for_backup(compose):
+    """Backup/restore precisam dos volumes Spec + PLANKA (nunca mem0_storage)."""
+    api_vols = [str(v) for v in compose["services"]["openmemory-mcp"]["volumes"]]
+    worker_vols = [
+        str(v) for v in compose["services"]["openmemory-backup-worker"]["volumes"]
+    ]
+    for vols in (api_vols, worker_vols):
+        assert any("spec_attachments:/mnt/spec-attachments" in v for v in vols)
+        assert any("planka_attachments:/mnt/planka-attachments" in v for v in vols)
+    raw = COMPOSE.read_text(encoding="utf-8")
+    assert "PLANKA_ATTACHMENTS_DIR" in raw
+    assert "SPEC_ATTACHMENTS_DIR" in raw
+
+
 def test_compose_qdrant_volume_unchanged(compose):
     # O volume de dados do Qdrant não pode ter sido alterado por esta task.
     qdrant_vols = compose["services"]["mem0_store"]["volumes"]

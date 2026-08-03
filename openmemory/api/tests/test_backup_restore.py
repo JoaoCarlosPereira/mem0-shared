@@ -21,6 +21,7 @@ from app.utils.backup_archive import (
     BackupArchive,
     SchemaIncompatibleError,
 )
+from app.utils.backup_attachments import PLANKA_ARCNAME, SPEC_ARCNAME
 from app.schemas import BackupPolicySchema
 
 _PG_URL = "postgresql://u:p@db:5432/mem0"
@@ -75,15 +76,26 @@ class IncClock:
         return self.t
 
 
+def _att_roots(tmp_path):
+    spec = tmp_path / "spec-att"
+    planka = tmp_path / "planka-att"
+    spec.mkdir(exist_ok=True)
+    planka.mkdir(exist_ok=True)
+    return {SPEC_ARCNAME: spec, PLANKA_ARCNAME: planka}
+
+
 def _archive(tmp_path, qc, *, db_url="sqlite:///x.db", retention=5):
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(exist_ok=True)
     svc = BackupService(
         s3_client=FakeS3(),
         bucket="b",
         db_url=db_url,
         qdrant_client_provider=lambda: qc,
         pg_dump_runner=lambda url: __import__("gzip").compress(b"PGDUMP"),
+        attachment_roots=_att_roots(tmp_path),
     )
-    policy = BackupPolicySchema(local_dir=str(tmp_path), retention=retention)
+    policy = BackupPolicySchema(local_dir=str(backup_dir), retention=retention)
     return BackupArchive(svc, policy, clock=IncClock(), openmemory_version="test")
 
 
@@ -149,16 +161,16 @@ def test_safety_snapshot_created_before_apply(tmp_path):
     assert "recover" in order
     assert order.index("snapshot") < order.index("recover")
     # o pre-restore não conta na FIFO (regular + pre-restore presentes)
-    assert any(f.startswith("pre-restore-") for f in os.listdir(tmp_path))
+    assert any(f.startswith("pre-restore-") for f in os.listdir(tmp_path / "backups"))
 
 
 def test_restore_skips_safety_snapshot_when_disabled(tmp_path):
     qc = StatefulQdrant({"c1": 5})
     arc = _archive(tmp_path, qc)
     archive = arc.create()
-    before = {f for f in os.listdir(tmp_path)}
+    before = {f for f in os.listdir(tmp_path / "backups")}
     arc.restore(archive.path, safety_snapshot=False)
-    after = {f for f in os.listdir(tmp_path)}
+    after = {f for f in os.listdir(tmp_path / "backups")}
     assert not any(f.startswith("pre-restore-") for f in after - before)
 
 
@@ -206,3 +218,56 @@ def test_round_trip_with_postgres_applies_dump(tmp_path, monkeypatch):
     assert out["postgres"] == "postgres/dump.sql.gz"
     assert calls.get("psql_input") == b"PGDUMP"  # dump descomprimido aplicado via psql
     assert qc.store["c1"] == 3
+
+
+def test_round_trip_restores_attachment_files(tmp_path):
+    roots = _att_roots(tmp_path)
+    (roots[SPEC_ARCNAME] / "task1").mkdir()
+    (roots[SPEC_ARCNAME] / "task1" / "a.txt").write_text("spec-data", encoding="utf-8")
+    (roots[PLANKA_ARCNAME] / "private").mkdir()
+    (roots[PLANKA_ARCNAME] / "private" / "b.bin").write_bytes(b"\x00planka")
+
+    qc = StatefulQdrant({"c1": 2})
+    arc = _archive(tmp_path, qc)
+    archive = arc.create()
+
+    # desastre nos volumes
+    (roots[SPEC_ARCNAME] / "task1" / "a.txt").write_text("gone", encoding="utf-8")
+    (roots[PLANKA_ARCNAME] / "private" / "b.bin").unlink()
+    (roots[SPEC_ARCNAME] / "orphan.txt").write_text("should-vanish", encoding="utf-8")
+
+    out = arc.restore(archive.path, safety_snapshot=False)
+    assert SPEC_ARCNAME in out["attachments"]
+    assert PLANKA_ARCNAME in out["attachments"]
+    assert (roots[SPEC_ARCNAME] / "task1" / "a.txt").read_text(encoding="utf-8") == "spec-data"
+    assert (roots[PLANKA_ARCNAME] / "private" / "b.bin").read_bytes() == b"\x00planka"
+    assert not (roots[SPEC_ARCNAME] / "orphan.txt").exists()
+
+
+def test_legacy_zip_without_attachments_still_restores_qdrant(tmp_path):
+    """Zips schema v1 sem attachments/*.tar.gz continuam válidos."""
+    import hashlib
+
+    qc = StatefulQdrant({"c1": 5})
+    snap = b"5"
+    legacy = tmp_path / "backups"
+    legacy.mkdir(exist_ok=True)
+    path = legacy / "legacy.zip"
+    manifest = {
+        "schema_version": 1,
+        "parts": [
+            {
+                "path": "qdrant/c1.snapshot",
+                "size": len(snap),
+                "sha256": hashlib.sha256(snap).hexdigest(),
+            }
+        ],
+    }
+    _write_zip(str(path), {"qdrant/c1.snapshot": snap}, manifest)
+
+    arc = _archive(tmp_path, qc)
+    qc.store["c1"] = 0
+    out = arc.restore(str(path), safety_snapshot=False)
+    assert out["qdrant"] == ["c1"]
+    assert out["attachments"] == []
+    assert qc.store["c1"] == 5
