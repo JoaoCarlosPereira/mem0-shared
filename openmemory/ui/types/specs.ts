@@ -65,6 +65,9 @@ export interface TaskCard {
   version: number;
   last_activity_at?: string | null;
   branch_ref?: string | null;
+  due_at?: string | null;
+  position?: number;
+  members?: string[];
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -124,6 +127,46 @@ export interface TaskUpdate {
   title?: string | null;
   description?: string | null;
   branch_ref?: string | null;
+  due_at?: string | null;
+  clear_due_at?: boolean;
+  position?: number | null;
+  members?: string[] | null;
+}
+
+export interface TaskLabel {
+  id: string;
+  workspace_id: string;
+  name: string;
+  color?: string | null;
+  created_at?: string | null;
+}
+
+export interface ChecklistItem {
+  id: string;
+  checklist_id: string;
+  title: string;
+  is_completed: boolean;
+  position: number;
+  created_at?: string | null;
+}
+
+export interface Checklist {
+  id: string;
+  task_id: string;
+  title: string;
+  position: number;
+  created_at?: string | null;
+  items: ChecklistItem[];
+}
+
+export interface TaskAttachment {
+  id: string;
+  task_id: string;
+  filename: string;
+  content_type?: string | null;
+  size_bytes: number;
+  uploaded_by?: string | null;
+  created_at?: string | null;
 }
 
 export interface StatusPatchRequest {

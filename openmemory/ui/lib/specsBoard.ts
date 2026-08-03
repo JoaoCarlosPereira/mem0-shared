@@ -2,7 +2,8 @@
 // (ADR-001/ADR-007), sem customização por projeto no MVP. Separada da UI para
 // ser testável sem simular drag-and-drop real (impraticável em jsdom).
 
-import type { TaskCard, TaskCardStatus, UpdateStatusResult } from "@/types/specs";
+import type { TaskCard, TaskCardStatus, TaskUpdate, UpdateStatusResult } from "@/types/specs";
+import { computeInsertPosition, sortTasksByPosition } from "@/lib/specsPosition";
 
 export interface BoardColumn {
   key: string; // "SDD" ou um TaskCardStatus
@@ -79,6 +80,7 @@ export interface CardDropOutcome {
   conflict: boolean; // servidor rejeitou por conflito de versão (409)
   task?: TaskCard;
   targetStatus?: TaskCardStatus;
+  position?: number;
   result?: UpdateStatusResult;
   claimedDenied?: boolean;
   currentAssignee?: string | null;
@@ -87,10 +89,12 @@ export interface CardDropOutcome {
 /**
  * Decide e efetiva o resultado de soltar um card de task numa coluna.
  *
- * - Ignora drops sem alvo, em card de documento, ou na mesma coluna (moved=false).
+ * - Ignora drops sem alvo ou em card de documento (moved=false).
+ * - Reordenação na mesma coluna (over = outro card) persiste ``position``.
  * - ``tasks`` → ``em_andamento`` usa ``claimTask`` (exclusividade ADR-003).
  * - Qualquer coluna → ``tasks`` usa ``releaseTask``.
  * - Demais transições usam ``updateTaskStatus`` com concorrência otimista.
+ * - Após mudança de coluna (ou reorder), ``updateTask`` grava ``position``.
  */
 export async function handleCardDrop(params: {
   activeId: string;
@@ -106,6 +110,10 @@ export async function handleCardDrop(params: {
       actor?: string | null;
     },
   ) => Promise<UpdateStatusResult>;
+  updateTask?: (
+    taskId: string,
+    payload: TaskUpdate,
+  ) => Promise<{ conflict: boolean; task?: TaskCard; current_version?: number }>;
   claimTask?: (
     taskId: string,
     claimant: string,
@@ -125,18 +133,47 @@ export async function handleCardDrop(params: {
     tasks,
     actor,
     updateTaskStatus,
+    updateTask,
     claimTask,
     releaseTask,
   } = params;
 
+  const overTaskId =
+    overId && !isTaskColumn(overId) ? overId : null;
   const overColumn = resolveDropColumn(overId, tasks);
   if (!overColumn) {
     return { moved: false, conflict: false };
   }
   const task = tasks.find((t) => t.id === activeId);
-  if (!task || task.status === overColumn) {
-    return { moved: false, conflict: false, task };
+  if (!task) {
+    return { moved: false, conflict: false };
   }
+
+  const columnPeers = tasks.filter((t) => t.status === overColumn);
+  const nextPosition = computeInsertPosition(columnPeers, activeId, overTaskId);
+
+  // Reordenação na mesma coluna (precisa over em outro card).
+  if (task.status === overColumn) {
+    if (!overTaskId || overTaskId === activeId || !updateTask) {
+      return { moved: false, conflict: false, task };
+    }
+    const res = await updateTask(task.id, {
+      expected_version: task.version,
+      position: nextPosition,
+    });
+    return {
+      moved: true,
+      conflict: res.conflict,
+      task: res.task ?? task,
+      targetStatus: overColumn,
+      position: nextPosition,
+      result: res.conflict
+        ? { conflict: true, current_version: res.current_version }
+        : { conflict: false, task: res.task },
+    };
+  }
+
+  let version = task.version;
 
   // Entrar em em_andamento exige claim (não PATCH de status).
   if (overColumn === "em_andamento" && task.status === "tasks") {
@@ -154,41 +191,68 @@ export async function handleCardDrop(params: {
         targetStatus: overColumn,
       };
     }
-    return {
-      moved: true,
-      conflict: false,
-      task,
-      targetStatus: overColumn,
-      result: { conflict: false },
-    };
-  }
-
-  // Voltar ao backlog exige release.
-  if (overColumn === "tasks") {
+    version = res.version ?? version + 1;
+  } else if (overColumn === "tasks") {
+    // Voltar ao backlog exige release.
     if (!releaseTask) {
       return { moved: false, conflict: false, task };
     }
     await releaseTask(task.id, { actor: actor ?? undefined, reason: "drag to backlog" });
+    version = version + 1;
+  } else {
+    const result = await updateTaskStatus(task.id, {
+      expected_version: version,
+      new_status: overColumn,
+      actor,
+    });
+    if (result.conflict) {
+      return {
+        moved: true,
+        conflict: true,
+        task,
+        targetStatus: overColumn,
+        result,
+      };
+    }
+    version = result.task?.version ?? version + 1;
+  }
+
+  if (updateTask) {
+    const posRes = await updateTask(task.id, {
+      expected_version: version,
+      position: nextPosition,
+    });
+    if (posRes.conflict) {
+      return {
+        moved: true,
+        conflict: true,
+        task,
+        targetStatus: overColumn,
+        position: nextPosition,
+        result: {
+          conflict: true,
+          current_version: posRes.current_version,
+        },
+      };
+    }
     return {
       moved: true,
       conflict: false,
-      task,
+      task: posRes.task ?? task,
       targetStatus: overColumn,
-      result: { conflict: false },
+      position: nextPosition,
+      result: { conflict: false, task: posRes.task },
     };
   }
 
-  const result = await updateTaskStatus(task.id, {
-    expected_version: task.version,
-    new_status: overColumn,
-    actor,
-  });
-
   return {
     moved: true,
-    conflict: result.conflict,
+    conflict: false,
     task,
     targetStatus: overColumn,
-    result,
+    position: nextPosition,
+    result: { conflict: false },
   };
 }
+
+export { sortTasksByPosition };

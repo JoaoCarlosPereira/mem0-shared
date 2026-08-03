@@ -51,15 +51,33 @@ import {
   handleCardDrop,
   pickBoardDropTarget,
   resolveDropColumn,
+  sortTasksByPosition,
 } from "@/lib/specsBoard";
 import { MarkdownViewer } from "@/components/shared/MarkdownViewer";
 import { ActorLabel } from "@/components/shared/attribution-badge";
+import { TaskRichFields } from "@/components/docs/TaskRichFields";
 import type {
   SpecDocument,
   TaskCard,
   TaskCardStatus,
 } from "@/types/specs";
 import { cn } from "@/lib/utils";
+
+function toDatetimeLocal(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function fromDatetimeLocal(local: string): string | null {
+  const raw = local.trim();
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
 
 /** Prefer pointer-within (empty columns + cards), then intersection, then corners. */
 const boardCollisionDetection: CollisionDetection = (args) => {
@@ -118,7 +136,7 @@ function TaskCardBody({
               data-testid={`task-card-open-${task.id}`}
             >
               <div className="flex items-start justify-between gap-2">
-                <span className="font-medium text-zinc-100">{task.title}</span>
+                <span className="font-medium text-foreground">{task.title}</span>
                 {task.is_blocked && (
                   <Badge variant="destructive" aria-label="bloqueado">
                     Bloqueado
@@ -128,7 +146,7 @@ function TaskCardBody({
             </button>
           ) : (
             <div className="flex items-start justify-between gap-2">
-              <span className="font-medium text-zinc-100">{task.title}</span>
+              <span className="font-medium text-foreground">{task.title}</span>
               {task.is_blocked && (
                 <Badge variant="destructive" aria-label="bloqueado">
                   Bloqueado
@@ -143,6 +161,19 @@ function TaskCardBody({
                 displayName={task.assignee_display_name}
                 avatarUrl={task.assignee_avatar_url}
               />
+            </div>
+          )}
+          {task.due_at && (
+            <div
+              className="mt-1 text-xs text-muted-foreground"
+              data-testid={`task-due-${task.id}`}
+            >
+              Prazo {new Date(task.due_at).toLocaleString()}
+            </div>
+          )}
+          {task.members && task.members.length > 0 && (
+            <div className="mt-1 text-xs text-muted-foreground">
+              {task.members.join(", ")}
             </div>
           )}
           {task.block_reason && (
@@ -216,9 +247,9 @@ function DraggableTaskCard({
       {...attributes}
       data-testid={`task-card-${task.id}`}
       className={cn(
-        "w-full touch-none rounded-md border border-zinc-800 bg-zinc-900 p-3 text-left text-sm transition-colors hover:border-zinc-600 hover:bg-zinc-900/80",
+        "w-full touch-none rounded-md border border-border bg-card p-3 text-left text-sm text-card-foreground transition-colors hover:border-primary/40 hover:bg-card/80",
         isDragging ? "cursor-grabbing opacity-40" : "cursor-grab",
-        isOver && !isDragging && "ring-2 ring-blue-500/60",
+        isOver && !isDragging && "ring-2 ring-primary/60",
       )}
     >
       <TaskCardBody
@@ -254,7 +285,7 @@ function DocumentCard({
       type="button"
       data-testid={`doc-card-${doc.document_type}`}
       onClick={() => onOpen(doc)}
-      className="w-full rounded-md border border-zinc-800 bg-zinc-900 p-3 text-left text-sm transition-colors hover:border-zinc-600 hover:bg-zinc-900/80"
+      className="w-full rounded-md border border-border bg-card p-3 text-left text-sm text-card-foreground transition-colors hover:border-primary/40 hover:bg-card/80"
     >
       <div className="font-medium uppercase text-zinc-100">{doc.document_type}</div>
       <div className="mt-1 text-xs text-zinc-400">versão v{doc.current_version}</div>
@@ -298,12 +329,12 @@ function Column({
       ref={setNodeRef}
       data-testid={`column-${columnKey}`}
       className={cn(
-        "flex min-h-0 min-w-0 flex-1 flex-col gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 p-2 transition-[box-shadow,border-color]",
-        highlight && "border-blue-500/60 ring-2 ring-blue-500",
+        "flex min-h-0 min-w-0 flex-1 flex-col gap-2 rounded-lg border border-border bg-muted/30 p-2 transition-[box-shadow,border-color]",
+        highlight && "border-primary/60 ring-2 ring-primary",
       )}
     >
       <div className="flex shrink-0 items-center justify-between gap-1 px-1">
-        <h3 className="text-xs font-black uppercase tracking-widest text-zinc-400">
+        <h3 className="text-xs font-black uppercase tracking-widest text-muted-foreground">
           {label}
         </h3>
         {headerAction}
@@ -330,10 +361,50 @@ export default function SpecsBoardPage() {
     releaseTask,
     createTask,
     fetchWorkspaceBoard,
+    listLabels,
+    createLabel,
+    attachLabel,
+    detachLabel,
+    listChecklists,
+    createChecklist,
+    createChecklistItem,
+    patchChecklistItem,
+    uploadAttachment,
+    deleteAttachment,
+    attachmentDownloadUrl,
   } = useSpecsApi({
     workspaceId,
     poll: true,
   });
+
+  const richApi = useMemo(
+    () => ({
+      listLabels,
+      createLabel,
+      attachLabel,
+      detachLabel,
+      listChecklists,
+      createChecklist,
+      createChecklistItem,
+      patchChecklistItem,
+      uploadAttachment,
+      deleteAttachment,
+      attachmentDownloadUrl,
+    }),
+    [
+      listLabels,
+      createLabel,
+      attachLabel,
+      detachLabel,
+      listChecklists,
+      createChecklist,
+      createChecklistItem,
+      patchChecklistItem,
+      uploadAttachment,
+      deleteAttachment,
+      attachmentDownloadUrl,
+    ],
+  );
 
   const board = useSelector((s: RootState) => s.specs.currentBoard);
   const error = useSelector((s: RootState) => s.specs.error);
@@ -355,6 +426,9 @@ export default function SpecsBoardPage() {
   const [taskTitle, setTaskTitle] = useState("");
   const [taskDescription, setTaskDescription] = useState("");
   const [taskStatus, setTaskStatus] = useState<TaskCardStatus>("tasks");
+  const [taskDueAt, setTaskDueAt] = useState("");
+  const [taskMembersText, setTaskMembersText] = useState("");
+  const [taskDescEditing, setTaskDescEditing] = useState(false);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createTitle, setCreateTitle] = useState("");
@@ -365,7 +439,6 @@ export default function SpecsBoardPage() {
   const [docContent, setDocContent] = useState("");
   const [docEditing, setDocEditing] = useState(false);
   const [pendingAdrScroll, setPendingAdrScroll] = useState<string | null>(null);
-  const [taskDescEditing, setTaskDescEditing] = useState(false);
   const [activeDragTask, setActiveDragTask] = useState<TaskCard | null>(null);
   const [overColumnKey, setOverColumnKey] = useState<TaskCardStatus | null>(null);
 
@@ -423,6 +496,8 @@ export default function SpecsBoardPage() {
     setTaskTitle(task.title);
     setTaskDescription(task.description || "");
     setTaskStatus(task.status);
+    setTaskDueAt(toDatetimeLocal(task.due_at));
+    setTaskMembersText((task.members || []).join(", "));
   }, []);
 
   const openDocDialog = useCallback((doc: SpecDocument) => {
@@ -472,6 +547,7 @@ export default function SpecsBoardPage() {
         tasks,
         actor,
         updateTaskStatus,
+        updateTask,
         claimTask,
         releaseTask,
       });
@@ -496,7 +572,16 @@ export default function SpecsBoardPage() {
         setTasks((prev) =>
           prev.map((t) =>
             t.id === outcome.task?.id
-              ? { ...t, status: outcome.targetStatus!, version: t.version + 1 }
+              ? {
+                  ...t,
+                  ...(outcome.targetStatus
+                    ? { status: outcome.targetStatus }
+                    : {}),
+                  ...(typeof outcome.position === "number"
+                    ? { position: outcome.position }
+                    : {}),
+                  version: outcome.task?.version ?? t.version + 1,
+                }
               : t,
           ),
         );
@@ -507,6 +592,7 @@ export default function SpecsBoardPage() {
       tasks,
       actor,
       updateTaskStatus,
+      updateTask,
       claimTask,
       releaseTask,
       fetchWorkspaceBoard,
@@ -608,14 +694,32 @@ export default function SpecsBoardPage() {
     setDialogError(null);
     try {
       let version = openTask.version;
+      const nextDue = fromDatetimeLocal(taskDueAt);
+      const nextMembers = taskMembersText
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const prevMembers = openTask.members || [];
+      const membersChanged =
+        nextMembers.join("\0") !== prevMembers.join("\0");
+      const dueChanged = toDatetimeLocal(openTask.due_at) !== taskDueAt;
+
       if (
         taskTitle !== openTask.title ||
-        taskDescription !== (openTask.description || "")
+        taskDescription !== (openTask.description || "") ||
+        dueChanged ||
+        membersChanged
       ) {
         const res = await updateTask(openTask.id, {
           expected_version: version,
           title: taskTitle,
           description: taskDescription,
+          ...(dueChanged
+            ? taskDueAt.trim() && nextDue
+              ? { due_at: nextDue }
+              : { clear_due_at: true }
+            : {}),
+          ...(membersChanged ? { members: nextMembers } : {}),
         });
         if (res.conflict) {
           setDialogError("Conflito de versão ao salvar. Recarregue o quadro.");
@@ -666,6 +770,8 @@ export default function SpecsBoardPage() {
     taskTitle,
     taskDescription,
     taskStatus,
+    taskDueAt,
+    taskMembersText,
     updateTask,
     updateTaskStatus,
     claimTask,
@@ -753,6 +859,9 @@ export default function SpecsBoardPage() {
     const map: Record<string, TaskCard[]> = {};
     for (const t of tasks) {
       (map[t.status] ||= []).push(t);
+    }
+    for (const key of Object.keys(map)) {
+      map[key] = sortTasksByPosition(map[key]);
     }
     return map;
   }, [tasks]);
@@ -924,11 +1033,11 @@ export default function SpecsBoardPage() {
           if (!open) setOpenTask(null);
         }}
       >
-        <DialogContent className="flex max-h-[85vh] max-w-2xl flex-col gap-4 overflow-hidden border-zinc-800 bg-zinc-950 text-zinc-100">
+        <DialogContent className="flex max-h-[85vh] max-w-2xl flex-col gap-4 overflow-hidden border-border bg-background text-foreground">
           <DialogHeader>
             <DialogTitle>Task</DialogTitle>
-            <DialogDescription className="text-zinc-400">
-              Ver, editar, mover de coluna ou excluir.
+            <DialogDescription className="text-muted-foreground">
+              Ver, editar, mover de coluna ou excluir. Campos ricos via FastAPI.
             </DialogDescription>
           </DialogHeader>
           {dialogError && (
@@ -1003,6 +1112,18 @@ export default function SpecsBoardPage() {
                   avatarUrl={openTask.assignee_avatar_url}
                 />
               </div>
+            )}
+            {openTask && (
+              <TaskRichFields
+                task={openTask}
+                workspaceId={workspaceId}
+                api={richApi}
+                dueAt={taskDueAt}
+                membersText={taskMembersText}
+                onDueAtChange={setTaskDueAt}
+                onMembersTextChange={setTaskMembersText}
+                busy={busy}
+              />
             )}
           </div>
           <DialogFooter className="flex-wrap gap-2 sm:justify-between">

@@ -350,4 +350,58 @@ describe("useSpecsApi", () => {
     );
     jest.useRealTimers();
   });
+
+  it("updateTask faz PATCH com due_at/position", async () => {
+    mockedAxios.patch.mockResolvedValue({
+      data: {
+        id: "t1",
+        version: 2,
+        due_at: "2026-08-10T12:00:00Z",
+        position: 100,
+      },
+    });
+    const store = makeStore();
+    const { result } = renderHook(() => useSpecsApi({ poll: false }), {
+      wrapper: wrapperFor(store),
+    });
+    await act(async () => {
+      await result.current.updateTask("t1", {
+        expected_version: 1,
+        due_at: "2026-08-10T12:00:00Z",
+        position: 100,
+      });
+    });
+    expect(mockedAxios.patch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/specs/tasks/t1"),
+      expect.objectContaining({
+        expected_version: 1,
+        due_at: "2026-08-10T12:00:00Z",
+        position: 100,
+      }),
+    );
+  });
+
+  it("listLabels e patchChecklistItem usam rotas additive", async () => {
+    mockedAxios.get.mockResolvedValue({ data: [] });
+    mockedAxios.patch.mockResolvedValue({
+      data: { id: "i1", is_completed: true },
+    });
+    const store = makeStore();
+    const { result } = renderHook(() => useSpecsApi({ poll: false }), {
+      wrapper: wrapperFor(store),
+    });
+    await act(async () => {
+      await result.current.listLabels("w1");
+      await result.current.patchChecklistItem("c1", "i1", {
+        is_completed: true,
+      });
+    });
+    expect(mockedAxios.get).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/specs/workspaces/w1/labels"),
+    );
+    expect(mockedAxios.patch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/specs/checklists/c1/items/i1"),
+      { is_completed: true },
+    );
+  });
 });

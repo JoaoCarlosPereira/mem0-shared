@@ -13,6 +13,8 @@ import { usePolling } from "@/hooks/usePolling";
 import { getApiUrl } from "@/lib/api-url";
 import {
   ClaimResult,
+  Checklist,
+  ChecklistItem,
   CommentCreate,
   DocumentType,
   DocumentVersion,
@@ -20,8 +22,10 @@ import {
   DocumentWriteResult,
   SpecSearchResult,
   StatusPatchRequest,
+  TaskAttachment,
   TaskCard,
   TaskCreate,
+  TaskLabel,
   TaskUpdate,
   UpdateStatusResult,
   Workspace,
@@ -293,6 +297,120 @@ export const useSpecsApi = (options?: UseSpecsApiOptions) => {
     [],
   );
 
+  // --- Campos ricos (kanban-planka / task_05 REST additive) ---
+  const listLabels = useCallback(async (wsId: string): Promise<TaskLabel[]> => {
+    const res = await axios.get<TaskLabel[]>(
+      `${base()}/workspaces/${wsId}/labels`,
+    );
+    return res.data;
+  }, []);
+
+  const createLabel = useCallback(
+    async (
+      wsId: string,
+      payload: { name: string; color?: string | null },
+    ): Promise<TaskLabel> => {
+      const res = await axios.post<TaskLabel>(
+        `${base()}/workspaces/${wsId}/labels`,
+        payload,
+      );
+      return res.data;
+    },
+    [],
+  );
+
+  const attachLabel = useCallback(
+    async (taskId: string, labelId: string): Promise<TaskCard> => {
+      const res = await axios.post<TaskCard>(
+        `${base()}/tasks/${taskId}/labels/${labelId}`,
+      );
+      return res.data;
+    },
+    [],
+  );
+
+  const detachLabel = useCallback(
+    async (taskId: string, labelId: string): Promise<void> => {
+      await axios.delete(`${base()}/tasks/${taskId}/labels/${labelId}`);
+    },
+    [],
+  );
+
+  const listChecklists = useCallback(
+    async (taskId: string): Promise<Checklist[]> => {
+      const res = await axios.get<Checklist[]>(
+        `${base()}/tasks/${taskId}/checklists`,
+      );
+      return res.data;
+    },
+    [],
+  );
+
+  const createChecklist = useCallback(
+    async (taskId: string, title = "Checklist"): Promise<Checklist> => {
+      const res = await axios.post<Checklist>(
+        `${base()}/tasks/${taskId}/checklists`,
+        { title },
+      );
+      return res.data;
+    },
+    [],
+  );
+
+  const createChecklistItem = useCallback(
+    async (checklistId: string, title: string): Promise<ChecklistItem> => {
+      const res = await axios.post<ChecklistItem>(
+        `${base()}/checklists/${checklistId}/items`,
+        { title },
+      );
+      return res.data;
+    },
+    [],
+  );
+
+  const patchChecklistItem = useCallback(
+    async (
+      checklistId: string,
+      itemId: string,
+      payload: {
+        title?: string;
+        is_completed?: boolean;
+        position?: number;
+      },
+    ): Promise<ChecklistItem> => {
+      const res = await axios.patch<ChecklistItem>(
+        `${base()}/checklists/${checklistId}/items/${itemId}`,
+        payload,
+      );
+      return res.data;
+    },
+    [],
+  );
+
+  const uploadAttachment = useCallback(
+    async (taskId: string, file: File): Promise<TaskAttachment> => {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await axios.post<TaskAttachment>(
+        `${base()}/tasks/${taskId}/attachments`,
+        form,
+      );
+      return res.data;
+    },
+    [],
+  );
+
+  const deleteAttachment = useCallback(
+    async (attachmentId: string): Promise<void> => {
+      await axios.delete(`${base()}/attachments/${attachmentId}`);
+    },
+    [],
+  );
+
+  const attachmentDownloadUrl = useCallback((attachmentId: string): string => {
+    return `${base()}/attachments/${attachmentId}`;
+  }, []);
+
   // --- Busca semântica ---
   const searchSpecs = useCallback(
     async (q: string, project?: string): Promise<SpecSearchResult[]> => {
@@ -325,6 +443,17 @@ export const useSpecsApi = (options?: UseSpecsApiOptions) => {
     releaseTask,
     updateTaskStatus,
     createComment,
+    listLabels,
+    createLabel,
+    attachLabel,
+    detachLabel,
+    listChecklists,
+    createChecklist,
+    createChecklistItem,
+    patchChecklistItem,
+    uploadAttachment,
+    deleteAttachment,
+    attachmentDownloadUrl,
     searchSpecs,
   };
 };
