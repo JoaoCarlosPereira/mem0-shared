@@ -78,9 +78,22 @@ class TestLabels:
 
         attach = client.post(f"/api/v1/specs/tasks/{task['id']}/labels/{label_id}")
         assert attach.status_code == 200
+        assert label_id in [str(x) for x in attach.json().get("label_ids", [])] or any(
+            str(l["id"]) == label_id for l in attach.json().get("labels", [])
+        )
+
+        task_labels = client.get(f"/api/v1/specs/tasks/{task['id']}/labels")
+        assert task_labels.status_code == 200
+        assert any(l["id"] == label_id for l in task_labels.json())
+
+        board = client.get(f"/api/v1/specs/workspaces/{ws['id']}")
+        assert board.status_code == 200
+        card = next(t for t in board.json()["tasks"] if t["id"] == task["id"])
+        assert any(l["id"] == label_id for l in card.get("labels", []))
 
         detach = client.delete(f"/api/v1/specs/tasks/{task['id']}/labels/{label_id}")
         assert detach.status_code == 204
+        assert client.get(f"/api/v1/specs/tasks/{task['id']}/labels").json() == []
 
 
 class TestChecklists:
@@ -126,6 +139,10 @@ class TestAttachments:
         assert body["filename"] == "note.txt"
         assert body["size_bytes"] == len(content)
 
+        listed = client.get(f"/api/v1/specs/tasks/{task['id']}/attachments")
+        assert listed.status_code == 200
+        assert any(a["id"] == body["id"] for a in listed.json())
+
         down = client.get(f"/api/v1/specs/attachments/{body['id']}")
         assert down.status_code == 200
         assert down.content == content
@@ -133,6 +150,7 @@ class TestAttachments:
         deleted = client.delete(f"/api/v1/specs/attachments/{body['id']}")
         assert deleted.status_code == 204
         assert client.get(f"/api/v1/specs/attachments/{body['id']}").status_code == 404
+        assert client.get(f"/api/v1/specs/tasks/{task['id']}/attachments").json() == []
 
 
 class TestDueAndPosition:

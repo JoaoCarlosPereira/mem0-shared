@@ -125,7 +125,7 @@ export async function handleCardDrop(params: {
   releaseTask?: (
     taskId: string,
     body?: { actor?: string; reason?: string },
-  ) => Promise<unknown>;
+  ) => Promise<{ version?: number } | TaskCard | unknown>;
 }): Promise<CardDropOutcome> {
   const {
     activeId,
@@ -197,8 +197,18 @@ export async function handleCardDrop(params: {
     if (!releaseTask) {
       return { moved: false, conflict: false, task };
     }
-    await releaseTask(task.id, { actor: actor ?? undefined, reason: "drag to backlog" });
-    version = version + 1;
+    const released = await releaseTask(task.id, {
+      actor: actor ?? undefined,
+      reason: "drag to backlog",
+    });
+    const releasedVersion =
+      released &&
+      typeof released === "object" &&
+      "version" in released &&
+      typeof (released as { version?: unknown }).version === "number"
+        ? (released as { version: number }).version
+        : undefined;
+    version = releasedVersion ?? version + 1;
   } else {
     const result = await updateTaskStatus(task.id, {
       expected_version: version,

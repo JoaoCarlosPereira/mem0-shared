@@ -148,18 +148,27 @@ describe("handleCardDrop", () => {
   });
 
   it("voltar ao backlog usa releaseTask", async () => {
-    const releaseTask = jest.fn().mockResolvedValue({});
+    const releaseTask = jest.fn().mockResolvedValue({ version: 7 });
+    const updateTask = jest.fn().mockResolvedValue({
+      conflict: false,
+      task: task({ status: "tasks", version: 8 }),
+    });
     const updateTaskStatus = jest.fn();
     const outcome = await handleCardDrop({
       activeId: "t1",
       overColumn: "tasks",
-      tasks: [task({ status: "revisao_codigo" })],
+      tasks: [task({ status: "revisao_codigo", version: 3 })],
       actor: "host-a",
       updateTaskStatus,
+      updateTask,
       releaseTask,
     });
     expect(releaseTask).toHaveBeenCalled();
     expect(updateTaskStatus).not.toHaveBeenCalled();
+    expect(updateTask).toHaveBeenCalledWith("t1", {
+      expected_version: 7,
+      position: expect.any(Number),
+    });
     expect(outcome.moved).toBe(true);
     expect(outcome.targetStatus).toBe("tasks");
   });

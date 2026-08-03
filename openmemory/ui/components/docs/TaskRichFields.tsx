@@ -15,6 +15,7 @@ import type {
 
 export type TaskRichApi = {
   listLabels: (wsId: string) => Promise<TaskLabel[]>;
+  listTaskLabels: (taskId: string) => Promise<TaskLabel[]>;
   createLabel: (
     wsId: string,
     payload: { name: string; color?: string | null },
@@ -32,6 +33,7 @@ export type TaskRichApi = {
     itemId: string,
     payload: { is_completed?: boolean; title?: string },
   ) => Promise<unknown>;
+  listAttachments: (taskId: string) => Promise<TaskAttachment[]>;
   uploadAttachment: (taskId: string, file: File) => Promise<TaskAttachment>;
   deleteAttachment: (attachmentId: string) => Promise<void>;
   attachmentDownloadUrl: (attachmentId: string) => string;
@@ -77,25 +79,39 @@ export function TaskRichFields({
     setLoading(true);
     setError(null);
     try {
-      const [wsLabels, cls] = await Promise.all([
+      const seedIds =
+        task.label_ids?.length
+          ? task.label_ids
+          : (task.labels || []).map((l) => l.id);
+      if (seedIds.length) {
+        setAttachedIds(new Set(seedIds));
+      }
+
+      const [wsLabels, taskLabels, cls, atts] = await Promise.all([
         api.listLabels(workspaceId),
+        api.listTaskLabels(task.id),
         api.listChecklists(task.id),
+        api.listAttachments(task.id),
       ]);
       setLabels(wsLabels);
+      setAttachedIds(new Set(taskLabels.map((l) => l.id)));
       setChecklists(cls);
-      // Associações de label não vêm no GET task; inferimos via tentativa
-      // local — UI mantém attachedIds após attach/detach nesta sessão.
+      setAttachments(atts);
     } catch (err: any) {
       setError(err?.message || "Falha ao carregar campos ricos");
     } finally {
       setLoading(false);
     }
-  }, [api, workspaceId, task.id]);
+  }, [
+    api,
+    workspaceId,
+    task.id,
+    task.label_ids,
+    task.labels,
+  ]);
 
   useEffect(() => {
     void reload();
-    setAttachedIds(new Set());
-    setAttachments([]);
   }, [task.id, reload]);
 
   const onCreateLabel = async () => {
@@ -283,7 +299,13 @@ export function TaskRichFields({
                   variant={on ? "default" : "outline"}
                   style={
                     label.color
-                      ? { borderColor: label.color, color: label.color }
+                      ? on
+                        ? {
+                            backgroundColor: label.color,
+                            borderColor: label.color,
+                            color: "#fff",
+                          }
+                        : { borderColor: label.color, color: label.color }
                       : undefined
                   }
                 >

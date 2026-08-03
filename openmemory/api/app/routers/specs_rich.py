@@ -201,6 +201,38 @@ def detach_label(
     return Response(status_code=204)
 
 
+@router.get("/tasks/{task_id}/labels", response_model=list[LabelResponse])
+def list_task_labels(task_id: UUID, db: Session = Depends(get_db)) -> list[LabelResponse]:
+    task = _get_task_or_404(db, task_id)
+    _assert_access(db, task.workspace_id)
+    rows = (
+        db.query(TaskLabel)
+        .join(TaskCardLabel, TaskCardLabel.label_id == TaskLabel.id)
+        .filter(TaskCardLabel.task_id == task_id)
+        .order_by(TaskLabel.name.asc())
+        .all()
+    )
+    return [LabelResponse.model_validate(r) for r in rows]
+
+
+@router.get(
+    "/tasks/{task_id}/attachments",
+    response_model=list[AttachmentResponse],
+)
+def list_attachments(
+    task_id: UUID, db: Session = Depends(get_db)
+) -> list[AttachmentResponse]:
+    task = _get_task_or_404(db, task_id)
+    _assert_access(db, task.workspace_id)
+    rows = (
+        db.query(TaskAttachment)
+        .filter(TaskAttachment.task_id == task_id)
+        .order_by(TaskAttachment.created_at.asc())
+        .all()
+    )
+    return [AttachmentResponse.model_validate(r) for r in rows]
+
+
 # --------------------------------------------------------------------------- #
 # Checklists
 # --------------------------------------------------------------------------- #

@@ -100,8 +100,15 @@ app.add_middleware(RateLimitMiddleware)
 # Autenticação por equipe (task_11 / ADR-006): off|warn|enforce via AUTH_MODE.
 app.add_middleware(TeamAuthMiddleware)
 
-# Create all tables
-Base.metadata.create_all(bind=engine)
+# Create all tables (safe under multi-worker race on concurrent DDL).
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as exc:  # noqa: BLE001 — bootstrap only; Alembic is SoT
+    # Two uvicorn workers can race CREATE TYPE/TABLE; ignore if already exists.
+    msg = str(getattr(exc, "orig", exc)).lower()
+    if "already exists" not in msg and "duplicate" not in msg:
+        raise
+
 
 # Check for USER_ID and create default user if needed
 def create_default_user():

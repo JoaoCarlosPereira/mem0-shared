@@ -336,6 +336,26 @@ export const useSpecsApi = (options?: UseSpecsApiOptions) => {
     [],
   );
 
+  const listTaskLabels = useCallback(
+    async (taskId: string): Promise<TaskLabel[]> => {
+      const res = await axios.get<TaskLabel[]>(
+        `${base()}/tasks/${taskId}/labels`,
+      );
+      return res.data;
+    },
+    [],
+  );
+
+  const listAttachments = useCallback(
+    async (taskId: string): Promise<TaskAttachment[]> => {
+      const res = await axios.get<TaskAttachment[]>(
+        `${base()}/tasks/${taskId}/attachments`,
+      );
+      return res.data;
+    },
+    [],
+  );
+
   const listChecklists = useCallback(
     async (taskId: string): Promise<Checklist[]> => {
       const res = await axios.get<Checklist[]>(
@@ -447,6 +467,8 @@ export const useSpecsApi = (options?: UseSpecsApiOptions) => {
     createLabel,
     attachLabel,
     detachLabel,
+    listTaskLabels,
+    listAttachments,
     listChecklists,
     createChecklist,
     createChecklistItem,

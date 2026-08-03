@@ -17,6 +17,9 @@ function makeApi(overrides: Record<string, jest.Mock> = {}) {
     listLabels: jest.fn().mockResolvedValue([
       { id: "l1", workspace_id: "w1", name: "bug", color: "#f00" },
     ]),
+    listTaskLabels: jest.fn().mockResolvedValue([
+      { id: "l1", workspace_id: "w1", name: "bug", color: "#f00" },
+    ]),
     createLabel: jest.fn(),
     attachLabel: jest.fn().mockResolvedValue(task),
     detachLabel: jest.fn().mockResolvedValue(undefined),
@@ -40,6 +43,14 @@ function makeApi(overrides: Record<string, jest.Mock> = {}) {
     createChecklist: jest.fn(),
     createChecklistItem: jest.fn(),
     patchChecklistItem: jest.fn().mockResolvedValue({}),
+    listAttachments: jest.fn().mockResolvedValue([
+      {
+        id: "a1",
+        task_id: "t1",
+        filename: "note.txt",
+        size_bytes: 4,
+      },
+    ]),
     uploadAttachment: jest.fn(),
     deleteAttachment: jest.fn(),
     attachmentDownloadUrl: jest.fn((id: string) => `/att/${id}`),
@@ -68,17 +79,21 @@ describe("TaskRichFields", () => {
     expect(screen.getByTestId("task-checklists")).toHaveTextContent(
       "rodar testes",
     );
+    expect(screen.getByTestId("task-attachments")).toHaveTextContent("note.txt");
+    expect(api.listTaskLabels).toHaveBeenCalledWith("t1");
+    expect(api.listAttachments).toHaveBeenCalledWith("t1");
+
+    // label já reidratada como anexada → toggle faz detach
+    fireEvent.click(screen.getByTestId("task-label-l1"));
+    await waitFor(() => {
+      expect(api.detachLabel).toHaveBeenCalledWith("t1", "l1");
+    });
 
     fireEvent.click(screen.getByTestId("checklist-item-i1"));
     await waitFor(() => {
       expect(api.patchChecklistItem).toHaveBeenCalledWith("c1", "i1", {
         is_completed: true,
       });
-    });
-
-    fireEvent.click(screen.getByTestId("task-label-l1"));
-    await waitFor(() => {
-      expect(api.attachLabel).toHaveBeenCalledWith("t1", "l1");
     });
   });
 });

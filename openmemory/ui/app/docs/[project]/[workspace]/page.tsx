@@ -21,7 +21,7 @@ import {
   useSensors,
   type CollisionDetection,
 } from "@dnd-kit/core";
-import { ArrowLeft, GripVertical, Plus, RollerCoaster } from "lucide-react";
+import { ArrowLeft, CheckSquare, GripVertical, Paperclip, Plus, RollerCoaster } from "lucide-react";
 import { RootState } from "@/store/store";
 import { useSpecsApi } from "@/hooks/useSpecsApi";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -171,6 +171,53 @@ function TaskCardBody({
               Prazo {new Date(task.due_at).toLocaleString()}
             </div>
           )}
+          {((task.labels && task.labels.length > 0) ||
+            (task.checklist_total ?? 0) > 0 ||
+            (task.attachment_count ?? 0) > 0) && (
+            <div
+              className="mt-2 flex flex-wrap items-center gap-1"
+              data-testid={`task-meta-${task.id}`}
+            >
+              {(task.labels || []).slice(0, 4).map((label) => (
+                <Badge
+                  key={label.id}
+                  variant="outline"
+                  className="h-5 max-w-[7rem] truncate px-1.5 text-[10px] font-normal"
+                  style={
+                    label.color
+                      ? { borderColor: label.color, color: label.color }
+                      : undefined
+                  }
+                  data-testid={`task-face-label-${label.id}`}
+                >
+                  {label.name}
+                </Badge>
+              ))}
+              {(task.labels?.length ?? 0) > 4 && (
+                <span className="text-[10px] text-muted-foreground">
+                  +{(task.labels?.length ?? 0) - 4}
+                </span>
+              )}
+              {(task.checklist_total ?? 0) > 0 && (
+                <span
+                  className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground"
+                  data-testid={`task-face-checklist-${task.id}`}
+                >
+                  <CheckSquare className="h-3 w-3" aria-hidden />
+                  {task.checklist_done ?? 0}/{task.checklist_total}
+                </span>
+              )}
+              {(task.attachment_count ?? 0) > 0 && (
+                <span
+                  className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground"
+                  data-testid={`task-face-attachments-${task.id}`}
+                >
+                  <Paperclip className="h-3 w-3" aria-hidden />
+                  {task.attachment_count}
+                </span>
+              )}
+            </div>
+          )}
           {task.members && task.members.length > 0 && (
             <div className="mt-1 text-xs text-muted-foreground">
               {task.members.join(", ")}
@@ -192,7 +239,7 @@ function TaskCardBody({
             type="button"
             size="sm"
             variant="outline"
-            className="h-7 w-full border-zinc-700 text-xs"
+            className="h-7 w-full border-border text-xs"
             disabled={claimBusy || !!claimTakenBy}
             data-testid={`claim-card-${task.id}`}
             onPointerDown={(e) => e.stopPropagation()}
@@ -362,6 +409,8 @@ export default function SpecsBoardPage() {
     createTask,
     fetchWorkspaceBoard,
     listLabels,
+    listTaskLabels,
+    listAttachments,
     createLabel,
     attachLabel,
     detachLabel,
@@ -380,6 +429,8 @@ export default function SpecsBoardPage() {
   const richApi = useMemo(
     () => ({
       listLabels,
+      listTaskLabels,
+      listAttachments,
       createLabel,
       attachLabel,
       detachLabel,
@@ -393,6 +444,8 @@ export default function SpecsBoardPage() {
     }),
     [
       listLabels,
+      listTaskLabels,
+      listAttachments,
       createLabel,
       attachLabel,
       detachLabel,

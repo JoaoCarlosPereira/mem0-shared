@@ -51,6 +51,12 @@ export interface SpecDocument {
   updated_at?: string | null;
 }
 
+export interface TaskLabelBrief {
+  id: string;
+  name: string;
+  color?: string | null;
+}
+
 export interface TaskCard {
   id: string;
   workspace_id: string;
@@ -68,6 +74,11 @@ export interface TaskCard {
   due_at?: string | null;
   position?: number;
   members?: string[];
+  label_ids?: string[];
+  labels?: TaskLabelBrief[];
+  checklist_done?: number;
+  checklist_total?: number;
+  attachment_count?: number;
   created_at?: string | null;
   updated_at?: string | null;
 }

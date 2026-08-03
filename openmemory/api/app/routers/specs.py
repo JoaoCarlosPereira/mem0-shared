@@ -112,6 +112,12 @@ class DocumentResponse(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class TaskLabelBrief(BaseModel):
+    id: UUID
+    name: str
+    color: Optional[str] = None
+
+
 class TaskResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -131,6 +137,11 @@ class TaskResponse(BaseModel):
     due_at: Optional[datetime] = None
     position: float = 65536.0
     members: list[str] = []
+    label_ids: list[UUID] = []
+    labels: list[TaskLabelBrief] = []
+    checklist_done: int = 0
+    checklist_total: int = 0
+    attachment_count: int = 0
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -299,11 +310,66 @@ def _task_members(db: Session, task_id: UUID) -> list[str]:
     return [r[0] for r in rows]
 
 
+def _task_labels(db: Session, task_id: UUID) -> list[TaskLabelBrief]:
+    from app.models import TaskCardLabel, TaskLabel
+
+    rows = (
+        db.query(TaskLabel)
+        .join(TaskCardLabel, TaskCardLabel.label_id == TaskLabel.id)
+        .filter(TaskCardLabel.task_id == task_id)
+        .order_by(TaskLabel.name.asc())
+        .all()
+    )
+    return [TaskLabelBrief(id=r.id, name=r.name, color=r.color) for r in rows]
+
+
+def _task_checklist_counts(db: Session, task_id: UUID) -> tuple[int, int]:
+    from app.models import TaskChecklist, TaskChecklistItem
+
+    checklist_ids = [
+        c.id
+        for c in db.query(TaskChecklist.id).filter(TaskChecklist.task_id == task_id).all()
+    ]
+    if not checklist_ids:
+        return 0, 0
+    total = (
+        db.query(func.count(TaskChecklistItem.id))
+        .filter(TaskChecklistItem.checklist_id.in_(checklist_ids))
+        .scalar()
+        or 0
+    )
+    done = (
+        db.query(func.count(TaskChecklistItem.id))
+        .filter(
+            TaskChecklistItem.checklist_id.in_(checklist_ids),
+            TaskChecklistItem.is_completed.is_(True),
+        )
+        .scalar()
+        or 0
+    )
+    return int(done), int(total)
+
+
+def _task_attachment_count(db: Session, task_id: UUID) -> int:
+    from app.models import TaskAttachment
+
+    return int(
+        db.query(func.count(TaskAttachment.id))
+        .filter(TaskAttachment.task_id == task_id)
+        .scalar()
+        or 0
+    )
+
+
 def _task_response(
     task: TaskCard,
     identities: Optional[dict[str, CreatorIdentity]] = None,
     *,
     members: Optional[list[str]] = None,
+    labels: Optional[list[TaskLabelBrief]] = None,
+    checklist_done: Optional[int] = None,
+    checklist_total: Optional[int] = None,
+    attachment_count: Optional[int] = None,
 ) -> TaskResponse:
     data = TaskResponse.model_validate(task)
     identity = identity_for_actor(task.assignee, identities or {})
@@ -312,12 +378,31 @@ def _task_response(
         data.assignee_avatar_url = identity.avatar_url
     if members is not None:
         data.members = members
+    if labels is not None:
+        data.labels = labels
+        data.label_ids = [l.id for l in labels]
+    if checklist_done is not None:
+        data.checklist_done = checklist_done
+    if checklist_total is not None:
+        data.checklist_total = checklist_total
+    if attachment_count is not None:
+        data.attachment_count = attachment_count
     return data
 
 
 def _enrich_task(db: Session, task: TaskCard) -> TaskResponse:
     identities = resolve_actor_identities_with_db(db, [task.assignee])
-    return _task_response(task, identities, members=_task_members(db, task.id))
+    labels = _task_labels(db, task.id)
+    done, total = _task_checklist_counts(db, task.id)
+    return _task_response(
+        task,
+        identities,
+        members=_task_members(db, task.id),
+        labels=labels,
+        checklist_done=done,
+        checklist_total=total,
+        attachment_count=_task_attachment_count(db, task.id),
+    )
 
 
 def get_or_create_workspace(
@@ -602,9 +687,7 @@ def get_workspace_board(
     return WorkspaceBoardResponse(
         workspace=ws,
         documents=[_document_response(d, identities) for d in documents],
-        tasks=[
-            _task_response(t, identities, members=_task_members(db, t.id)) for t in tasks
-        ],
+        tasks=[_enrich_task(db, t) for t in tasks],
     )
 
 
@@ -786,11 +869,7 @@ def list_workspace_tasks(
     if status is not None:
         query = query.filter(TaskCard.status == status)
     tasks = query.order_by(TaskCard.created_at.asc()).all()
-
-    identities = resolve_actor_identities_with_db(db, [t.assignee for t in tasks])
-    return [
-        _task_response(t, identities, members=_task_members(db, t.id)) for t in tasks
-    ]
+    return [_enrich_task(db, t) for t in tasks]
 
 
 @router.patch("/tasks/{task_id}", response_model=TaskResponse)
