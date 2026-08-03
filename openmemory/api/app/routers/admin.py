@@ -585,3 +585,41 @@ def write_audit(
         page=page,
         pages=pages,
     )
+
+
+class PlankaResyncRequest(BaseModel):
+    """Optional workspace scope for PLANKA mirror bootstrap."""
+
+    workspace_id: Optional[str] = None
+
+
+@router.post("/planka/resync")
+async def planka_resync(
+    body: Optional[PlankaResyncRequest] = None,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin),
+) -> dict:
+    """Idempotent Spec → PLANKA resync (never deletes Spec data)."""
+    from uuid import UUID
+
+    from app.utils.planka_resync import resync_all, resync_workspace
+
+    payload = body or PlankaResyncRequest()
+    if payload.workspace_id:
+        try:
+            wid = UUID(payload.workspace_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="workspace_id inválido") from exc
+        result = await resync_workspace(db, wid)
+        return {
+            "workspaces": [result.to_dict()],
+            "errors": list(result.errors),
+            "totals": {
+                "workspaces": 1,
+                "spec_tasks": result.spec_tasks,
+                "mirrored_tasks": result.mirrored_tasks,
+                "spec_documents": result.spec_documents,
+                "mirrored_documents": result.mirrored_documents,
+            },
+        }
+    return await resync_all(db)
