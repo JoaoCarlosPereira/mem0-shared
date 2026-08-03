@@ -7,10 +7,52 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
-from app.database import Base  # noqa: F401
+from app.database import Base
+from app.models import Project, SpecWorkspace, TaskCard, TaskCardStatus
 from app.utils import planka_hooks
 from app.utils.planka import PlankaMirrorError
+from app.utils.task_lock import claim_task, release_task, update_task_status
+
+
+@pytest.fixture
+def db_session():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    try:
+        yield session
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def _mk_task(db, **kwargs):
+    if not db.query(Project).filter(Project.name == "mem0-shared").first():
+        db.add(Project(name="mem0-shared"))
+        db.commit()
+    ws = SpecWorkspace(project_id="mem0-shared", slug="hooks-ws", name="Hooks")
+    db.add(ws)
+    db.commit()
+    db.refresh(ws)
+    task = TaskCard(
+        workspace_id=ws.id,
+        title="Mirror hooks",
+        status=TaskCardStatus.tasks,
+        **kwargs,
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    return task
 
 
 def test_mirror_disabled_is_noop(monkeypatch):
@@ -41,3 +83,38 @@ def test_mirror_failure_raises_http_502(monkeypatch):
             planka_hooks.mirror_task(db, uuid4())
     assert exc.value.status_code == 502
     assert exc.value.detail["mirror_failed"] is True
+
+
+def test_claim_task_triggers_mirror_status(db_session, monkeypatch):
+    monkeypatch.setenv("PLANKA_MIRROR_SYNC", "1")
+    task = _mk_task(db_session)
+    with patch("app.utils.planka_hooks.mirror_task_status") as mirror:
+        result = claim_task(db_session, task.id, "host-a")
+    assert result.claimed is True
+    mirror.assert_called_once_with(db_session, task.id)
+
+
+def test_release_task_triggers_mirror_status(db_session, monkeypatch):
+    monkeypatch.setenv("PLANKA_MIRROR_SYNC", "0")
+    task = _mk_task(db_session)
+    claim_task(db_session, task.id, "host-a")
+    monkeypatch.setenv("PLANKA_MIRROR_SYNC", "1")
+    with patch("app.utils.planka_hooks.mirror_task_status") as mirror:
+        release_task(db_session, task.id, "host-a", reason="test")
+    mirror.assert_called_once_with(db_session, task.id)
+
+
+def test_update_task_status_triggers_mirror_status(db_session, monkeypatch):
+    monkeypatch.setenv("PLANKA_MIRROR_SYNC", "0")
+    task = _mk_task(db_session)
+    claimed = claim_task(db_session, task.id, "host-a")
+    monkeypatch.setenv("PLANKA_MIRROR_SYNC", "1")
+    with patch("app.utils.planka_hooks.mirror_task_status") as mirror:
+        update_task_status(
+            db_session,
+            task.id,
+            TaskCardStatus.revisao_codigo,
+            claimed.version,
+            "host-a",
+        )
+    mirror.assert_called_once_with(db_session, task.id)

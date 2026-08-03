@@ -51,7 +51,7 @@ from app.utils.task_lock import (
     update_task_metadata,
     update_task_status,
 )
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -535,6 +535,13 @@ def create_workspace(
         status=payload.status,
     )
     response.status_code = 201 if created else 200
+    from app.utils.planka_hooks import mirror_ensure_workspace
+
+    try:
+        mirror_ensure_workspace(db, ws.id)
+    except HTTPException:
+        # Workspace Spec já existe; espelho é obrigatório quando sync ligado.
+        raise
     return ws
 
 
@@ -689,6 +696,249 @@ def get_workspace_board(
         documents=[_document_response(d, identities) for d in documents],
         tasks=[_enrich_task(db, t) for t in tasks],
     )
+
+
+class PlankaEmbedResponse(BaseModel):
+    workspace_id: UUID
+    board_id: str
+    project_id: Optional[str] = None
+    embed_url: str
+    access_token: str
+
+
+class KanbanHomeResponse(BaseModel):
+    embed_url: str
+    access_token: str
+
+
+def _kanban_public_base() -> str:
+    import os
+
+    return (
+        os.getenv("PLANKA_PUBLIC_URL")
+        or os.getenv("PLANKA_BASE_URL")
+        or "http://127.0.0.1:8765/planka"
+    ).rstrip("/")
+
+
+def _issue_kanban_access_token(db: Session) -> str:
+    """JWT Mem0 para o SPA Kanban (nome/e-mail/foto da pessoa logada).
+
+    Sempre HS256 com AUTH_JWT_SECRET — nunca INTERNAL (isso vira DEFAULT_ADMIN
+    no PLANKA). Identidade vem de ``auth_user_var`` / ``auth_email_var`` (Bearer
+    da sessão via AuthBridge), com enriquecimento na tabela ``users``.
+    """
+    import os
+
+    import jwt as pyjwt
+
+    from app.models import User as AppUser
+    from app.utils.logging_context import auth_email_var, auth_user_var
+
+    actor = resolve_spec_actor() or "ui-user"
+    email = (auth_email_var.get() or "").strip()
+    name = ""
+    picture = ""
+
+    person_id = (auth_user_var.get() or "").strip()
+    user = None
+    if person_id:
+        try:
+            from uuid import UUID as _UUID
+
+            user = db.query(AppUser).filter(AppUser.id == _UUID(person_id)).first()
+        except (ValueError, TypeError):
+            user = None
+        if user is None:
+            user = (
+                db.query(AppUser)
+                .filter(
+                    (AppUser.user_id == person_id)
+                    | (AppUser.email == person_id)
+                )
+                .first()
+            )
+    if user is None and email:
+        user = db.query(AppUser).filter(AppUser.email == email).first()
+    if user is not None:
+        email = (user.email or email or "").strip()
+        name = (user.display_name or user.name or email or actor).strip()
+        picture = (user.avatar_url or "").strip()
+    if not name:
+        name = (email.split("@")[0] if email else actor).strip() or actor
+
+    secret = (
+        os.getenv("AUTH_JWT_SECRET") or os.getenv("NEXTAUTH_SECRET") or ""
+    ).strip()
+    if not secret:
+        raise HTTPException(
+            status_code=503,
+            detail="AUTH_JWT_SECRET necessário para embed Kanban (não usar INTERNAL)",
+        )
+
+    from datetime import timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    sub = email or person_id or actor
+    access_token = pyjwt.encode(
+        {
+            "sub": sub,
+            "email": email or f"{sub}@mem0.local",
+            "name": name,
+            "picture": picture,
+            # Marca embed Mem0: current-user do PLANKA não trata como sessão nativa.
+            "mem0": True,
+            "iat": now,
+            "exp": now + timedelta(hours=8),
+        },
+        secret,
+        algorithm="HS256",
+    )
+    if isinstance(access_token, bytes):
+        access_token = access_token.decode("utf-8")
+    return access_token
+
+
+@router.get("/kanban-home", response_model=KanbanHomeResponse)
+def get_kanban_home(db: Session = Depends(get_db)) -> KanbanHomeResponse:
+    """Home do SPA Kanban (ADR-008) — raiz do board, não um workspace isolado."""
+    return KanbanHomeResponse(
+        embed_url=f"{_kanban_public_base()}/",
+        access_token=_issue_kanban_access_token(db),
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/planka-embed",
+    response_model=PlankaEmbedResponse,
+)
+def get_planka_embed(
+    workspace_id: UUID,
+    db: Session = Depends(get_db),
+) -> PlankaEmbedResponse:
+    """URL + token para deep-link de um board Spec no Kanban (compat ADR-007)."""
+    from app.models import SpecPlankaIdMap
+    from app.utils.planka import (
+        ENTITY_BOARD,
+        ENTITY_PROJECT,
+        PlankaMirrorError,
+        PlankaMirrorHttpClient,
+    )
+    from app.utils.planka_hooks import _run_async, mirror_sync_enabled
+
+    _get_workspace_or_404(db, workspace_id)
+    _assert_access(db, workspace_id)
+
+    if mirror_sync_enabled():
+        client = PlankaMirrorHttpClient(db)
+        try:
+            board_id = _run_async(client.ensure_workspace_board(workspace_id))
+        except PlankaMirrorError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "mirror_failed": True,
+                    "action": "ensure_workspace_board",
+                    "planka_status": exc.status_code,
+                    "detail": exc.detail,
+                },
+            ) from exc
+    else:
+        row = (
+            db.query(SpecPlankaIdMap)
+            .filter(
+                SpecPlankaIdMap.entity_type == ENTITY_BOARD,
+                SpecPlankaIdMap.spec_id == workspace_id,
+            )
+            .first()
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Board Kanban ainda não mapeado. Ative PLANKA_MIRROR_SYNC=1 "
+                    "ou rode POST /admin/planka/resync."
+                ),
+            )
+        board_id = row.planka_id
+
+    project_row = (
+        db.query(SpecPlankaIdMap)
+        .filter(
+            SpecPlankaIdMap.entity_type == ENTITY_PROJECT,
+            SpecPlankaIdMap.spec_id == workspace_id,
+        )
+        .first()
+    )
+
+    return PlankaEmbedResponse(
+        workspace_id=workspace_id,
+        board_id=board_id,
+        project_id=project_row.planka_id if project_row else None,
+        embed_url=f"{_kanban_public_base()}/boards/{board_id}",
+        access_token=_issue_kanban_access_token(db),
+    )
+
+
+class PlankaCardMoveRequest(BaseModel):
+    planka_card_id: str
+    planka_list_id: str
+    actor: Optional[str] = None
+
+
+class PlankaCardMoveResponse(BaseModel):
+    applied: bool
+    reason: Optional[str] = None
+    action: Optional[str] = None
+    task_id: Optional[str] = None
+    status: Optional[str] = None
+    version: Optional[int] = None
+
+
+def _assert_planka_bridge_token(authorization: Optional[str]) -> None:
+    import os
+
+    expected = (
+        os.getenv("PLANKA_INTERNAL_ACCESS_TOKEN")
+        or os.getenv("INTERNAL_ACCESS_TOKEN")
+        or ""
+    ).strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="bridge token não configurado")
+    raw = (authorization or "").strip()
+    if raw.lower().startswith("bearer "):
+        raw = raw[7:].strip()
+    if not raw or raw != expected:
+        raise HTTPException(status_code=401, detail="bridge unauthorized")
+
+
+@router.post(
+    "/planka/card-moved",
+    response_model=PlankaCardMoveResponse,
+)
+def planka_card_moved(
+    payload: PlankaCardMoveRequest,
+    authorization: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+) -> PlankaCardMoveResponse:
+    """Bridge PLANKA → Spec (ADR-007): aplica claim/release/status após move humano."""
+    from app.utils.planka_bridge import PlankaBridgeError, apply_planka_card_move
+
+    _assert_planka_bridge_token(authorization)
+    actor = (payload.actor or resolve_spec_actor() or "ui-user").strip()
+    try:
+        result = apply_planka_card_move(
+            db,
+            planka_card_id=payload.planka_card_id.strip(),
+            planka_list_id=payload.planka_list_id.strip(),
+            actor=actor,
+        )
+    except PlankaBridgeError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "detail": exc.detail},
+        ) from exc
+    return PlankaCardMoveResponse(**result)
 
 
 # --------------------------------------------------------------------------- #
@@ -1055,6 +1305,9 @@ def claim_task_endpoint(
             },
         )
     db.refresh(task)
+    from app.utils.planka_hooks import mirror_task_status
+
+    mirror_task_status(db, task_id)
     return _enrich_task(db, task)
 
 
@@ -1071,6 +1324,9 @@ def release_task_endpoint(
     actor = resolve_spec_actor(body_actor=payload.actor)
     release_task(db, task_id, actor, payload.reason)
     db.refresh(task)
+    from app.utils.planka_hooks import mirror_task_status
+
+    mirror_task_status(db, task_id)
     return _enrich_task(db, task)
 
 
@@ -1113,6 +1369,9 @@ def patch_task_status(
             },
         )
     db.refresh(task)
+    from app.utils.planka_hooks import mirror_task_status
+
+    mirror_task_status(db, task_id)
     return _enrich_task(db, task)
 
 

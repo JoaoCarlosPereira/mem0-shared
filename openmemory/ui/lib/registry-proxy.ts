@@ -1,3 +1,6 @@
+import { isLegacyAuthUi } from "@/lib/auth-ui-mode";
+import { LEGACY_MCP_AUTH_HEADER } from "@/lib/mcp-install";
+
 const REGISTRY_CATALOG_RESOURCES = new Set([
   "agents",
   "mcpservers",
@@ -22,6 +25,27 @@ export function registryInternalBase(): string {
 export function hasRegistryAuthorization(headers: Headers): boolean {
   const value = headers.get("authorization")?.trim();
   return !!value && /^Bearer\s+\S+\s*$/i.test(value);
+}
+
+/**
+ * Em UI legado (AUTH_UI_REQUIRED=0 / sem Google), a sessão NextAuth não
+ * carrega JWT — o browser chama /registry-api sem Authorization. O proxy
+ * injeta ``Bearer local`` (mesmo shim do MCP) só nesse modo, alinhado a
+ * ``MEM0_AUTH_ALLOW_LEGACY`` no agentregistry.
+ *
+ * Com Google auth exigido, não injeta nada: permanece fail-closed até o
+ * axios enviar o JWT da sessão.
+ */
+export function applyLegacyRegistryAuthorization(headers: Headers): Headers {
+  if (hasRegistryAuthorization(headers)) {
+    return headers;
+  }
+  if (!isLegacyAuthUi()) {
+    return headers;
+  }
+  const out = new Headers(headers);
+  out.set("authorization", LEGACY_MCP_AUTH_HEADER);
+  return out;
 }
 
 export function isRegistryProxyPathAllowed(

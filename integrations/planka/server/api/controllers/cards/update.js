@@ -319,6 +319,9 @@ module.exports = {
       'isSubscribed',
     ]);
 
+    const previousListId = list.id;
+    const previousPosition = card.position;
+
     card = await sails.helpers.cards.updateOne
       .with({
         project,
@@ -344,6 +347,54 @@ module.exports = {
 
     if (!card) {
       throw Errors.CARD_NOT_FOUND;
+    }
+
+    if (!_.isUndefined(inputs.listId) && String(inputs.listId) !== String(previousListId)) {
+      // Spec → PLANKA mirror usa Bearer INTERNAL; não reenviar ao Spec (evita loop + 403).
+      const authMethod = this.req.mem0Auth && this.req.mem0Auth.method;
+      if (authMethod === 'internal') {
+        return {
+          item: card,
+        };
+      }
+
+      const actorSubject =
+        (this.req.mem0Auth && this.req.mem0Auth.subject) ||
+        currentUser.username ||
+        currentUser.email ||
+        currentUser.id ||
+        'ui-user';
+
+      try {
+        await sails.helpers.mem0.notifySpecCardMove.with({
+          plankaCardId: String(card.id),
+          plankaListId: String(inputs.listId),
+          previousListId: String(previousListId),
+          actor: String(actorSubject),
+        });
+      } catch (bridgeErr) {
+        // Spec rejeitou — reverte a lista no PLANKA (position obrigatória em listas finitas).
+        try {
+          await sails.helpers.cards.updateOne.with({
+            project,
+            board,
+            list: nextList || list,
+            record: card,
+            values: {
+              list,
+              position:
+                previousPosition != null && previousPosition !== undefined
+                  ? previousPosition
+                  : 65536,
+            },
+            actorUser: currentUser,
+            request: this.req,
+          });
+        } catch (revertErr) {
+          sails.log.error('mem0: failed to revert card after Spec reject', revertErr);
+        }
+        throw Errors.NOT_ENOUGH_RIGHTS;
+      }
     }
 
     return {

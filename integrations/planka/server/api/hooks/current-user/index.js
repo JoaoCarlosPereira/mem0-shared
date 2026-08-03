@@ -9,11 +9,27 @@
  * @description :: A hook definition. Extends Sails by adding shadow routes, implicit actions,
  *                 and/or initialization logic.
  * @docs        :: https://sailsjs.com/docs/concepts/extending-sails/hooks
+ *
+ * Mem0 Shared: JWT de embed (`mem0: true`, AUTH_JWT_SECRET) é resolvido pelo
+ * hook `mem0-auth` (upsert por e-mail). Este hook não deve sobrescrever.
  */
+
+const jwt = require('jsonwebtoken');
 
 module.exports = function defineCurrentUserHook(sails) {
   const TOKEN_PATTERN = /^Bearer /;
   const API_KEY_HEADER_NAME = 'x-api-key';
+
+  const isMem0EmbedJwt = (accessToken) => {
+    const secret = String(process.env.AUTH_JWT_SECRET || '').trim();
+    if (!secret || !accessToken) return false;
+    try {
+      const payload = jwt.verify(accessToken, secret, { algorithms: ['HS256'] });
+      return Boolean(payload && payload.mem0 === true);
+    } catch (_err) {
+      return false;
+    }
+  };
 
   const getSessionAndUserByAccessToken = async (accessToken, httpOnlyToken) => {
     let payload;
@@ -79,6 +95,8 @@ module.exports = function defineCurrentUserHook(sails) {
 
               if (internalAccessToken && accessToken === internalAccessToken) {
                 req.currentUser = User.INTERNAL;
+              } else if (isMem0EmbedJwt(accessToken)) {
+                // Deixa mem0-auth fazer upsert + req.currentUser (ADR-008).
               } else {
                 const { httpOnlyToken } = req.cookies;
 
@@ -129,18 +147,39 @@ module.exports = function defineCurrentUserHook(sails) {
             const { accessToken, httpOnlyToken } = req.cookies;
 
             if (accessToken) {
-              const sessionAndUser = await getSessionAndUserByAccessToken(
-                accessToken,
-                httpOnlyToken,
-              );
+              if (isMem0EmbedJwt(accessToken)) {
+                // mem0-auth cobre /api/*; attachments usam cookie — re-resolve aqui.
+                try {
+                  const secret = String(process.env.AUTH_JWT_SECRET || '').trim();
+                  const payload = jwt.verify(accessToken, secret, { algorithms: ['HS256'] });
+                  if (typeof User !== 'undefined' && User.qm) {
+                    const email = String(payload.email || '')
+                      .trim()
+                      .toLowerCase();
+                    if (email) {
+                      const user = await User.qm.getOneByEmail(email);
+                      if (user && !user.isDeactivated) {
+                        req.currentUser = user;
+                      }
+                    }
+                  }
+                } catch (_err) {
+                  // leave unset; policy will 401
+                }
+              } else {
+                const sessionAndUser = await getSessionAndUserByAccessToken(
+                  accessToken,
+                  httpOnlyToken,
+                );
 
-              if (sessionAndUser) {
-                const { session, user } = sessionAndUser;
+                if (sessionAndUser) {
+                  const { session, user } = sessionAndUser;
 
-                Object.assign(req, {
-                  currentSession: session,
-                  currentUser: user,
-                });
+                  Object.assign(req, {
+                    currentSession: session,
+                    currentUser: user,
+                  });
+                }
               }
             } else {
               const { [API_KEY_HEADER_NAME]: apiKey } = req.headers;

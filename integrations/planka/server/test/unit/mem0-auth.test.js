@@ -58,6 +58,30 @@ describe('mem0-auth validate-auth', () => {
     assert.strictEqual(r.subject, 'user-1');
   });
 
+  it('propagates name picture and mem0 claim from JWT', () => {
+    const token = jwt.sign(
+      {
+        sub: 'joao@example.com',
+        email: 'joao@example.com',
+        name: 'João',
+        picture: 'https://lh3.example/p.jpg',
+        mem0: true,
+      },
+      SECRET,
+      { algorithm: 'HS256' },
+    );
+    const r = authenticateMem0Request({
+      authorizationHeader: `Bearer ${token}`,
+      env: { AUTH_JWT_SECRET: SECRET },
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.method, 'jwt');
+    assert.strictEqual(r.email, 'joao@example.com');
+    assert.strictEqual(r.name, 'João');
+    assert.strictEqual(r.picture, 'https://lh3.example/p.jpg');
+    assert.strictEqual(r.mem0, true);
+  });
+
   it('rejects JWT signed with wrong secret', () => {
     const token = jwt.sign({ sub: 'user-1' }, 'other-secret-other-secret-xxxx', {
       algorithm: 'HS256',

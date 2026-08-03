@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { sanitizeUpstreamHeaders } from "@/lib/proxy-headers";
 import {
+  applyLegacyRegistryAuthorization,
   hasRegistryAuthorization,
   isRegistryProxyPathAllowed,
   registryInternalBase,
@@ -38,7 +39,9 @@ async function proxyRegistryRequest(
   req: NextRequest,
   pathSegments: string[],
 ): Promise<NextResponse> {
-  if (!hasRegistryAuthorization(req.headers)) {
+  // Google: exige Bearer da sessão. Legado: injeta Bearer local se ausente.
+  const authorizedHeaders = applyLegacyRegistryAuthorization(req.headers);
+  if (!hasRegistryAuthorization(authorizedHeaders)) {
     return NextResponse.json(
       { detail: "registry authentication required" },
       { status: 401 },
@@ -54,7 +57,7 @@ async function proxyRegistryRequest(
 
   const internalBase = registryInternalBase();
   const target = registryProxyTarget(internalBase, pathSegments, req.nextUrl.search);
-  const headers = sanitizeUpstreamHeaders(req.headers);
+  const headers = sanitizeUpstreamHeaders(authorizedHeaders);
   headers.delete("cookie");
 
   const hasBody = req.method !== "GET" && req.method !== "HEAD";

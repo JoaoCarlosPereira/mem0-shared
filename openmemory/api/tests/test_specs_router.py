@@ -591,6 +591,121 @@ class TestAllWorkspacesIndex:
             auth_user_var.reset(tok)
 
 
+class TestKanbanHomeIdentity:
+    """GET /kanban-home emite JWT da pessoa (nunca INTERNAL / ui-user cego)."""
+
+    def test_jwt_carrega_email_nome_foto_da_sessao(self, client, factory, monkeypatch):
+        import jwt as pyjwt
+        from app.models import User
+        from app.utils.logging_context import auth_email_var, auth_user_var
+
+        secret = "kanban-home-test-secret-32bytes!!"
+        monkeypatch.setenv("AUTH_JWT_SECRET", secret)
+        monkeypatch.delenv("NEXTAUTH_SECRET", raising=False)
+
+        person_id = uuid.uuid4()
+        s = factory()
+        try:
+            s.add(
+                User(
+                    id=person_id,
+                    user_id=f"google-{person_id}",
+                    email="joao@example.com",
+                    name="João",
+                    display_name="João Silva",
+                    avatar_url="https://lh3.example/photo.jpg",
+                )
+            )
+            s.commit()
+        finally:
+            s.close()
+
+        tok_u = auth_user_var.set(str(person_id))
+        tok_e = auth_email_var.set("joao@example.com")
+        try:
+            r = client.get("/api/v1/specs/kanban-home")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["embed_url"]
+            token = body["access_token"]
+            assert token.count(".") == 2  # JWT, não INTERNAL opaco
+            claims = pyjwt.decode(token, secret, algorithms=["HS256"])
+            assert claims["email"] == "joao@example.com"
+            assert claims["name"] == "João Silva"
+            assert claims["picture"] == "https://lh3.example/photo.jpg"
+            assert claims["mem0"] is True
+            assert claims["sub"] == "joao@example.com"
+        finally:
+            auth_email_var.reset(tok_e)
+            auth_user_var.reset(tok_u)
+
+    def test_sem_secret_retorna_503_nao_internal(self, client, monkeypatch):
+        monkeypatch.delenv("AUTH_JWT_SECRET", raising=False)
+        monkeypatch.delenv("NEXTAUTH_SECRET", raising=False)
+        monkeypatch.setenv("PLANKA_INTERNAL_ACCESS_TOKEN", "should-not-use")
+        r = client.get("/api/v1/specs/kanban-home")
+        assert r.status_code == 503
+        assert "AUTH_JWT_SECRET" in r.json()["detail"]
+
+    def test_com_usuario_nao_usa_default_admin_nem_internal(
+        self, client, factory, monkeypatch
+    ):
+        """Sessão com pessoa → JWT da pessoa; nunca Bearer INTERNAL / DEFAULT_ADMIN."""
+        import jwt as pyjwt
+        from app.models import User
+        from app.utils.logging_context import auth_email_var, auth_user_var
+
+        secret = "kanban-home-no-admin-secret-32b!!"
+        monkeypatch.setenv("AUTH_JWT_SECRET", secret)
+        monkeypatch.setenv("PLANKA_INTERNAL_ACCESS_TOKEN", "internal-must-not-appear")
+        monkeypatch.setenv("PLANKA_PUBLIC_URL", "http://kanban.test/planka")
+        monkeypatch.delenv("NEXTAUTH_SECRET", raising=False)
+
+        person_id = uuid.uuid4()
+        s = factory()
+        try:
+            s.add(
+                User(
+                    id=person_id,
+                    user_id=f"google-{person_id}",
+                    email="pessoa@sysmo.com.br",
+                    name="Pessoa",
+                    display_name="Pessoa Real",
+                )
+            )
+            s.commit()
+        finally:
+            s.close()
+
+        tok_u = auth_user_var.set(str(person_id))
+        tok_e = auth_email_var.set("pessoa@sysmo.com.br")
+        try:
+            r = client.get("/api/v1/specs/kanban-home")
+            assert r.status_code == 200
+            body = r.json()
+            assert "planka" in body["embed_url"].lower() or body["embed_url"].endswith("/")
+            assert body["access_token"] != "internal-must-not-appear"
+            claims = pyjwt.decode(body["access_token"], secret, algorithms=["HS256"])
+            assert claims["email"] == "pessoa@sysmo.com.br"
+            assert claims["name"] == "Pessoa Real"
+            assert claims["sub"] == "pessoa@sysmo.com.br"
+            assert "admin@mem0.local" not in (claims.get("email") or "")
+            assert claims.get("sub") != "admin"
+        finally:
+            auth_email_var.reset(tok_e)
+            auth_user_var.reset(tok_u)
+
+    def test_embed_url_e_token_sempre_presentes(self, client, monkeypatch):
+        monkeypatch.setenv("AUTH_JWT_SECRET", "kanban-home-url-token-secret-32!!")
+        monkeypatch.setenv("PLANKA_PUBLIC_URL", "https://mem0.local/planka")
+        monkeypatch.delenv("NEXTAUTH_SECRET", raising=False)
+        r = client.get("/api/v1/specs/kanban-home")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["embed_url"].startswith("https://mem0.local/planka")
+        assert isinstance(body["access_token"], str) and body["access_token"].count(".") == 2
+
+
 class TestProjectPanel:
     def test_painel_agrega_contagem_por_status(self, client, factory):
         ws1 = _create_ws(client, slug="ws-1").json()

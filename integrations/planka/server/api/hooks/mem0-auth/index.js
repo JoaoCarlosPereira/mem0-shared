@@ -7,8 +7,10 @@
  *   - INTERNAL_ACCESS_TOKEN (existing PLANKA internal bearer)
  *   - omtk_* agent token (lookup in public.agent_tokens on the shared Postgres)
  *
- * On success without a PLANKA session user, sets req.currentUser = User.INTERNAL
- * so existing is-authenticated policies pass for the OpenMemory BFF/mirror.
+ * Bearer INTERNAL / legacy / omtk → DEFAULT_ADMIN (FK-safe mirror actor).
+ * JWT de sessão UI → upsert user_account por e-mail (nome/foto/pt-BR) e
+ * req.currentUser nesse usuário (ADR-008). Falha no upsert JWT → 401
+ * (nunca DEFAULT_ADMIN para embed UI).
  *
  * When AUTH_JWT_SECRET is empty, the bridge is a no-op (upstream PLANKA auth only).
  */
@@ -20,6 +22,11 @@ const { authenticateMem0Request, authenticateOmtk } = require('./lib/validate-au
 module.exports = function defineMem0AuthHook(sails) {
   let pgClient = null;
   let pgClientFailed = false;
+  let cachedAdminUser = null;
+  let cachedAdminAt = 0;
+  /** userId → last ensure timestamp (ms); re-sync to pick up boards novos. */
+  const membershipEnsuredAt = new Map();
+  const MEMBERSHIP_TTL_MS = 30_000;
 
   const getPgClient = async () => {
     if (pgClient) return pgClient;
@@ -37,8 +44,126 @@ module.exports = function defineMem0AuthHook(sails) {
     } catch (err) {
       pgClientFailed = true;
       sails.log.warn('mem0-auth: could not open Postgres for omtk_ lookup:', err.message);
+    }
+    return null;
+  };
+
+  const resolveServiceUser = async () => {
+    const now = Date.now();
+    if (cachedAdminUser && now - cachedAdminAt < 60_000) {
+      return cachedAdminUser;
+    }
+    const email = String(process.env.DEFAULT_ADMIN_EMAIL || '')
+      .trim()
+      .toLowerCase();
+    if (!email || typeof User === 'undefined' || !User.qm) {
       return null;
     }
+    try {
+      const user = await User.qm.getOneByEmail(email);
+      if (user && !user.isDeactivated) {
+        cachedAdminUser = user;
+        cachedAdminAt = now;
+        return user;
+      }
+    } catch (err) {
+      sails.log.warn('mem0-auth: failed to resolve DEFAULT_ADMIN user:', err.message);
+    }
+    return null;
+  };
+
+  const normalizeEmail = (raw, fallbackSub) => {
+    const email = String(raw || '')
+      .trim()
+      .toLowerCase();
+    if (email && email.includes('@')) return email;
+    const sub = String(fallbackSub || 'mem0-user')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._+-]/g, '-');
+    return `${sub || 'mem0-user'}@mem0.local`;
+  };
+
+  const ensureSharedAccess = async (user) => {
+    if (!user || !user.id) return;
+    if (typeof Project === 'undefined' || !Project.qm || typeof ProjectManager === 'undefined') {
+      return;
+    }
+    const now = Date.now();
+    const last = membershipEnsuredAt.get(user.id) || 0;
+    if (now - last < MEMBERSHIP_TTL_MS) return;
+
+    try {
+      // Ambiente compartilhado Mem0: todos veem/editam todos os projetos shared.
+      const projects = await Project.qm.getShared();
+      // eslint-disable-next-line no-restricted-syntax
+      for (const project of projects || []) {
+        // eslint-disable-next-line no-await-in-loop
+        const existingPm = await ProjectManager.qm.getOneByProjectIdAndUserId(project.id, user.id);
+        if (!existingPm) {
+          // eslint-disable-next-line no-await-in-loop
+          await ProjectManager.qm.createOne({
+            projectId: project.id,
+            userId: user.id,
+          });
+        }
+
+        if (typeof Board === 'undefined' || !Board.qm || typeof BoardMembership === 'undefined') {
+          continue;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        const boards = await Board.qm.getByProjectIds([project.id]);
+        // eslint-disable-next-line no-restricted-syntax
+        for (const board of boards || []) {
+          // eslint-disable-next-line no-await-in-loop
+          const existingBm = await BoardMembership.qm.getOneByBoardIdAndUserId(board.id, user.id);
+          if (!existingBm) {
+            // eslint-disable-next-line no-await-in-loop
+            await BoardMembership.qm.createOne({
+              projectId: project.id,
+              boardId: board.id,
+              userId: user.id,
+              role: BoardMembership.Roles.EDITOR,
+            });
+          } else if (existingBm.role !== BoardMembership.Roles.EDITOR) {
+            // eslint-disable-next-line no-await-in-loop
+            await BoardMembership.qm.updateOne(existingBm.id, {
+              role: BoardMembership.Roles.EDITOR,
+            });
+          }
+        }
+      }
+      membershipEnsuredAt.set(user.id, now);
+    } catch (err) {
+      sails.log.warn('mem0-auth: failed to ensure shared access:', err.message);
+    }
+  };
+
+  const upsertJwtUser = async (auth) => {
+    if (typeof User === 'undefined' || !User.qm) {
+      return null;
+    }
+
+    const email = normalizeEmail(auth.email, auth.subject);
+    const name = String(auth.name || auth.subject || email.split('@')[0] || 'Mem0 User').trim();
+    const picture = String(auth.picture || '').trim();
+    const actorUser = User.INTERNAL || (await resolveServiceUser());
+
+    let user;
+    try {
+      user = await sails.helpers.mem0.upsertUserByEmail.with({
+        email,
+        name,
+        picture: picture || null,
+        actorUser: actorUser || (await resolveServiceUser()),
+      });
+    } catch (err) {
+      sails.log.warn('mem0-auth: failed to upsert JWT user:', err.message || err);
+      return null;
+    }
+
+    await ensureSharedAccess(user);
+    return user;
   };
 
   return {
@@ -77,10 +202,43 @@ module.exports = function defineMem0AuthHook(sails) {
               method: auth.method,
               subject: auth.subject,
               email: auth.email,
+              name: auth.name,
+              picture: auth.picture,
             };
 
-            if (!req.currentUser && typeof User !== 'undefined' && User.INTERNAL) {
-              req.currentUser = User.INTERNAL;
+            if (auth.method === 'jwt') {
+              // UI embed: sempre a pessoa do JWT — nunca DEFAULT_ADMIN.
+              const jwtUser = await upsertJwtUser(auth);
+              if (!jwtUser) {
+                return res.status(401).json({
+                  code: 'E_MEM0_USER_UPSERT',
+                  message: 'Could not resolve Mem0 user for JWT embed',
+                });
+              }
+              req.currentUser = jwtUser;
+              if (jwtUser.language && typeof req.setLocale === 'function') {
+                req.setLocale(jwtUser.language);
+              }
+              return next();
+            }
+
+            // Mirror / legacy / omtk → DEFAULT_ADMIN (FK-safe actor).
+            if (
+              !req.currentUser ||
+              (typeof User !== 'undefined' &&
+                User.INTERNAL &&
+                req.currentUser.id === User.INTERNAL.id)
+            ) {
+              const serviceUser = await resolveServiceUser();
+              if (serviceUser) {
+                req.currentUser = serviceUser;
+              } else if (
+                !req.currentUser &&
+                typeof User !== 'undefined' &&
+                User.INTERNAL
+              ) {
+                req.currentUser = User.INTERNAL;
+              }
             }
 
             return next();

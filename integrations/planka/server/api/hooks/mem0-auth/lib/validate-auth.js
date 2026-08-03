@@ -69,6 +69,9 @@ function authenticateMem0Request(input = {}) {
       method: 'jwt',
       subject: String(sub),
       email: payload.email ? String(payload.email) : undefined,
+      name: payload.name ? String(payload.name) : undefined,
+      picture: payload.picture ? String(payload.picture) : undefined,
+      mem0: Boolean(payload && payload.mem0),
     };
   } catch (_err) {
     return { ok: false, reason: 'invalid_jwt' };

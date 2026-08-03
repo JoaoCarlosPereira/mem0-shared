@@ -29,6 +29,36 @@ async function main() {
     await client.query(`CREATE SCHEMA IF NOT EXISTS ${ident}`);
     await client.query(`GRANT ALL ON SCHEMA ${ident} TO CURRENT_USER`);
     await client.query(`GRANT ALL ON SCHEMA ${ident} TO PUBLIC`);
+
+    // PLANKA's next_id() uses unqualified nextval('next_id_seq'). When the
+    // Waterline connection does not honor search_path options, qualify it.
+    const fn = await client.query(
+      `SELECT pg_get_functiondef(p.oid) AS def
+         FROM pg_proc p
+         JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = $1 AND p.proname = 'next_id'
+        LIMIT 1`,
+      [schema],
+    );
+    if (fn.rows[0] && fn.rows[0].def && !fn.rows[0].def.includes(`${schema}.next_id_seq`)) {
+      const patched = String(fn.rows[0].def).replace(
+        /nextval\('next_id_seq'\)/g,
+        `nextval('${schema}.next_id_seq')`,
+      );
+      await client.query(patched);
+      console.log(`ensure-schema: patched ${schema}.next_id() to use qualified sequence`);
+    }
+
+    // Some Sails queries run with search_path that omits the planka schema.
+    // Expose an unqualified next_id() in public that delegates to schema.next_id().
+    await client.query(`
+      CREATE OR REPLACE FUNCTION public.next_id(OUT result bigint) AS $$
+      BEGIN
+        SELECT ${ident}.next_id() INTO result;
+      END;
+      $$ LANGUAGE PLPGSQL;
+    `);
+
     console.log(`ensure-schema: schema ${schema} ready`);
   } finally {
     await client.end();

@@ -23,12 +23,21 @@ import '@gravity-ui/uikit/styles/styles.css';
 import '../../lib/custom-ui/styles.css';
 
 import '../../styles.module.scss';
+import '../../styles/mem0-embed.css';
+import isMem0Embed from '../../utils/is-mem0-embed';
+
+if (typeof document !== 'undefined' && isMem0Embed()) {
+  document.documentElement.classList.add('mem0-embed');
+  document.documentElement.lang = 'pt-BR';
+  document.title = 'Kanban';
+}
 
 function Root({ store, history }) {
+  const embed = isMem0Embed();
   return (
     <Provider store={store}>
       <ReduxRouter history={history}>
-        <ThemeProvider theme="light">
+        <ThemeProvider theme={embed ? 'dark' : 'light'}>
           <ToasterProvider toaster={toaster}>
             <Routes>
               <Route path={Paths.LOGIN} element={<Login />} />

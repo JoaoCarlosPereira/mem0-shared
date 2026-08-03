@@ -180,6 +180,8 @@ module.exports.routes = {
   'DELETE /api/cards/:id': 'cards/delete',
   'POST /api/cards/:cardId/card-memberships': 'card-memberships/create',
   'DELETE /api/cards/:cardId/card-memberships/userId::userId': 'card-memberships/delete',
+  // Mem0 Spec mirror: set/clear card assignee (card_membership) by email
+  'PUT /api/cards/:cardId/mem0-assignee': 'cards/mem0-sync-assignee',
   'POST /api/cards/:cardId/card-labels': 'card-labels/create',
   'DELETE /api/cards/:cardId/card-labels/labelId::labelId': 'card-labels/delete',
 

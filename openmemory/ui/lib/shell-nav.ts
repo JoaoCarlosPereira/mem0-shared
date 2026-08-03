@@ -1,11 +1,11 @@
 import type { LucideIcon } from "lucide-react";
 import {
-  BookOpen,
   Home,
   Layers,
   LayoutGrid,
   ShieldCheck,
   Store,
+  Trello,
 } from "lucide-react";
 
 export interface ShellNavItem {
@@ -41,9 +41,9 @@ export const MAIN_NAV_ITEMS: ShellNavItem[] = [
     match: (pathname) => pathname.startsWith("/store"),
   },
   {
-    label: "Documentações",
+    label: "Kanban",
     href: "/docs",
-    icon: BookOpen,
+    icon: Trello,
     match: (pathname) => pathname.startsWith("/docs"),
   },
 ];
@@ -66,7 +66,7 @@ export function getPageTitle(pathname: string): string {
   if (pathname.startsWith("/memories") || pathname.startsWith("/memory/")) return "Memórias";
   if (pathname.startsWith("/apps")) return "Projetos";
   if (pathname.startsWith("/store")) return "Store";
-  if (pathname.startsWith("/docs")) return "Documentações";
+  if (pathname.startsWith("/docs")) return "Kanban";
   return "Mem0-Shared";
 }
 
@@ -78,9 +78,8 @@ export function isAdminRoute(pathname: string): boolean {
   return pathname.startsWith("/admin");
 }
 
-/** Quadro Kanban: `/docs/:project/:workspace` */
+/** Qualquer rota sob /docs (home Kanban full-bleed). */
 export function isDocsBoardPath(pathname: string | null): boolean {
   if (!pathname) return false;
-  const parts = pathname.split("/").filter(Boolean);
-  return parts[0] === "docs" && parts.length >= 3;
+  return pathname === "/docs" || pathname.startsWith("/docs/");
 }

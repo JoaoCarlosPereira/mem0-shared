@@ -3,10 +3,13 @@
 import { useCallback, useState } from "react";
 
 import {
+  fetchInstallRecipe,
   getRegistryResource,
   listAllRegistryResources,
   publishRegistryManifest,
   registryErrorMessage,
+  type InstallRecipe,
+  type InstallTarget,
   type RegistryApplyResponse,
   type RegistryResource,
   type RegistryResourceKind,
@@ -16,11 +19,14 @@ export interface UseRegistryCatalogState {
   resources: RegistryResource[];
   selectedResource: RegistryResource | null;
   applyResponse: RegistryApplyResponse | null;
+  installRecipe: InstallRecipe | null;
   loading: boolean;
   detailLoading: boolean;
   publishing: boolean;
+  installing: boolean;
   error: string | null;
   publishError: string | null;
+  installError: string | null;
 }
 
 export function useRegistryCatalog() {
@@ -28,11 +34,14 @@ export function useRegistryCatalog() {
     resources: [],
     selectedResource: null,
     applyResponse: null,
+    installRecipe: null,
     loading: false,
     detailLoading: false,
     publishing: false,
+    installing: false,
     error: null,
     publishError: null,
+    installError: null,
   });
 
   const loadCatalog = useCallback(async () => {
@@ -110,10 +119,53 @@ export function useRegistryCatalog() {
     }
   }, [loadCatalog]);
 
+  const requestInstallRecipe = useCallback(
+    async (
+      kind: RegistryResourceKind,
+      name: string,
+      tag: string,
+      target: InstallTarget,
+    ) => {
+      setState((current) => ({
+        ...current,
+        installing: true,
+        installError: null,
+        installRecipe: null,
+      }));
+      try {
+        const installRecipe = await fetchInstallRecipe({
+          kind,
+          name,
+          tag,
+          target,
+        });
+        setState((current) => ({
+          ...current,
+          installing: false,
+          installError: null,
+          installRecipe,
+        }));
+        return installRecipe;
+      } catch (error) {
+        setState((current) => ({
+          ...current,
+          installing: false,
+          installError: registryErrorMessage(
+            error,
+            "Falha ao gerar receita de instalação.",
+          ),
+        }));
+        return null;
+      }
+    },
+    [],
+  );
+
   return {
     ...state,
     loadCatalog,
     loadDetail,
     publishManifest,
+    requestInstallRecipe,
   };
 }

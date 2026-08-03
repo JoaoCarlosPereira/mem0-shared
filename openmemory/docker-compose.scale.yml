@@ -68,7 +68,7 @@ x-api-common: &api-common
     # GOOGLE_CLIENT_SECRET é exigido pelo polling do Device Flow (ADR-007).
     # Sem AUTH_JWT_SECRET/AUTH_ALLOWED_DOMAIN o login Google fica desabilitado
     # (fail-closed) e o fluxo legado por hostname segue intacto.
-    AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
+    AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-${NEXTAUTH_SECRET:-}}
     AUTH_ALLOWED_DOMAIN: ${AUTH_ALLOWED_DOMAIN:-}
     GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
     GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
@@ -83,10 +83,12 @@ x-api-common: &api-common
     AGENT_REGISTRY_BASE_URL: ${AGENT_REGISTRY_BASE_URL:-http://agentregistry:8080}
     AGENT_REGISTRY_INTERNAL_URL: ${AGENT_REGISTRY_INTERNAL_URL:-http://agentregistry:8080}
     # Kanban PLANKA sidecar (schema Postgres `planka`; sem Qdrant).
-    PLANKA_BASE_URL: ${PLANKA_BASE_URL:-http://planka:1337}
+    PLANKA_BASE_URL: ${PLANKA_INTERNAL_URL:-${PLANKA_BASE_URL:-http://planka:1337}}
     PLANKA_INTERNAL_URL: ${PLANKA_INTERNAL_URL:-http://planka:1337}
+    PLANKA_PUBLIC_URL: ${PLANKA_PUBLIC_URL:-http://192.168.2.184:8765/planka}
     PLANKA_MIRROR_SYNC: ${PLANKA_MIRROR_SYNC:-1}
     PLANKA_INTERNAL_ACCESS_TOKEN: ${PLANKA_INTERNAL_ACCESS_TOKEN:-${INTERNAL_ACCESS_TOKEN:-}}
+    NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-}
     # Anexos de cards Spec (volume dedicado — nunca Qdrant / mem0_storage).
     SPEC_ATTACHMENTS_DIR: ${SPEC_ATTACHMENTS_DIR:-/mnt/spec-attachments}
     # Object store para backup/cold tier (task_02/07 / ADR-003).
@@ -349,7 +351,7 @@ services:
     image: mem0/planka:local
     restart: unless-stopped
     environment:
-      BASE_URL: ${PLANKA_BASE_URL:-http://planka:1337}
+      BASE_URL: ${PLANKA_PUBLIC_URL:-${PLANKA_BASE_URL:-http://192.168.2.184:8765/planka}}
       # Postgres direto (migrações Knex); schema isolado via MEM0_PG_SCHEMA + search_path.
       DATABASE_URL: postgres://${POSTGRES_USER:-mem0}:${POSTGRES_PASSWORD:-mem0}@postgres:5432/${POSTGRES_DB:-openmemory}?sslmode=disable
       MEM0_PG_SCHEMA: planka
@@ -357,11 +359,14 @@ services:
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-${NEXTAUTH_SECRET:-}}
       MEM0_AUTH_ALLOW_LEGACY: ${MEM0_AUTH_ALLOW_LEGACY:-1}
       INTERNAL_ACCESS_TOKEN: ${PLANKA_INTERNAL_ACCESS_TOKEN:-${INTERNAL_ACCESS_TOKEN:-}}
+      OPENMEMORY_INTERNAL_URL: ${OPENMEMORY_INTERNAL_URL:-http://openmemory-mcp:8765}
+      OPENMEMORY_BRIDGE_TOKEN: ${PLANKA_INTERNAL_ACCESS_TOKEN:-${INTERNAL_ACCESS_TOKEN:-}}
       TRUST_PROXY: "true"
-      DEFAULT_ADMIN_EMAIL: ${PLANKA_DEFAULT_ADMIN_EMAIL:-}
-      DEFAULT_ADMIN_PASSWORD: ${PLANKA_DEFAULT_ADMIN_PASSWORD:-}
+      DEFAULT_ADMIN_EMAIL: ${PLANKA_DEFAULT_ADMIN_EMAIL:-admin@mem0.local}
+      DEFAULT_ADMIN_PASSWORD: ${PLANKA_DEFAULT_ADMIN_PASSWORD:-${PLANKA_INTERNAL_ACCESS_TOKEN:-mem0-planka-admin}}
       DEFAULT_ADMIN_NAME: ${PLANKA_DEFAULT_ADMIN_NAME:-Mem0 Admin}
       DEFAULT_ADMIN_USERNAME: ${PLANKA_DEFAULT_ADMIN_USERNAME:-admin}
+      DEFAULT_LANGUAGE: ${PLANKA_DEFAULT_LANGUAGE:-pt-BR}
     volumes:
       - planka_attachments:/app/data
     depends_on:
@@ -377,12 +382,20 @@ services:
       - "1337"
     labels:
       - traefik.enable=true
-      - traefik.http.routers.planka.rule=PathPrefix(`/planka-api`)
+      # Browser usa BASE_URL=/planka; Traefik STRIP no backend (docs oficiais PLANKA).
+      - traefik.http.routers.planka.rule=PathPrefix(`/planka`)
       - traefik.http.routers.planka.entrypoints=web
       - traefik.http.routers.planka.priority=90
-      - traefik.http.middlewares.planka-strip.stripprefix.prefixes=/planka-api
-      - traefik.http.routers.planka.middlewares=planka-strip
+      - traefik.http.middlewares.planka-public-strip.stripprefix.prefixes=/planka
+      - traefik.http.routers.planka.middlewares=planka-public-strip
       - traefik.http.services.planka.loadbalancer.server.port=1337
+      # Compat: /planka-api ainda aponta ao sidecar (ops/smoke antigos).
+      - traefik.http.routers.planka-api-legacy.rule=PathPrefix(`/planka-api`)
+      - traefik.http.routers.planka-api-legacy.entrypoints=web
+      - traefik.http.routers.planka-api-legacy.priority=89
+      - traefik.http.middlewares.planka-api-strip.stripprefix.prefixes=/planka-api
+      - traefik.http.routers.planka-api-legacy.middlewares=planka-api-strip
+      - traefik.http.routers.planka-api-legacy.service=planka
 
 volumes:
   mem0_storage:

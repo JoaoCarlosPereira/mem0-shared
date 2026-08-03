@@ -26,6 +26,8 @@ import { useApiSessionReady } from "@/hooks/useApiSessionReady";
 import { useRegistryCatalog } from "@/hooks/useRegistryCatalog";
 import {
   buildPublishManifest,
+  INSTALL_TARGET_LABELS,
+  INSTALL_TARGETS,
   REGISTRY_KIND_LABELS,
   REGISTRY_RESOURCE_KINDS,
   registryDependencySummary,
@@ -36,11 +38,18 @@ import {
   registryResourceTitle,
   registrySourceSummary,
   validatePublishDraft,
+  type InstallRecipe,
+  type InstallTarget,
   type PublishDraft,
   type RegistryResource,
   type RegistryResourceKind,
 } from "@/lib/registry-client";
 import { cn } from "@/lib/utils";
+
+const HIDDEN_ANNOTATION_PREFIXES = [
+  "agentregistry.mem0.ai/skill-md",
+  "agentregistry.mem0.ai/frontmatter-json",
+];
 
 const KIND_ICONS: Record<RegistryResourceKind, typeof Store> = {
   skills: TerminalSquare,
@@ -68,19 +77,23 @@ export default function StorePage() {
     resources,
     selectedResource,
     applyResponse,
+    installRecipe,
     loading,
     detailLoading,
     publishing,
+    installing,
     error,
     publishError,
+    installError,
     loadCatalog,
     loadDetail,
     publishManifest,
+    requestInstallRecipe,
   } = useRegistryCatalog();
 
   const [query, setQuery] = useState("");
   const [kindFilter, setKindFilter] = useState<KindFilter>("all");
-  const [installTarget, setInstallTarget] = useState("cursor");
+  const [installTarget, setInstallTarget] = useState<InstallTarget>("cursor");
   const [draft, setDraft] = useState<PublishDraft>(DEFAULT_DRAFT);
   const [manifest, setManifest] = useState(buildPublishManifest(DEFAULT_DRAFT));
   const [formErrors, setFormErrors] = useState<string[]>([]);
@@ -232,7 +245,19 @@ export default function StorePage() {
             resource={selectedResource}
             loading={detailLoading}
             installTarget={installTarget}
+            installing={installing}
+            installError={installError}
+            installRecipe={installRecipe}
             onInstallTargetChange={setInstallTarget}
+            onRequestRecipe={() => {
+              if (!selectedResource) return;
+              void requestInstallRecipe(
+                selectedResource.registryKind,
+                selectedResource.metadata.name,
+                registryResourceTag(selectedResource),
+                installTarget,
+              );
+            }}
           />
 
           <Card>
@@ -286,9 +311,12 @@ export default function StorePage() {
                     onChange={(event) =>
                       setDraft((current) => ({ ...current, name: event.target.value }))
                     }
-                    placeholder="team/recurso"
+                    placeholder="minha-skill"
                     className="mt-1 border-slate-700 bg-slate-950 text-slate-100"
                   />
+                  <span className="mt-1 block text-xs font-normal text-slate-500">
+                    Use letras, números e hífens (ex.: equipe-skill). Evite espaços.
+                  </span>
                 </label>
 
                 <label className="block text-sm font-medium text-slate-300">
@@ -378,11 +406,21 @@ export default function StorePage() {
                 ) : null}
 
                 {applyResponse?.results?.length ? (
-                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/30 p-3 text-sm text-emerald-200">
+                  <div
+                    role="status"
+                    className={
+                      applyResponse.results.some((result) =>
+                        String(result.status).toLowerCase().includes("fail"),
+                      )
+                        ? "rounded-xl border border-red-500/30 bg-red-950/30 p-3 text-sm text-red-200"
+                        : "rounded-xl border border-emerald-500/30 bg-emerald-950/30 p-3 text-sm text-emerald-200"
+                    }
+                  >
                     {applyResponse.results.map((result) => (
                       <div key={`${result.kind}:${result.name}:${result.tag ?? ""}`}>
                         {result.kind} {result.name}
                         {result.tag ? `@${result.tag}` : ""}: {result.status}
+                        {result.error ? ` — ${result.error}` : ""}
                       </div>
                     ))}
                   </div>
@@ -475,9 +513,9 @@ function ResourceCard({
               {registryResourceTag(resource)}
             </Badge>
           </div>
-          <h2 className="truncate text-base font-bold text-white">
+          <p className="truncate text-base font-bold text-white">
             {registryResourceTitle(resource)}
-          </h2>
+          </p>
           <p className="mt-1 line-clamp-2 text-sm text-slate-400">
             {registryResourceDescription(resource)}
           </p>
@@ -494,12 +532,20 @@ function ResourceDetailCard({
   resource,
   loading,
   installTarget,
+  installing,
+  installError,
+  installRecipe,
   onInstallTargetChange,
+  onRequestRecipe,
 }: {
   resource: RegistryResource | null;
   loading: boolean;
-  installTarget: string;
-  onInstallTargetChange: (target: string) => void;
+  installTarget: InstallTarget;
+  installing: boolean;
+  installError: string | null;
+  installRecipe: InstallRecipe | null;
+  onInstallTargetChange: (target: InstallTarget) => void;
+  onRequestRecipe: () => void;
 }) {
   if (loading) {
     return (
@@ -516,7 +562,7 @@ function ResourceDetailCard({
       <Card>
         <CardContent className="p-6 text-sm text-slate-400">
           Selecione um recurso do catálogo para ver versão, origem, dependências
-          e instruções.
+          e receita de instalação.
         </CardContent>
       </Card>
     );
@@ -525,8 +571,13 @@ function ResourceDetailCard({
   const sourceSummary = registrySourceSummary(resource);
   const dependencySummary = registryDependencySummary(resource);
   const labels = Object.entries(resource.metadata.labels ?? {});
-  const annotations = Object.entries(resource.metadata.annotations ?? {});
+  const annotations = Object.entries(resource.metadata.annotations ?? {}).filter(
+    ([key, value]) =>
+      !HIDDEN_ANNOTATION_PREFIXES.some((prefix) => key.startsWith(prefix)) &&
+      String(value).length <= 80,
+  );
   const Icon = KIND_ICONS[resource.registryKind];
+  const steps = installRecipe?.steps ?? [];
 
   return (
     <Card>
@@ -585,7 +636,8 @@ function ResourceDetailCard({
                 <Badge
                   key={`${key}:${value}`}
                   variant="outline"
-                  className="border-slate-700 text-slate-300"
+                  className="max-w-full truncate border-slate-700 text-slate-300"
+                  title={`${key}=${value}`}
                 >
                   {key}={value}
                 </Badge>
@@ -604,26 +656,58 @@ function ResourceDetailCard({
             <select
               aria-label="Alvo de instalação"
               value={installTarget}
-              onChange={(event) => onInstallTargetChange(event.target.value)}
+              onChange={(event) =>
+                onInstallTargetChange(event.target.value as InstallTarget)
+              }
               className="mt-1 h-10 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100"
             >
-              <option value="cursor">Cursor</option>
-              <option value="claude-code">Claude Code</option>
-              <option value="codex">Codex</option>
+              {INSTALL_TARGETS.map((target) => (
+                <option key={target} value={target}>
+                  {INSTALL_TARGET_LABELS[target]}
+                </option>
+              ))}
             </select>
           </label>
           <Button
             type="button"
-            disabled
-            variant="outline"
-            className="mt-3 w-full border-slate-700 bg-slate-900 text-slate-400"
+            onClick={onRequestRecipe}
+            disabled={installing}
+            className="mt-3 w-full bg-blue-600 text-white hover:bg-blue-500"
           >
-            Receita de instalação na task_06
+            <Download className="mr-2 h-4 w-4" />
+            {installing ? "Gerando receita..." : "Gerar receita de instalação"}
           </Button>
           <p className="mt-2 text-xs text-slate-500">
-            O detalhe já carrega kind/name/tag para acionar o endpoint de recipe
-            assim que ele estiver disponível.
+            Gera os passos para aplicar no host ({INSTALL_TARGET_LABELS[installTarget]}).
+            A aplicação automática no disco fica a cargo do agente/usuário.
           </p>
+          {installError ? (
+            <div
+              role="alert"
+              className="mt-3 rounded-xl border border-red-500/30 bg-red-950/30 p-3 text-sm text-red-200"
+            >
+              {installError}
+            </div>
+          ) : null}
+          {steps.length ? (
+            <div className="mt-3 space-y-2 rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-3 text-sm text-emerald-100">
+              <p className="font-semibold text-emerald-200">
+                Receita {installRecipe?.target} — {steps.length} passo(s)
+              </p>
+              <ol className="list-decimal space-y-1 pl-5 text-slate-200">
+                {steps.map((step, index) => (
+                  <li key={String(step.id ?? index)} className="break-all">
+                    <span className="text-slate-400">{String(step.type ?? "step")}</span>
+                    {typeof step.path === "string"
+                      ? `: ${step.path}`
+                      : typeof step.to === "string"
+                        ? `: ${step.to}`
+                        : ""}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
         </div>
       </CardContent>
     </Card>

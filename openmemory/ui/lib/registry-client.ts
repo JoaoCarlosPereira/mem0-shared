@@ -136,6 +136,54 @@ export async function publishRegistryManifest(
   return response.data;
 }
 
+export const INSTALL_TARGETS = ["cursor", "claude", "codex"] as const;
+export type InstallTarget = (typeof INSTALL_TARGETS)[number];
+
+export const INSTALL_TARGET_LABELS: Record<InstallTarget, string> = {
+  cursor: "Cursor",
+  claude: "Claude Code",
+  codex: "Codex",
+};
+
+export interface InstallRecipe {
+  version: string;
+  resource_kind: string;
+  name: string;
+  tag: string;
+  target: InstallTarget | string;
+  user_id?: string;
+  steps?: Array<Record<string, unknown>>;
+  rollback?: Array<Record<string, unknown>>;
+  source?: Record<string, unknown>;
+  resource?: RegistryResource;
+}
+
+const REGISTRY_KIND_TO_RECIPE_KIND: Record<RegistryResourceKind, string> = {
+  skills: "skill",
+  mcpservers: "mcpserver",
+  prompts: "prompt",
+  agents: "agent",
+  plugins: "plugin",
+};
+
+export async function fetchInstallRecipe(input: {
+  kind: RegistryResourceKind;
+  name: string;
+  tag: string;
+  target: InstallTarget;
+}): Promise<InstallRecipe> {
+  const response = await apiClient.post<InstallRecipe>(
+    "/api-proxy/api/v1/store/install-recipes",
+    {
+      kind: REGISTRY_KIND_TO_RECIPE_KIND[input.kind],
+      name: input.name,
+      tag: input.tag,
+      target: input.target,
+    },
+  );
+  return response.data;
+}
+
 export function normalizeRegistryItems(
   kind: RegistryResourceKind,
   items: RegistryResource[],
@@ -279,7 +327,7 @@ export function buildPublishManifest(draft: PublishDraft): string {
   const promptContent = yamlBlock(draft.promptContent.trim());
 
   const lines = [
-    "apiVersion: agentregistry.dev/v1alpha1",
+    "apiVersion: ar.dev/v1alpha1",
     `kind: ${apiKind}`,
     "metadata:",
     `  name: ${name}`,

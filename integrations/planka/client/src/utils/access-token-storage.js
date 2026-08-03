@@ -27,6 +27,23 @@ export const setAccessToken = (accessToken) => {
   });
 };
 
+/** Mem0 embed (ADR-007): bootstrap token from ?mem0_token= before Redux init. */
+export const bootstrapMem0EmbedToken = () => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('mem0_token');
+    if (!token) return;
+    setAccessToken(token);
+    params.delete('mem0_token');
+    const next = `${window.location.pathname}${params.toString() ? `?${params}` : ''}${window.location.hash}`;
+    window.history.replaceState({}, '', next);
+  } catch (_err) {
+    // ignore malformed token / missing jwt fields
+  }
+};
+
+bootstrapMem0EmbedToken();
+
 export const removeAccessToken = () => {
   Cookies.remove(Config.ACCESS_TOKEN_KEY, { path: PATH });
   Cookies.remove(Config.ACCESS_TOKEN_VERSION_KEY, { path: PATH });

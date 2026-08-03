@@ -45,15 +45,24 @@ export function AuthBridge() {
       return;
     }
 
-    const token = (session as { apiAccessToken?: string | null } | null)?.apiAccessToken ?? null;
+    const sessionToken =
+      (session as { apiAccessToken?: string | null } | null)?.apiAccessToken ?? null;
+    // Legado LAN: sem JWT NextAuth — usa o mesmo shim Bearer local da API/MCP
+    // para Store (registry + install-recipes) e demais rotas autenticáveis.
+    const token =
+      sessionToken || (isLegacyAuthUi() ? "local" : null);
     setApiAccessToken(token);
     resetSessionExpiryGuard();
 
-    if (!token) {
+    if (!sessionToken) {
       dispatch(clearPersonProfile());
       // Modo legado (sem login Google / --skip-google-auth): libera as telas
       // que aguardam apiSessionReady. Com Google exigido, anônimo fica invalid.
       dispatch(setApiSessionStatus(isLegacyAuthUi() ? "valid" : "invalid"));
+      if (!token) {
+        return;
+      }
+      // Continua sem perfil Google; token legado já está no axios.
       return;
     }
 

@@ -184,6 +184,54 @@ class TestLegacyAndTeamCompat:
         assert resp.status_code == 200
         assert resp.json()["method"] == "team"
 
+    def test_planka_internal_bearer_accepted_in_enforce(self, db, monkeypatch):
+        """PLANKA Spec bridge token must pass AuthMiddleware (Kanban DnD)."""
+        monkeypatch.setenv("PLANKA_INTERNAL_ACCESS_TOKEN", "planka-bridge-secret")
+        monkeypatch.delenv("INTERNAL_ACCESS_TOKEN", raising=False)
+        with TestClient(_build_app("enforce")) as client:
+            resp = client.get(
+                "/whoami",
+                headers={"authorization": "Bearer planka-bridge-secret"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["method"] == "internal"
+
+    def test_internal_access_token_alias_accepted(self, db, monkeypatch):
+        """Fallback INTERNAL_ACCESS_TOKEN also resolves as method=internal."""
+        monkeypatch.delenv("PLANKA_INTERNAL_ACCESS_TOKEN", raising=False)
+        monkeypatch.setenv("INTERNAL_ACCESS_TOKEN", "alias-bridge-secret")
+        with TestClient(_build_app("enforce")) as client:
+            resp = client.get(
+                "/whoami",
+                headers={"authorization": "Bearer alias-bridge-secret"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["method"] == "internal"
+
+    def test_invalid_team_token_rejected_even_with_internal_configured(
+        self, db, monkeypatch
+    ):
+        monkeypatch.setenv("PLANKA_INTERNAL_ACCESS_TOKEN", "planka-bridge-secret")
+        with TestClient(_build_app("enforce")) as client:
+            resp = client.get(
+                "/whoami",
+                headers={"authorization": "Bearer nope-not-a-team-token"},
+            )
+        assert resp.status_code == 401
+
+    def test_admin_token_bearer_still_works_alongside_internal(
+        self, db, monkeypatch
+    ):
+        monkeypatch.setenv("ADMIN_TOKEN", "admin-secret-token")
+        monkeypatch.setenv("PLANKA_INTERNAL_ACCESS_TOKEN", "planka-bridge-secret")
+        with TestClient(_build_app("enforce")) as client:
+            resp = client.get(
+                "/whoami",
+                headers={"authorization": "Bearer admin-secret-token"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["method"] == "admin_token"
+
     def test_alias_team_auth_middleware_preservado(self):
         assert TeamAuthMiddleware is AuthMiddleware
 

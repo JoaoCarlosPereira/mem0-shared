@@ -90,7 +90,7 @@ describe("AuthBridge", () => {
     });
   });
 
-  it("sem sessão em modo legado: limpa Bearer e libera apiSessionReady", async () => {
+  it("sem sessão em modo legado: usa Bearer local e libera apiSessionReady", async () => {
     setApiAccessToken("residuo");
     mockSession = null;
     mockStatus = "unauthenticated";
@@ -102,7 +102,7 @@ describe("AuthBridge", () => {
     );
 
     await waitFor(() => {
-      expect(getApiAccessToken()).toBeNull();
+      expect(getApiAccessToken()).toBe("local");
       expect(store.getState().profile.person).toBeNull();
       expect(store.getState().profile.apiSessionStatus).toBe("valid");
       expect(mockedAxios.get).not.toHaveBeenCalled();

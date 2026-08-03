@@ -1,0 +1,57 @@
+/* Mem0 Shared — embed canvas theme (ADR-007). Applied when ?embed=1 */
+
+html.mem0-embed,
+html.mem0-embed body {
+  background: #020617 !important; /* slate-950 */
+  color: #e2e8f0;
+}
+
+/*
+ * Keep the header (project name / board controls). Hide only the current-user
+ * cluster: lock, notifications bell, and name+avatar chip. Prefer React
+ * gate in Header.jsx; these selectors are a CSS safety net.
+ */
+html.mem0-embed [data-mem0-header-user-actions],
+html.mem0-embed .Header [class*='userName'],
+html.mem0-embed [class*='Header_'][class*='userName'] {
+  display: none !important;
+}
+
+/* Hide any leftover PLANKA Pro / discoverPlankaPro promo chrome */
+html.mem0-embed a[href*='planka.app/pro'],
+html.mem0-embed [class*='PromoBanner_'],
+html.mem0-embed [class*='proMenuItem'] {
+  display: none !important;
+}
+
+html.mem0-embed {
+  --promo-banner-height: 0px;
+}
+
+html.mem0-embed .Board,
+html.mem0-embed [class*='Board_'] {
+  background: radial-gradient(ellipse at top, #0f172a 0%, #020617 55%) !important;
+}
+
+html.mem0-embed .List,
+html.mem0-embed [class*='List_'] {
+  background: rgba(15, 23, 42, 0.85) !important;
+  border: 1px solid rgba(51, 65, 85, 0.6);
+  border-radius: 0.5rem;
+}
+
+html.mem0-embed .Card,
+html.mem0-embed [class*='Card_'] {
+  background: #0f172a !important;
+  border: 1px solid rgba(51, 65, 85, 0.7);
+  color: #f1f5f9;
+}
+
+/* Assignees (card_membership avatars) must stay visible on the card face */
+html.mem0-embed [class*='UserAvatar_'],
+html.mem0-embed [class*='attachmentsRight'],
+html.mem0-embed [class*='attachmentRight'] {
+  display: inline-flex !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}

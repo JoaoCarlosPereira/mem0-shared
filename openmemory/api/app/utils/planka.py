@@ -27,6 +27,9 @@ from app.models import (
 DEFAULT_PLANKA_BASE_URL = "http://planka:1337"
 DEFAULT_PLANKA_TIMEOUT_SECONDS = 5.0
 
+# Gap-based list positions (PLANKA convention).
+_LIST_POSITION_STEP = 65536
+
 # Spec Kanban column → PLANKA list display name (pipeline SDD).
 SPEC_STATUS_TO_LIST_NAME: dict[str, str] = {
     TaskCardStatus.tasks.value: "Tasks",
@@ -36,17 +39,16 @@ SPEC_STATUS_TO_LIST_NAME: dict[str, str] = {
     TaskCardStatus.concluido.value: "Concluído",
 }
 
-DOCUMENT_LIST_NAME = "Documentos"
+DOCUMENT_LIST_NAME = "SDD"
 DOCUMENT_LIST_ENTITY = "list:documentos"
+# Coluna SDD fica à esquerda das colunas de pipeline (padrão Spec antigo).
+DOCUMENT_LIST_POSITION = _LIST_POSITION_STEP // 2
+DOCUMENT_LIST_LEGACY_NAMES = ("Documentos", "SDD")
 
 ENTITY_PROJECT = "project"
 ENTITY_BOARD = "board"
 ENTITY_TASK = "task"
 ENTITY_DOCUMENT = "document"
-
-# Gap-based list positions (PLANKA convention).
-_LIST_POSITION_STEP = 65536
-
 
 class PlankaMirrorError(Exception):
     def __init__(self, status_code: int, detail: str):
@@ -115,6 +117,7 @@ class PlankaMirrorHttpClient:
         existing_board = self._get_map(ENTITY_BOARD, workspace_id)
         if existing_board:
             await self._ensure_pipeline_lists(workspace_id, existing_board.planka_id)
+            await self._ensure_document_list(workspace_id, existing_board.planka_id)
             self.db.commit()
             return existing_board.planka_id
 
@@ -145,6 +148,7 @@ class PlankaMirrorHttpClient:
         board_id = _item_id(board_payload)
         self._upsert_map(ENTITY_BOARD, workspace_id, board_id)
         await self._ensure_pipeline_lists(workspace_id, board_id)
+        await self._ensure_document_list(workspace_id, board_id)
         self.db.commit()
         return board_id
 
@@ -165,9 +169,10 @@ class PlankaMirrorHttpClient:
         }
         if task.due_at is not None:
             body["dueDate"] = task.due_at.isoformat()
-        else:
-            body["dueDate"] = None
         if existing:
+            # PATCH permite limpar dueDate com null; create rejeita null explícito.
+            if task.due_at is None:
+                body["dueDate"] = None
             await self._request(
                 "PATCH",
                 f"/api/cards/{existing.planka_id}",
@@ -183,6 +188,7 @@ class PlankaMirrorHttpClient:
         task_map = self._get_map(ENTITY_TASK, task_id)
         if task_map:
             await self._mirror_task_checklists(task_id, task_map.planka_id)
+            await self._mirror_task_assignee(task, task_map.planka_id)
         self.db.commit()
 
     async def mirror_task_status(self, task_id: UUID) -> None:
@@ -203,6 +209,7 @@ class PlankaMirrorHttpClient:
             f"/api/cards/{existing.planka_id}",
             json={"listId": list_id, "position": _LIST_POSITION_STEP},
         )
+        await self._mirror_task_assignee(task, existing.planka_id)
         self.db.commit()
 
     async def mirror_document(self, workspace_id: UUID, doc_type: str) -> None:
@@ -259,6 +266,38 @@ class PlankaMirrorHttpClient:
                 raise
         self.db.delete(existing)
         self.db.commit()
+
+    async def _mirror_task_assignee(self, task: TaskCard, planka_card_id: str) -> None:
+        """Projeta ``TaskCard.assignee`` como card_membership PLANKA (avatar no card).
+
+        PUT ``/api/cards/:id/mem0-assignee`` faz upsert do user por e-mail, garante
+        board membership e deixa exatamente um membro (ou nenhum no release).
+        """
+        from app.utils.creator_identity import (
+            identity_for_actor,
+            resolve_actor_identities_with_db,
+        )
+
+        email: Optional[str] = None
+        name: Optional[str] = None
+        picture: Optional[str] = None
+        if task.assignee:
+            email = normalize_assignee_email(task.assignee)
+            identities = resolve_actor_identities_with_db(self.db, [task.assignee])
+            identity = identity_for_actor(task.assignee, identities)
+            if identity is not None:
+                name = identity.display_name or None
+                picture = identity.avatar_url or None
+            if not name:
+                name = (task.assignee.split("@", 1)[0] if "@" in task.assignee else task.assignee)[
+                    :128
+                ]
+
+        await self._request(
+            "PUT",
+            f"/api/cards/{planka_card_id}/mem0-assignee",
+            json={"email": email, "name": name, "picture": picture},
+        )
 
     async def _mirror_task_checklists(self, task_id: UUID, planka_card_id: str) -> None:
         """Best-effort: projeta itens de checklist Spec como tasks do card PLANKA.
@@ -327,21 +366,57 @@ class PlankaMirrorHttpClient:
             self._upsert_map(entity, workspace_id, _item_id(created))
 
     async def _ensure_document_list(self, workspace_id: UUID, board_id: str) -> str:
+        """Garante a coluna SDD (PRD/TechSpec/ADRs/Tasks) à esquerda do board."""
         existing = self._get_map(DOCUMENT_LIST_ENTITY, workspace_id)
         if existing:
+            await self._normalize_document_list(existing.planka_id)
             return existing.planka_id
+
+        # Lista órfã renomeável (legado "Documentos" sem mapa).
+        try:
+            board_payload = await self._request("GET", f"/api/boards/{board_id}")
+            included = board_payload.get("included") if isinstance(board_payload, dict) else None
+            lists = (included or {}).get("lists") if isinstance(included, dict) else None
+            if isinstance(lists, list):
+                for item in lists:
+                    if not isinstance(item, dict):
+                        continue
+                    name = str(item.get("name") or "")
+                    if name in DOCUMENT_LIST_LEGACY_NAMES and item.get("id") is not None:
+                        planka_id = str(item["id"])
+                        self._upsert_map(DOCUMENT_LIST_ENTITY, workspace_id, planka_id)
+                        await self._normalize_document_list(planka_id)
+                        return planka_id
+        except PlankaMirrorError:
+            pass
+
         created = await self._request(
             "POST",
             f"/api/boards/{board_id}/lists",
             json={
                 "type": "active",
-                "position": _LIST_POSITION_STEP * (len(SPEC_STATUS_TO_LIST_NAME) + 1),
+                "position": float(DOCUMENT_LIST_POSITION),
                 "name": DOCUMENT_LIST_NAME,
             },
         )
         planka_id = _item_id(created)
         self._upsert_map(DOCUMENT_LIST_ENTITY, workspace_id, planka_id)
         return planka_id
+
+    async def _normalize_document_list(self, planka_list_id: str) -> None:
+        """Renomeia/reposiciona a coluna SDD (Documentos → SDD, 1ª coluna)."""
+        try:
+            await self._request(
+                "PATCH",
+                f"/api/lists/{planka_list_id}",
+                json={
+                    "name": DOCUMENT_LIST_NAME,
+                    "position": float(DOCUMENT_LIST_POSITION),
+                },
+            )
+        except PlankaMirrorError:
+            # Best-effort: board ainda usável mesmo se rename falhar.
+            return
 
     async def _list_id_for_status(
         self, workspace_id: UUID, board_id: str, status: str
@@ -464,6 +539,19 @@ def _env_auth_token() -> Optional[str]:
     return None
 
 
+def normalize_assignee_email(assignee: str) -> str:
+    """Map Spec assignee (email or hostname/agent id) to PLANKA user email.
+
+    Matches mem0-auth ``normalizeEmail``: real emails pass through; otherwise
+    ``<sanitized>@mem0.local`` (e.g. ``Mini-PC`` → ``mini-pc@mem0.local``).
+    """
+    raw = (assignee or "").strip().lower()
+    if raw and "@" in raw:
+        return raw
+    sanitized = "".join(ch if ch.isalnum() or ch in "._+-" else "-" for ch in raw) or "mem0-user"
+    return f"{sanitized}@mem0.local"
+
+
 __all__ = [
     "DOCUMENT_LIST_ENTITY",
     "DOCUMENT_LIST_NAME",
@@ -479,5 +567,6 @@ __all__ = [
     "PlankaMirrorNotFound",
     "SPEC_STATUS_TO_LIST_NAME",
     "list_entity_type",
+    "normalize_assignee_email",
     "status_to_list_name",
 ]

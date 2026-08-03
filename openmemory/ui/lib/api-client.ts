@@ -79,7 +79,8 @@ function attachUnauthorizedInterceptor(instance: AxiosInstance) {
       if (
         axios.isAxiosError(error) &&
         error.response?.status === 401 &&
-        apiAccessToken
+        apiAccessToken &&
+        apiAccessToken !== "local"
       ) {
         setApiAccessToken(null);
         notifySessionExpired();

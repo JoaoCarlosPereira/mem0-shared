@@ -4,11 +4,13 @@ jest.mock("@/lib/registry-client", () => ({
   getRegistryResource: jest.fn(),
   listAllRegistryResources: jest.fn(),
   publishRegistryManifest: jest.fn(),
+  fetchInstallRecipe: jest.fn(),
   registryErrorMessage: (error: unknown, fallback: string) =>
     error instanceof Error ? error.message : fallback,
 }));
 
 import {
+  fetchInstallRecipe,
   getRegistryResource,
   listAllRegistryResources,
   publishRegistryManifest,
@@ -25,6 +27,9 @@ const mockedGetRegistryResource = getRegistryResource as jest.MockedFunction<
 const mockedPublishRegistryManifest = publishRegistryManifest as jest.MockedFunction<
   typeof publishRegistryManifest
 >;
+const mockedFetchInstallRecipe = fetchInstallRecipe as jest.MockedFunction<
+  typeof fetchInstallRecipe
+>;
 
 const skill: RegistryResource = {
   registryKind: "skills",
@@ -38,6 +43,7 @@ describe("useRegistryCatalog", () => {
     mockedListAllRegistryResources.mockReset();
     mockedGetRegistryResource.mockReset();
     mockedPublishRegistryManifest.mockReset();
+    mockedFetchInstallRecipe.mockReset();
   });
 
   it("carrega catálogo e detalhe do recurso selecionado", async () => {
@@ -97,5 +103,31 @@ describe("useRegistryCatalog", () => {
     });
 
     expect(result.current.publishError).toBe("denied");
+  });
+
+  it("gera receita de instalação para o alvo escolhido", async () => {
+    mockedFetchInstallRecipe.mockResolvedValueOnce({
+      version: "1",
+      resource_kind: "skill",
+      name: "demo",
+      tag: "latest",
+      target: "claude",
+      steps: [{ id: "copy-resource", type: "copy", to: "~/.claude/skills/demo" }],
+    });
+
+    const { result } = renderHook(() => useRegistryCatalog());
+
+    await act(async () => {
+      await result.current.requestInstallRecipe("skills", "demo", "latest", "claude");
+    });
+
+    expect(mockedFetchInstallRecipe).toHaveBeenCalledWith({
+      kind: "skills",
+      name: "demo",
+      tag: "latest",
+      target: "claude",
+    });
+    expect(result.current.installRecipe?.target).toBe("claude");
+    expect(result.current.installError).toBeNull();
   });
 });

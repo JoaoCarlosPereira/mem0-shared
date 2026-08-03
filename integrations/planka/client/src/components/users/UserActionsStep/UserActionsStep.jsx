@@ -104,17 +104,7 @@ const UserActionsStep = React.memo(({ onClose }) => {
               context: 'title',
             })}
           </Menu.Item>
-          <Menu.Item
-            href="https://planka.app/pro?ref=app-menu"
-            target="_blank"
-            rel="noopener noreferrer"
-            className={styles.proMenuItem}
-          >
-            <Icon name="gem" className={styles.proMenuItemIcon} />
-            {withAdministration
-              ? t('common.upgradeTeamToPro', { context: 'title' })
-              : t('common.discoverPlankaPro', { context: 'title' })}
-          </Menu.Item>
+          {/* Mem0 Shared: PLANKA Pro / discoverPlankaPro menu upsell omitted. */}
           <hr className={styles.divider} />
           <Menu.Item
             {...logoutMenuItemProps} // eslint-disable-line react/jsx-props-no-spreading

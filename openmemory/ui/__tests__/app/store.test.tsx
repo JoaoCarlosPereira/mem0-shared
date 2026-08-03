@@ -78,7 +78,33 @@ describe("StorePage", () => {
       );
     });
     expect(await screen.findByText(/Repositório: https:\/\/github.com\/acme\/demo-skill/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Receita de instalação na task_06/i })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: /Gerar receita de instalação/i }),
+    ).toBeEnabled();
+
+    mockedApiClient.post.mockResolvedValueOnce({
+      data: {
+        version: "1",
+        resource_kind: "skill",
+        name: "team/demo-skill",
+        tag: "latest",
+        target: "cursor",
+        steps: [{ id: "copy-resource", type: "copy", to: ".cursor/skills/team/demo-skill" }],
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Gerar receita de instalação/i }));
+    await waitFor(() => {
+      expect(mockedApiClient.post).toHaveBeenCalledWith(
+        "/api-proxy/api/v1/store/install-recipes",
+        {
+          kind: "skill",
+          name: "team/demo-skill",
+          tag: "latest",
+          target: "cursor",
+        },
+      );
+    });
+    expect(await screen.findByText(/Receita cursor/i)).toBeInTheDocument();
   });
 
   it("publica manifesto via proxy de registry", async () => {

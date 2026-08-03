@@ -14,6 +14,10 @@ const hasAvatarChanged = (avatar, prevAvatar) => {
     return true;
   }
 
+  if (avatar.externalUrl || prevAvatar.externalUrl) {
+    return avatar.externalUrl !== prevAvatar.externalUrl;
+  }
+
   return avatar.uploadedFileId !== prevAvatar.uploadedFileId;
 };
 

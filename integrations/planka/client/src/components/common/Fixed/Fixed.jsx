@@ -8,13 +8,14 @@ import { useSelector } from 'react-redux';
 
 import selectors from '../../../selectors';
 import Header from '../Header';
-import PromoBanner from '../PromoBanner/PromoBanner';
 import Favorites from '../Favorites';
 import HomeActions from '../HomeActions';
 import Project from '../../projects/Project';
 import BoardActions from '../../boards/BoardActions';
 
 import styles from './Fixed.module.scss';
+
+// Mem0 Shared: PromoBanner (discoverPlankaPro / PLANKA Pro upsell) intentionally omitted.
 
 const Fixed = React.memo(() => {
   const { projectId } = useSelector(selectors.selectPath);
@@ -23,7 +24,6 @@ const Fixed = React.memo(() => {
   return (
     <div className={styles.wrapper}>
       <Header />
-      <PromoBanner />
       <Favorites />
       {projectId === undefined && <HomeActions />}
       {projectId && <Project />}

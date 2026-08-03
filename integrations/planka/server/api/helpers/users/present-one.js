@@ -17,6 +17,24 @@ module.exports = {
   },
 
   fn(inputs) {
+    let avatar = null;
+    if (inputs.record.avatar && inputs.record.avatar.externalUrl) {
+      // Mem0 SSO picture URL (ADR-008) — no uploaded file.
+      avatar = {
+        url: inputs.record.avatar.externalUrl,
+        thumbnailUrls: {
+          cover180: inputs.record.avatar.externalUrl,
+        },
+      };
+    } else if (inputs.record.avatar && inputs.record.avatar.uploadedFileId) {
+      avatar = {
+        url: `${sails.config.custom.baseUrl}/user-avatars/${inputs.record.avatar.uploadedFileId}/original.${inputs.record.avatar.extension}`,
+        thumbnailUrls: {
+          cover180: `${sails.config.custom.baseUrl}/user-avatars/${inputs.record.avatar.uploadedFileId}/cover-180.${inputs.record.avatar.extension}`,
+        },
+      };
+    }
+
     const data = {
       ..._.omit(inputs.record, [
         'password',
@@ -27,12 +45,7 @@ module.exports = {
         'apiKeyCreatedAt',
         'termsAcceptedAt',
       ]),
-      avatar: inputs.record.avatar && {
-        url: `${sails.config.custom.baseUrl}/user-avatars/${inputs.record.avatar.uploadedFileId}/original.${inputs.record.avatar.extension}`,
-        thumbnailUrls: {
-          cover180: `${sails.config.custom.baseUrl}/user-avatars/${inputs.record.avatar.uploadedFileId}/cover-180.${inputs.record.avatar.extension}`,
-        },
-      },
+      avatar,
       language: inputs.record.language || sails.config.i18n.defaultLocale,
     };
 

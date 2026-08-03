@@ -25,6 +25,8 @@ from app.models import (
     TaskCardStatus,
 )
 from app.utils.planka import (
+    DOCUMENT_LIST_ENTITY,
+    DOCUMENT_LIST_NAME,
     ENTITY_BOARD,
     ENTITY_DOCUMENT,
     ENTITY_PROJECT,
@@ -33,6 +35,7 @@ from app.utils.planka import (
     PlankaMirrorError,
     PlankaMirrorHttpClient,
     list_entity_type,
+    normalize_assignee_email,
     status_to_list_name,
 )
 
@@ -78,6 +81,8 @@ class _PlankaRouter:
 
     def __init__(self):
         self.calls: list[tuple[str, str]] = []
+        self.list_names: list[str] = []
+        self.assignee_calls: list[tuple[str, dict]] = []
         self._seq = 1000
         self.fail_next: dict[str, int] | None = None
         self.timeout_paths: set[str] = set()
@@ -106,14 +111,41 @@ class _PlankaRouter:
             return _json_response(200, {"item": {"id": self._next_id(), "name": "b"}})
 
         if method == "POST" and path.startswith("/api/boards/") and path.endswith("/lists"):
-            return _json_response(200, {"item": {"id": self._next_id(), "name": "l"}})
+            try:
+                body = json.loads(request.content.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                body = {}
+            name = str(body.get("name") or "l")
+            self.list_names.append(name)
+            return _json_response(200, {"item": {"id": self._next_id(), "name": name}})
 
         if method == "POST" and path.startswith("/api/lists/") and path.endswith("/cards"):
             return _json_response(200, {"item": {"id": self._next_id(), "name": "c"}})
 
+        if method == "PUT" and path.endswith("/mem0-assignee"):
+            try:
+                body = json.loads(request.content.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                body = {}
+            self.assignee_calls.append((path, body))
+            return _json_response(
+                200,
+                {
+                    "item": {
+                        "cleared": body.get("email") is None,
+                        "userId": None if body.get("email") is None else self._next_id(),
+                        "email": body.get("email"),
+                    }
+                },
+            )
+
         if method == "PATCH" and path.startswith("/api/cards/"):
             card_id = path.rsplit("/", 1)[-1]
             return _json_response(200, {"item": {"id": card_id, "name": "c"}})
+
+        if method == "PATCH" and path.startswith("/api/lists/"):
+            list_id = path.rsplit("/", 1)[-1]
+            return _json_response(200, {"item": {"id": list_id, "name": DOCUMENT_LIST_NAME}})
 
         if method == "DELETE" and path.startswith("/api/cards/"):
             card_id = path.rsplit("/", 1)[-1]
@@ -209,15 +241,30 @@ class TestEnsureWorkspaceBoard:
                 .count()
                 == 1
             )
+        assert (
+            db_session.query(SpecPlankaIdMap)
+            .filter_by(entity_type=DOCUMENT_LIST_ENTITY, spec_id=ws.id)
+            .count()
+            == 1
+        )
+        assert DOCUMENT_LIST_NAME in planka_router.list_names
 
         methods = [m for m, _ in planka_router.calls]
-        assert methods.count("POST") >= 1 + 1 + len(SPEC_STATUS_TO_LIST_NAME)
+        # project + board + pipeline lists + SDD list
+        assert methods.count("POST") >= 1 + 1 + len(SPEC_STATUS_TO_LIST_NAME) + 1
 
-        # Idempotent: second call does not recreate project/board.
-        calls_before = len(planka_router.calls)
+        # Idempotent: second call does not recreate project/board (normalize may PATCH SDD).
+        posts_before = sum(1 for m, _ in planka_router.calls if m == "POST")
         again = await client.ensure_workspace_board(ws.id)
         assert again == board_id
-        assert len(planka_router.calls) == calls_before
+        posts_after = sum(1 for m, _ in planka_router.calls if m == "POST")
+        assert posts_after == posts_before
+        assert (
+            db_session.query(SpecPlankaIdMap)
+            .filter_by(entity_type=DOCUMENT_LIST_ENTITY, spec_id=ws.id)
+            .count()
+            == 1
+        )
 
     @pytest.mark.asyncio
     async def test_auth_header_sent(self, db_session, planka_router, monkeypatch):
@@ -273,6 +320,53 @@ class TestMirrorTask:
         )
 
     @pytest.mark.asyncio
+    async def test_mirror_task_syncs_assignee_membership(
+        self, db_session, client, planka_router
+    ):
+        ws = _mk_workspace(db_session)
+        task = TaskCard(
+            workspace_id=ws.id,
+            title="Com assignee",
+            status=TaskCardStatus.em_andamento,
+            assignee="Mini-PC",
+        )
+        db_session.add(task)
+        db_session.commit()
+        db_session.refresh(task)
+
+        await client.mirror_task(task.id)
+
+        assert planka_router.assignee_calls
+        _path, body = planka_router.assignee_calls[-1]
+        assert body["email"] == "mini-pc@mem0.local"
+        assert body["name"] == "Mini-PC"
+
+    @pytest.mark.asyncio
+    async def test_mirror_task_status_clears_assignee_on_release(
+        self, db_session, client, planka_router
+    ):
+        ws = _mk_workspace(db_session)
+        task = TaskCard(
+            workspace_id=ws.id,
+            title="Release assignee",
+            status=TaskCardStatus.em_andamento,
+            assignee="joao@mem0.local",
+        )
+        db_session.add(task)
+        db_session.commit()
+        db_session.refresh(task)
+
+        await client.mirror_task(task.id)
+        task.assignee = None
+        task.status = TaskCardStatus.tasks
+        db_session.commit()
+        await client.mirror_task_status(task.id)
+
+        assert planka_router.assignee_calls
+        _path, body = planka_router.assignee_calls[-1]
+        assert body["email"] is None
+
+    @pytest.mark.asyncio
     async def test_mirror_task_status_moves_list(self, db_session, client, planka_router):
         ws = _mk_workspace(db_session)
         task = TaskCard(
@@ -293,6 +387,15 @@ class TestMirrorTask:
             (m, p) for m, p in planka_router.calls if m == "PATCH" and p.startswith("/api/cards/")
         ]
         assert patch_calls
+
+
+class TestNormalizeAssigneeEmail:
+    def test_email_passthrough(self):
+        assert normalize_assignee_email("Joao@Mem0.Local") == "joao@mem0.local"
+
+    def test_hostname_to_local(self):
+        assert normalize_assignee_email("Mini-PC") == "mini-pc@mem0.local"
+        assert normalize_assignee_email("e2e-smoke-agent") == "e2e-smoke-agent@mem0.local"
 
 
 class TestMirrorDocumentAndDelete:

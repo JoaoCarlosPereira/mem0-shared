@@ -1,4 +1,5 @@
 import {
+  applyLegacyRegistryAuthorization,
   hasRegistryAuthorization,
   isRegistryProxyPathAllowed,
   registryProxyTarget,
@@ -82,5 +83,37 @@ describe("registry proxy auth and target helpers", () => {
         "?namespace=all",
       ),
     ).toBe("http://agentregistry:8080/v0/skills/team%2Fskill/latest?namespace=all");
+  });
+
+  it("em UI legado injeta Bearer local quando Authorization está ausente", () => {
+    const prevAuth = process.env.AUTH_UI_REQUIRED;
+    const prevGoogle = process.env.GOOGLE_CLIENT_ID;
+    const prevPublicGoogle = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+    process.env.AUTH_UI_REQUIRED = "0";
+    delete process.env.GOOGLE_CLIENT_ID;
+    delete process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+
+    const out = applyLegacyRegistryAuthorization(new Headers());
+    expect(out.get("authorization")).toBe("Bearer local");
+
+    process.env.AUTH_UI_REQUIRED = prevAuth;
+    process.env.GOOGLE_CLIENT_ID = prevGoogle;
+    process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID = prevPublicGoogle;
+  });
+
+  it("com Google auth exigido não injeta legado e preserva JWT existente", () => {
+    const prevAuth = process.env.AUTH_UI_REQUIRED;
+    process.env.AUTH_UI_REQUIRED = "1";
+
+    expect(
+      applyLegacyRegistryAuthorization(new Headers()).has("authorization"),
+    ).toBe(false);
+
+    const withJwt = applyLegacyRegistryAuthorization(
+      new Headers({ authorization: "Bearer jwt-session" }),
+    );
+    expect(withJwt.get("authorization")).toBe("Bearer jwt-session");
+
+    process.env.AUTH_UI_REQUIRED = prevAuth;
   });
 });

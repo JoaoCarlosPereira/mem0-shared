@@ -10,6 +10,8 @@ um ponto único que resolve QUATRO métodos de credencial:
   JWT). Inválido/expirado ⇒ 401 em qualquer modo.
 - ``team``        — tokens de equipe existentes (``X-API-Key``/Bearer opaco).
   Comportamento 100% preservado nos modos ``off|warn|enforce``.
+- ``internal``    — ``PLANKA_INTERNAL_ACCESS_TOKEN`` / ``INTERNAL_ACCESS_TOKEN``
+  (bridge PLANKA → Spec ``/api/v1/specs/planka/card-moved``, ADR-007).
 - ``legacy``      — sem credencial, ou ``Bearer local`` (shim OAuth): passa em
   ``warn`` (default) e é rejeitado apenas em ``enforce`` — o fluxo por hostname
   continua intacto (Fase 1). Bearer presente mas inválido ⇒ 401 em qualquer modo.
@@ -71,7 +73,7 @@ _MCP_HOST_RE = re.compile(r"^/mcp/[^/]+/(?:sse|http)/([^/?]+)")
 class AuthContext:
     """Identidade resolvida para a requisição corrente."""
 
-    method: str  # "session" | "agent_token" | "team" | "legacy"
+    method: str  # "session" | "agent_token" | "team" | "admin_token" | "internal" | "legacy"
     user_id: Optional[str] = None
     email: Optional[str] = None
     machine_hostname: Optional[str] = None
@@ -241,6 +243,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if admin and hmac.compare_digest(header_token, admin):
                 AUTH_OK_TOTAL.labels(method="admin_token").inc()
                 ctx = AuthContext(method="admin_token")
+                return await self._call_with_context(request, call_next, ctx)
+
+            # 4c) PLANKA ↔ Spec bridge (ADR-007): Bearer INTERNAL / PLANKA_INTERNAL.
+            # Sem isto, POST /api/v1/specs/planka/card-moved recebe 401 em AUTH_MODE
+            # enforce/warn (Bearer presente mas não-team), e o DnD humano reverte
+            # com E_FORBIDDEN.
+            internal = (
+                os.getenv("PLANKA_INTERNAL_ACCESS_TOKEN")
+                or os.getenv("INTERNAL_ACCESS_TOKEN")
+                or ""
+            ).strip()
+            if internal and hmac.compare_digest(header_token, internal):
+                AUTH_OK_TOTAL.labels(method="internal").inc()
+                ctx = AuthContext(method="internal", team="planka-bridge")
                 return await self._call_with_context(request, call_next, ctx)
 
             # 5) Bearer local (shim OAuth) — legado documentado; só em warn/off.

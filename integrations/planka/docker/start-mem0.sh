@@ -16,9 +16,9 @@ node ./mem0/ensure-schema.js
 # Inject search_path for node-pg / sails-postgresql when not already present.
 if [[ "${DATABASE_URL}" != *"search_path"* ]]; then
   if [[ "${DATABASE_URL}" == *"?"* ]]; then
-    export DATABASE_URL="${DATABASE_URL}&options=-csearch_path%3D${MEM0_PG_SCHEMA}"
+    export DATABASE_URL="${DATABASE_URL}&options=-csearch_path%3D${MEM0_PG_SCHEMA}%2Cpublic"
   else
-    export DATABASE_URL="${DATABASE_URL}?options=-csearch_path%3D${MEM0_PG_SCHEMA}"
+    export DATABASE_URL="${DATABASE_URL}?options=-csearch_path%3D${MEM0_PG_SCHEMA}%2Cpublic"
   fi
 fi
 
