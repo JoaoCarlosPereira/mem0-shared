@@ -128,3 +128,42 @@ async def resync_all(
         },
     }
     return payload
+
+
+def inventory_divergences(report: dict[str, Any]) -> list[str]:
+    """Compara contagens Spec vs id_map; retorna mensagens se o gate deve falhar."""
+    totals = report.get("totals") or {}
+    issues: list[str] = []
+    spec_tasks = int(totals.get("spec_tasks") or 0)
+    mapped_tasks = int(totals.get("planka_tasks_mapped") or 0)
+    mirrored_tasks = int(totals.get("mirrored_tasks") or 0)
+    if mirrored_tasks < spec_tasks:
+        issues.append(
+            f"tasks espelhadas ({mirrored_tasks}) < Spec ({spec_tasks})"
+        )
+    if mapped_tasks < spec_tasks:
+        issues.append(
+            f"id_map tasks ({mapped_tasks}) < Spec ({spec_tasks})"
+        )
+    spec_docs = int(totals.get("spec_documents") or 0)
+    mapped_docs = int(totals.get("planka_documents_mapped") or 0)
+    mirrored_docs = int(totals.get("mirrored_documents") or 0)
+    if mirrored_docs < spec_docs:
+        issues.append(
+            f"docs espelhados ({mirrored_docs}) < Spec ({spec_docs})"
+        )
+    if mapped_docs < spec_docs:
+        issues.append(
+            f"id_map docs ({mapped_docs}) < Spec ({spec_docs})"
+        )
+    errors = report.get("errors") or []
+    if errors:
+        issues.append(f"resync errors: {len(errors)}")
+    return issues
+
+
+def assert_inventory_gate(report: dict[str, Any]) -> None:
+    """Levanta AssertionError se inventário Spec↔PLANKA divergir (go-live gate)."""
+    issues = inventory_divergences(report)
+    if issues:
+        raise AssertionError("inventário Spec↔PLANKA divergente: " + "; ".join(issues))

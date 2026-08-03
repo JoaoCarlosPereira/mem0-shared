@@ -879,8 +879,15 @@ export default function SpecsBoardPage() {
           className="mb-0"
           icon={RollerCoaster}
           title={board ? `Quadro — ${board.workspace.name}` : "Quadro"}
-          description="Clique para abrir. Arraste tasks entre colunas. Documentos ficam em SDD."
+          description="Modo Spec: trilho SDD (prd/techspec/tasks/adrs) + pipeline Kanban. Clique para abrir. Arraste tasks entre colunas — só via FastAPI."
         />
+        <p
+          className="text-xs text-muted-foreground"
+          data-testid="spec-mode-rail-hint"
+        >
+          Pipeline: Tasks → Em andamento → Revisão → Teste → Concluído. Documentos
+          ficam em SDD (não arrastáveis).
+        </p>
         <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"

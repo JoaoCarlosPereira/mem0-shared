@@ -54,6 +54,17 @@ jest.mock("@/hooks/useSpecsApi", () => ({
     releaseTask,
     createTask,
     fetchWorkspaceBoard,
+    listLabels: jest.fn().mockResolvedValue([]),
+    createLabel: jest.fn(),
+    attachLabel: jest.fn(),
+    detachLabel: jest.fn(),
+    listChecklists: jest.fn().mockResolvedValue([]),
+    createChecklist: jest.fn(),
+    createChecklistItem: jest.fn(),
+    patchChecklistItem: jest.fn(),
+    uploadAttachment: jest.fn(),
+    deleteAttachment: jest.fn(),
+    attachmentDownloadUrl: jest.fn((id: string) => `/att/${id}`),
   })),
 }));
 
