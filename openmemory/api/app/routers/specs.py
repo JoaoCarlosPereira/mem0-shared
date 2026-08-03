@@ -626,6 +626,10 @@ def write_workspace_document(
     # a gravação se o backend de busca estiver fora.
     index_document_now(db, ws, doc)
 
+    from app.utils.planka_hooks import mirror_document
+
+    mirror_document(db, workspace_id, document_type.value)
+
     return DocumentWriteResponse(
         document_id=result.document_id,
         version=result.version,
@@ -702,6 +706,16 @@ def create_task(
     db.add(task)
     db.commit()
     db.refresh(task)
+    from app.utils.planka_hooks import mirror_task
+
+    try:
+        mirror_task(db, task.id)
+    except HTTPException:
+        # Compensação: remove o card Spec se o espelho falhar (ADR-006).
+        db.query(TaskStatusHistory).filter(TaskStatusHistory.task_id == task.id).delete()
+        db.delete(task)
+        db.commit()
+        raise
     return _enrich_task(db, task)
 
 
@@ -792,6 +806,9 @@ def delete_task(
     task = _get_task_or_404(db, task_id)
     _assert_access(db, task.workspace_id)
 
+    from app.utils.planka_hooks import mirror_delete_task
+
+    mirror_delete_task(db, task_id)
     db.query(TaskStatusHistory).filter(TaskStatusHistory.task_id == task_id).delete()
     db.query(SpecComment).filter(
         SpecComment.target_type == CommentTargetType.task,

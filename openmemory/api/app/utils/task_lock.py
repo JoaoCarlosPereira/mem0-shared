@@ -157,6 +157,10 @@ def claim_task(db: Session, task_id: uuid.UUID, claimant: str) -> ClaimTaskResul
     db.commit()
 
     fresh = db.get(TaskCard, task_id)
+    # Spec → PLANKA sync (no-op unless PLANKA_MIRROR_SYNC enabled).
+    from app.utils.planka_hooks import mirror_task_status
+
+    mirror_task_status(db, task_id)
     return ClaimTaskResult(
         claimed=True,
         current_assignee=claimant,
@@ -248,6 +252,9 @@ def release_task(
     db.commit()
     fresh = db.get(TaskCard, task_id)
 
+    from app.utils.planka_hooks import mirror_task_status
+
+    mirror_task_status(db, task_id)
     return ClaimTaskResult(
         claimed=applied,
         current_assignee=None,
@@ -336,6 +343,9 @@ def update_task_status(
     db.commit()
 
     fresh = db.get(TaskCard, task_id)
+    from app.utils.planka_hooks import mirror_task_status
+
+    mirror_task_status(db, task_id)
     return UpdateTaskStatusResult(
         updated=True,
         conflict=False,
@@ -399,6 +409,9 @@ def update_task_metadata(
 
     db.commit()
     fresh = db.get(TaskCard, task_id)
+    from app.utils.planka_hooks import mirror_task
+
+    mirror_task(db, task_id)
     return UpdateTaskMetadataResult(
         updated=True,
         conflict=False,

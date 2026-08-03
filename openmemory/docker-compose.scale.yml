@@ -85,6 +85,8 @@ x-api-common: &api-common
     # Kanban PLANKA sidecar (schema Postgres `planka`; sem Qdrant).
     PLANKA_BASE_URL: ${PLANKA_BASE_URL:-http://planka:1337}
     PLANKA_INTERNAL_URL: ${PLANKA_INTERNAL_URL:-http://planka:1337}
+    PLANKA_MIRROR_SYNC: ${PLANKA_MIRROR_SYNC:-1}
+    PLANKA_INTERNAL_ACCESS_TOKEN: ${PLANKA_INTERNAL_ACCESS_TOKEN:-${INTERNAL_ACCESS_TOKEN:-}}
     # Object store para backup/cold tier (task_02/07 / ADR-003).
     S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
     S3_BUCKET: ${S3_BUCKET:-mem0-backups}
