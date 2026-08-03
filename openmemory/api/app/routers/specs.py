@@ -38,7 +38,11 @@ from app.utils.creator_identity import (
 from app.utils.permissions import get_accessible_spec_workspace_ids
 from app.utils.projects import upsert_project
 from app.utils.spec_auth import resolve_spec_actor, resolve_spec_subject
-from app.utils.spec_search import index_completed_workspace, search_specs
+from app.utils.spec_search import (
+    index_completed_workspace,
+    index_document_now,
+    search_specs,
+)
 from app.utils.spec_versioning import write_document_version
 from app.utils.task_lock import (
     TaskStatusPolicyError,
@@ -503,13 +507,25 @@ def _filter_accessible(
 
 @router.get("/workspaces", response_model=list[WorkspaceSummaryResponse])
 def list_all_workspaces(
+    slug: Optional[str] = Query(
+        None, description="Filtra por slug, em qualquer projeto"
+    ),
     db: Session = Depends(get_db),
 ) -> list[WorkspaceSummaryResponse]:
     """Índice global: todos os workspaces acessíveis (de todos os projetos).
 
     Alimenta a tela inicial de Specs (lista os quadros agrupados por projeto).
+
+    Com ``slug``, resolve a descoberta entre projetos: o ``project_id`` do cliente
+    segue o nome do diretório de trabalho, então uma feature que toca quatro
+    repositórios tem o workspace sob um único ``project_id`` e, nos outros três, a
+    busca por projeto devolve vazio — silenciosamente, levando o agente a concluir
+    que não há spec (ou pior, a criar um segundo workspace e fragmentar a spec).
     """
-    workspaces = db.query(SpecWorkspace).order_by(SpecWorkspace.project_id).all()
+    query = db.query(SpecWorkspace)
+    if slug:
+        query = query.filter(SpecWorkspace.slug == slug)
+    workspaces = query.order_by(SpecWorkspace.project_id).all()
     workspaces = _filter_accessible(db, workspaces)
     return _build_summaries(db, workspaces)
 
@@ -580,7 +596,7 @@ def write_workspace_document(
     db: Session = Depends(get_db),
 ) -> DocumentWriteResponse:
     """Grava uma nova versão do documento. 409 em conflito de versão (ADR-005)."""
-    _get_workspace_or_404(db, workspace_id)
+    ws = _get_workspace_or_404(db, workspace_id)
     _assert_access(db, workspace_id)
 
     doc = get_or_create_document(db, workspace_id, document_type)
@@ -604,6 +620,11 @@ def write_workspace_document(
                 "current_content": result.current_content,
             },
         )
+
+    # Indexa a versão recém-gravada mesmo com o workspace em andamento, para que a
+    # spec seja encontrável enquanto está sendo escrita. Best-effort: não derruba
+    # a gravação se o backend de busca estiver fora.
+    index_document_now(db, ws, doc)
 
     return DocumentWriteResponse(
         document_id=result.document_id,
@@ -682,6 +703,52 @@ def create_task(
     db.commit()
     db.refresh(task)
     return _enrich_task(db, task)
+
+
+@router.get("/tasks/{task_id}", response_model=TaskResponse)
+def get_task(
+    task_id: UUID,
+    db: Session = Depends(get_db),
+) -> TaskResponse:
+    """Card completo, incluindo ``description`` e ``version``.
+
+    O corpo enriquecido da tarefa (requisitos, subtarefas, arquivos relevantes,
+    entregáveis, casos de teste, critérios de aceite) vive em ``description``. Sem
+    esta leitura o card é gravável e movível, mas não legível: quem não chamou o
+    ``create_task`` não tem acesso a nada disso.
+    """
+    task = _get_task_or_404(db, task_id)
+    _assert_access(db, task.workspace_id)
+    return _enrich_task(db, task)
+
+
+@router.get("/workspaces/{workspace_id}/tasks", response_model=list[TaskResponse])
+def list_workspace_tasks(
+    workspace_id: UUID,
+    status: Optional[TaskCardStatus] = Query(
+        None, description="Filtra por coluna do Kanban"
+    ),
+    db: Session = Depends(get_db),
+) -> list[TaskResponse]:
+    """Cards do workspace, opcionalmente filtrados por coluna.
+
+    Caminho programático do workspace até um card. Sem isto o ``task_id`` só chega
+    ao agente se um humano copiar da UI web, e ``claim_task`` exige um.
+
+    ``version`` vem em cada item de propósito: ``update_task_status`` exige
+    ``expected_version``, e sem ele aqui todo avanço de coluna custaria uma leitura
+    extra.
+    """
+    _get_workspace_or_404(db, workspace_id)
+    _assert_access(db, workspace_id)
+
+    query = db.query(TaskCard).filter(TaskCard.workspace_id == workspace_id)
+    if status is not None:
+        query = query.filter(TaskCard.status == status)
+    tasks = query.order_by(TaskCard.created_at.asc()).all()
+
+    identities = resolve_actor_identities_with_db(db, [t.assignee for t in tasks])
+    return [_task_response(t, identities) for t in tasks]
 
 
 @router.patch("/tasks/{task_id}", response_model=TaskResponse)
@@ -899,6 +966,32 @@ def create_comment(
     return comment
 
 
+@router.get("/comments/{target_type}/{target_id}", response_model=list[CommentResponse])
+def list_comments(
+    target_type: CommentTargetType,
+    target_id: UUID,
+    db: Session = Depends(get_db),
+) -> list[CommentResponse]:
+    """Comentários de um workspace/documento/task, em ordem cronológica.
+
+    Contraparte de leitura do ``create_comment``: sem ela, as notas de revisão e a
+    evidência de teste que o fluxo manda registrar no card ficam gravadas e nunca
+    podem ser recuperadas, o que inviabiliza o ciclo revisão → correção pelo quadro.
+    """
+    workspace_id = _resolve_comment_target_workspace(db, target_type, target_id)
+    _assert_access(db, workspace_id)
+
+    return (
+        db.query(SpecComment)
+        .filter(
+            SpecComment.target_type == target_type,
+            SpecComment.target_id == target_id,
+        )
+        .order_by(SpecComment.created_at.asc())
+        .all()
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Busca semântica
 # --------------------------------------------------------------------------- #
@@ -907,9 +1000,17 @@ def search_specs_endpoint(
     q: str = Query(..., description="Consulta semântica"),
     project_id: Optional[str] = Query(None, description="Filtro opcional por projeto"),
     group: Optional[str] = Query(None, description="Grupo do solicitante (boost)"),
+    status: Optional[list[str]] = Query(
+        None,
+        description="Status de workspace a incluir; omitido = só concluido, '*' = todos",
+    ),
     db: Session = Depends(get_db),
 ) -> list[SpecSearchResult]:
-    """Busca semântica em specs concluídas, ordenada por relevância (ADR-006)."""
+    """Busca semântica em specs, ordenada por relevância (ADR-006).
+
+    Por padrão só specs concluídas, como antes; ``status`` permite alcançar
+    trabalho em andamento.
+    """
     subject_type, subject_id = resolve_spec_subject()
     accessible = get_accessible_spec_workspace_ids(db, subject_type, subject_id)
     return search_specs(
@@ -917,4 +1018,5 @@ def search_specs_endpoint(
         project_id=project_id,
         requester_group=group,
         accessible_workspace_ids=accessible,
+        statuses=status,
     )

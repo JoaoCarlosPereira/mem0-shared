@@ -21,7 +21,11 @@ from app.models import (
     SpecWorkspaceStatus,
 )
 from app.utils import spec_search
-from app.utils.spec_search import index_completed_workspace, search_specs
+from app.utils.spec_search import (
+    index_completed_workspace,
+    index_document_now,
+    search_specs,
+)
 
 
 class FakeEmbedder:
@@ -155,6 +159,123 @@ class TestIndexTrigger:
             assert index_completed_workspace(db, ws, embedder=FakeEmbedder(), vector_store=vs) == 0
         finally:
             db.close()
+
+    def test_only_completed_false_indexa_em_andamento(self, factory):
+        """Spec em andamento precisa entrar no indice; e quando descobri-la importa."""
+        db = factory()
+        try:
+            ws = _mk_ws(db, status=SpecWorkspaceStatus.ativo)
+            _add_doc(db, ws, DocumentType.prd, "# PRD")
+            vs = FakeVectorStore()
+            count = index_completed_workspace(
+                db, ws, embedder=FakeEmbedder(), vector_store=vs, only_completed=False
+            )
+            assert count == 1
+            assert vs.inserted[0]["payloads"][0]["workspace_status"] == "ativo"
+        finally:
+            db.close()
+
+
+class TestIndexDocumentNow:
+    def test_indexa_documento_de_workspace_em_andamento(self, factory):
+        db = factory()
+        try:
+            ws = _mk_ws(db, status=SpecWorkspaceStatus.ativo)
+            doc = _add_doc(db, ws, DocumentType.prd, "# PRD")
+            vs = FakeVectorStore()
+
+            assert index_document_now(
+                db, ws, doc, embedder=FakeEmbedder(), vector_store=vs
+            )
+            payload = vs.inserted[0]["payloads"][0]
+            assert payload["workspace_status"] == "ativo"
+            assert payload["document_type"] == "prd"
+        finally:
+            db.close()
+
+    def test_documento_vazio_nao_indexa(self, factory):
+        db = factory()
+        try:
+            ws = _mk_ws(db)
+            doc = SpecDocument(
+                workspace_id=ws.id, document_type=DocumentType.prd, current_content=None
+            )
+            db.add(doc)
+            db.commit()
+            vs = FakeVectorStore()
+            assert not index_document_now(
+                db, ws, doc, embedder=FakeEmbedder(), vector_store=vs
+            )
+            assert vs.inserted == []
+        finally:
+            db.close()
+
+    def test_falha_de_indexacao_nao_propaga(self, factory):
+        """O dado ja esta no Postgres; o indice e derivado e nao pode derrubar a escrita."""
+        db = factory()
+        try:
+            ws = _mk_ws(db)
+            doc = _add_doc(db, ws, DocumentType.prd, "# PRD")
+
+            class Explode:
+                def insert(self, *a, **k):
+                    raise RuntimeError("qdrant fora do ar")
+
+            assert not index_document_now(
+                db, ws, doc, embedder=FakeEmbedder(), vector_store=Explode()
+            )
+        finally:
+            db.close()
+
+
+class TestSearchStatuses:
+    def _hits(self):
+        return [
+            FakeHit("c", 0.9, {"data": "concluida", "workspace_status": "concluido"}),
+            FakeHit("a", 0.8, {"data": "em andamento", "workspace_status": "ativo"}),
+            FakeHit("legado", 0.7, {"data": "sem o campo"}),
+        ]
+
+    def test_padrao_so_concluido(self):
+        """Comportamento anterior preservado para quem nao pede nada."""
+        results = search_specs(
+            "x", embedder=FakeEmbedder(), vector_store=FakeVectorStore(self._hits())
+        )
+        assert {r["id"] for r in results} == {"c", "legado"}
+
+    def test_ponto_legado_sem_campo_conta_como_concluido(self):
+        """Antes, indexar so acontecia em concluido - logo, legado e concluido."""
+        results = search_specs(
+            "x", embedder=FakeEmbedder(), vector_store=FakeVectorStore(self._hits())
+        )
+        assert "legado" in {r["id"] for r in results}
+
+    def test_status_explicito_alcanca_trabalho_em_andamento(self):
+        results = search_specs(
+            "x",
+            statuses=["ativo"],
+            embedder=FakeEmbedder(),
+            vector_store=FakeVectorStore(self._hits()),
+        )
+        assert {r["id"] for r in results} == {"a"}
+
+    def test_asterisco_traz_todos(self):
+        results = search_specs(
+            "x",
+            statuses=["*"],
+            embedder=FakeEmbedder(),
+            vector_store=FakeVectorStore(self._hits()),
+        )
+        assert {r["id"] for r in results} == {"c", "a", "legado"}
+
+    def test_lista_vazia_equivale_a_todos(self):
+        results = search_specs(
+            "x",
+            statuses=[],
+            embedder=FakeEmbedder(),
+            vector_store=FakeVectorStore(self._hits()),
+        )
+        assert len(results) == 3
 
 
 class TestSearch:
