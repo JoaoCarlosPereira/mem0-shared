@@ -20,7 +20,7 @@ from app.models import (
     SpecWorkspace,
     SpecWorkspaceStatus,
 )
-from app.utils import spec_search
+from app.utils import project_groups, spec_search
 from app.utils.spec_search import (
     index_completed_workspace,
     index_document_now,
@@ -226,6 +226,128 @@ class TestIndexDocumentNow:
             )
         finally:
             db.close()
+
+
+class TestSearchFamiliaDeProjeto:
+    """Busca de specs com MEM0_PROJECT_GROUPS.
+
+    Uma feature atravessa repositorios, mas o project_id segue o diretorio de
+    trabalho. Antes, buscar de sysmovs nao achava a spec gravada sob
+    sysmos1-modular: o filtro do Qdrant e o pos-filtro exigiam nome EXATO, e o
+    boost de familia de rank_search_results rodava depois do descarte.
+    """
+
+    GRUPOS = "sysmo-s1=sysmovs,sysmos1-modular,db-sysmo-s1"
+
+    @pytest.fixture(autouse=True)
+    def _limpa(self):
+        project_groups.reset_project_group_cache()
+        yield
+        project_groups.reset_project_group_cache()
+
+    def _hits(self):
+        return [
+            FakeHit("irmao", 0.9, {"data": "a", "project": "sysmos1-modular"}),
+            FakeHit("proprio", 0.8, {"data": "b", "project": "sysmovs"}),
+            FakeHit("alheio", 0.7, {"data": "c", "project": "ms-dashboard-s1"}),
+        ]
+
+    def test_irmao_da_familia_aparece(self, monkeypatch):
+        monkeypatch.setenv("MEM0_PROJECT_GROUPS", self.GRUPOS)
+        project_groups.reset_project_group_cache()
+
+        r = search_specs(
+            "x",
+            project_id="sysmovs",
+            embedder=FakeEmbedder(),
+            vector_store=FakeVectorStore(self._hits()),
+        )
+
+        assert {h["id"] for h in r} == {"irmao", "proprio"}
+
+    def test_projeto_de_fora_da_familia_continua_excluido(self, monkeypatch):
+        monkeypatch.setenv("MEM0_PROJECT_GROUPS", self.GRUPOS)
+        project_groups.reset_project_group_cache()
+
+        r = search_specs(
+            "x",
+            project_id="sysmovs",
+            embedder=FakeEmbedder(),
+            vector_store=FakeVectorStore(self._hits()),
+        )
+
+        assert "alheio" not in {h["id"] for h in r}
+
+    def test_filtro_do_qdrant_pede_a_familia_inteira(self, monkeypatch):
+        """O irmao precisa VOLTAR da busca; filtrar so no pos-filtro nao basta."""
+        monkeypatch.setenv("MEM0_PROJECT_GROUPS", self.GRUPOS)
+        project_groups.reset_project_group_cache()
+        vs = FakeVectorStore(self._hits())
+        capturado = {}
+
+        def _search(query, vectors, top_k=5, filters=None):
+            capturado["filters"] = filters
+            return vs._hits
+
+        vs.search = _search
+        search_specs("x", project_id="sysmovs", embedder=FakeEmbedder(), vector_store=vs)
+
+        assert set(capturado["filters"]["project_id"]["in"]) == {
+            "sysmo-s1",
+            "sysmovs",
+            "sysmos1-modular",
+            "db-sysmo-s1",
+        }
+
+    def test_sem_familia_configurada_mantem_nome_exato(self, monkeypatch):
+        """Comportamento anterior preservado para quem nao usa grupos."""
+        monkeypatch.delenv("MEM0_PROJECT_GROUPS", raising=False)
+        project_groups.reset_project_group_cache()
+        vs = FakeVectorStore(self._hits())
+        capturado = {}
+
+        def _search(query, vectors, top_k=5, filters=None):
+            capturado["filters"] = filters
+            return vs._hits
+
+        vs.search = _search
+        r = search_specs("x", project_id="sysmovs", embedder=FakeEmbedder(), vector_store=vs)
+
+        assert capturado["filters"] == {"project_id": "sysmovs"}
+        assert {h["id"] for h in r} == {"proprio"}
+
+    def test_projeto_sem_grupo_nao_vira_familia(self, monkeypatch):
+        monkeypatch.setenv("MEM0_PROJECT_GROUPS", self.GRUPOS)
+        project_groups.reset_project_group_cache()
+        vs = FakeVectorStore(self._hits())
+        capturado = {}
+
+        def _search(query, vectors, top_k=5, filters=None):
+            capturado["filters"] = filters
+            return vs._hits
+
+        vs.search = _search
+        search_specs(
+            "x", project_id="ms-dashboard-s1", embedder=FakeEmbedder(), vector_store=vs
+        )
+
+        assert capturado["filters"] == {"project_id": "ms-dashboard-s1"}
+
+    def test_sem_project_id_nao_filtra(self, monkeypatch):
+        monkeypatch.setenv("MEM0_PROJECT_GROUPS", self.GRUPOS)
+        project_groups.reset_project_group_cache()
+        vs = FakeVectorStore(self._hits())
+        capturado = {}
+
+        def _search(query, vectors, top_k=5, filters=None):
+            capturado["filters"] = filters
+            return vs._hits
+
+        vs.search = _search
+        r = search_specs("x", embedder=FakeEmbedder(), vector_store=vs)
+
+        assert capturado["filters"] is None
+        assert len(r) == 3
 
 
 class TestSearchStatuses:
