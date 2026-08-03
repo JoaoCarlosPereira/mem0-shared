@@ -20,6 +20,7 @@ from .ops_metrics import router as ops_metrics_router
 from .provision import router as provision_router
 from .specs import router as specs_router
 from .stats import router as stats_router
+from .store import router as store_router
 
 __all__ = [
     "admin_router",
@@ -44,4 +45,5 @@ __all__ = [
     "groups_router",
     "user_analytics_router",
     "specs_router",
+    "store_router",
 ]

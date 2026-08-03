@@ -39,6 +39,7 @@ from app.routers import (
     provision_router,
     specs_router,
     stats_router,
+    store_router,
 )
 from app.workers.spec_task_timeout_worker import spec_task_timeout_worker
 from app.workers.write_worker import embedded_worker_enabled, write_worker
@@ -176,6 +177,7 @@ app.include_router(discovery_router)
 app.include_router(mcp_oauth_compat_router)
 app.include_router(compat_v3_router)
 app.include_router(provision_router)
+app.include_router(store_router)
 app.include_router(health_router)
 app.include_router(metrics_router)
 app.include_router(ops_metrics_router)
