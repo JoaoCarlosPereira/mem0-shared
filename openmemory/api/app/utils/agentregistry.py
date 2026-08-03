@@ -1,0 +1,266 @@
+"""HTTP client for the internal AgentRegistry catalog.
+
+The OpenMemory API uses this as the single integration seam for the store UI,
+install recipes and MCP catalog tools. It never talks to Qdrant and only calls
+the AgentRegistry REST API.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from typing import Any, Optional
+from urllib.parse import quote
+
+import httpx
+
+DEFAULT_REGISTRY_BASE_URL = "http://agentregistry:8080"
+DEFAULT_REGISTRY_TIMEOUT_SECONDS = 5.0
+DEFAULT_SEARCH_LIMIT = 20
+MAX_SEARCH_LIMIT = 100
+
+KIND_TO_REGISTRY_COLLECTION: dict[str, str] = {
+    "agent": "agents",
+    "mcpserver": "mcpservers",
+    "plugin": "plugins",
+    "prompt": "prompts",
+    "skill": "skills",
+}
+
+REGISTRY_KIND_TO_CATALOG_KIND: dict[str, str] = {
+    "Agent": "agent",
+    "MCPServer": "mcpserver",
+    "Plugin": "plugin",
+    "Prompt": "prompt",
+    "Skill": "skill",
+}
+
+
+class AgentRegistryError(Exception):
+    def __init__(self, status_code: int, detail: str):
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(detail)
+
+
+class AgentRegistryValidationError(AgentRegistryError):
+    def __init__(self, detail: str):
+        super().__init__(400, detail)
+
+
+class AgentRegistryResourceNotFound(AgentRegistryError):
+    def __init__(self, detail: str = "recurso não encontrado no AgentRegistry"):
+        super().__init__(404, detail)
+
+
+class AgentRegistryHttpClient:
+    """Small async client for the internal AgentRegistry service."""
+
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        timeout_seconds: float = DEFAULT_REGISTRY_TIMEOUT_SECONDS,
+    ):
+        raw_base_url = (
+            base_url
+            or os.getenv("AGENT_REGISTRY_BASE_URL")
+            or os.getenv("AGENT_REGISTRY_URL")
+            or os.getenv("AGENT_REGISTRY_INTERNAL_URL")
+            or DEFAULT_REGISTRY_BASE_URL
+        )
+        self.base_url = raw_base_url.rstrip("/")
+        self.timeout_seconds = timeout_seconds
+
+    async def list_resources(
+        self,
+        *,
+        kind: str,
+        namespace: str = "default",
+        limit: int = DEFAULT_SEARCH_LIMIT,
+        cursor: Optional[str] = None,
+        auth_headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
+        safe_kind = validate_catalog_kind(kind)
+        safe_limit = clamp_limit(limit)
+        collection = KIND_TO_REGISTRY_COLLECTION[safe_kind]
+        params: dict[str, Any] = {"namespace": namespace or "default", "limit": safe_limit}
+        if cursor:
+            params["cursor"] = cursor
+        response = await self._request(
+            "GET",
+            f"/v0/{collection}",
+            params=params,
+            auth_headers=auth_headers,
+        )
+        return response
+
+    async def get_resource(
+        self,
+        *,
+        kind: str,
+        name: str,
+        tag: Optional[str] = None,
+        namespace: str = "default",
+        auth_headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
+        safe_kind = validate_catalog_kind(kind)
+        safe_name = validate_path_segment(name, "name")
+        safe_tag = validate_path_segment(tag, "tag") if tag else None
+        collection = KIND_TO_REGISTRY_COLLECTION[safe_kind]
+        path = f"/v0/{collection}/{quote(safe_name, safe='')}"
+        if safe_tag:
+            path = f"{path}/{quote(safe_tag, safe='')}"
+        return await self._request(
+            "GET",
+            path,
+            params={"namespace": namespace or "default"},
+            auth_headers=auth_headers,
+        )
+
+    async def apply_resource(
+        self,
+        *,
+        resource: dict[str, Any],
+        dry_run: bool = False,
+        auth_headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
+        if not isinstance(resource, dict) or not resource:
+            raise AgentRegistryValidationError("resource deve ser um objeto v1alpha1")
+        body = json.dumps(resource, ensure_ascii=False).encode("utf-8")
+        headers = {"Content-Type": "application/yaml"}
+        return await self._request(
+            "POST",
+            "/v0/apply",
+            params={"dryRun": str(bool(dry_run)).lower()},
+            content=body,
+            headers=headers,
+            auth_headers=auth_headers,
+        )
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+        content: Optional[bytes] = None,
+        headers: Optional[dict[str, str]] = None,
+        auth_headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
+        request_headers = self._headers(headers=headers, auth_headers=auth_headers)
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            try:
+                response = await client.request(
+                    method,
+                    f"{self.base_url}{path}",
+                    params=params,
+                    content=content,
+                    headers=request_headers,
+                )
+            except httpx.RequestError as exc:
+                raise AgentRegistryError(502, "AgentRegistry indisponível") from exc
+        return _json_response(response)
+
+    def _headers(
+        self,
+        *,
+        headers: Optional[dict[str, str]] = None,
+        auth_headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, str]:
+        merged = {"Accept": "application/json"}
+        if headers:
+            merged.update(headers)
+        if auth_headers:
+            merged.update(auth_headers)
+        elif token := _env_auth_token():
+            merged["Authorization"] = f"Bearer {token}"
+        return merged
+
+
+def validate_catalog_kind(kind: str) -> str:
+    candidate = (kind or "").strip().lower()
+    if candidate not in KIND_TO_REGISTRY_COLLECTION:
+        raise AgentRegistryValidationError("kind inválido")
+    return candidate
+
+
+def validate_path_segment(value: Optional[str], field_name: str) -> str:
+    candidate = (value or "").strip()
+    if not candidate:
+        raise AgentRegistryValidationError(f"{field_name} obrigatório")
+    if "\x00" in candidate or "\\" in candidate:
+        raise AgentRegistryValidationError(f"{field_name} contém caracteres inseguros")
+    if any(part in ("", ".", "..") for part in candidate.split("/")):
+        raise AgentRegistryValidationError(f"{field_name} contém path traversal")
+    return candidate
+
+
+def clamp_limit(limit: int) -> int:
+    try:
+        parsed = int(limit)
+    except (TypeError, ValueError):
+        parsed = DEFAULT_SEARCH_LIMIT
+    return max(1, min(parsed, MAX_SEARCH_LIMIT))
+
+
+def summarize_resource(resource: dict[str, Any]) -> dict[str, Any]:
+    metadata = resource.get("metadata") if isinstance(resource.get("metadata"), dict) else {}
+    spec = resource.get("spec") if isinstance(resource.get("spec"), dict) else {}
+    kind = REGISTRY_KIND_TO_CATALOG_KIND.get(str(resource.get("kind") or ""), str(resource.get("kind") or "").lower())
+    return {
+        "kind": kind,
+        "registry_kind": resource.get("kind"),
+        "namespace": metadata.get("namespace") or "default",
+        "name": metadata.get("name"),
+        "tag": metadata.get("tag"),
+        "title": spec.get("title") or metadata.get("name"),
+        "description": spec.get("description"),
+        "labels": metadata.get("labels") or {},
+        "annotations": metadata.get("annotations") or {},
+    }
+
+
+def resource_matches_query(resource: dict[str, Any], query: str) -> bool:
+    needle = (query or "").strip().lower()
+    if not needle:
+        return True
+    summary = summarize_resource(resource)
+    haystack = " ".join(
+        str(value)
+        for value in (
+            summary.get("kind"),
+            summary.get("registry_kind"),
+            summary.get("name"),
+            summary.get("tag"),
+            summary.get("title"),
+            summary.get("description"),
+            summary.get("labels"),
+            summary.get("annotations"),
+        )
+        if value
+    ).lower()
+    return needle in haystack
+
+
+def _json_response(response: httpx.Response) -> dict[str, Any]:
+    if response.status_code == 404:
+        raise AgentRegistryResourceNotFound()
+    if response.status_code in (401, 403):
+        raise AgentRegistryError(response.status_code, "AgentRegistry negou acesso ao recurso")
+    if response.status_code >= 400:
+        raise AgentRegistryError(502, f"AgentRegistry retornou HTTP {response.status_code}")
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise AgentRegistryError(502, "AgentRegistry retornou JSON inválido") from exc
+    if not isinstance(data, dict):
+        raise AgentRegistryError(502, "AgentRegistry retornou payload inválido")
+    return data
+
+
+def _env_auth_token() -> Optional[str]:
+    for name in ("AGENT_REGISTRY_AUTH_TOKEN", "AGENT_REGISTRY_BEARER_TOKEN"):
+        token = (os.getenv(name) or "").strip()
+        if token:
+            return token
+    return None

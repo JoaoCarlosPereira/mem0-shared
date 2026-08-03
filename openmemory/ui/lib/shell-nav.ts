@@ -5,6 +5,7 @@ import {
   Layers,
   LayoutGrid,
   ShieldCheck,
+  Store,
 } from "lucide-react";
 
 export interface ShellNavItem {
@@ -34,6 +35,12 @@ export const MAIN_NAV_ITEMS: ShellNavItem[] = [
     match: (pathname) => pathname.startsWith("/apps"),
   },
   {
+    label: "Store",
+    href: "/store",
+    icon: Store,
+    match: (pathname) => pathname.startsWith("/store"),
+  },
+  {
     label: "Documentações",
     href: "/docs",
     icon: BookOpen,
@@ -58,6 +65,7 @@ export function getPageTitle(pathname: string): string {
   if (pathname === "/") return "Painel";
   if (pathname.startsWith("/memories") || pathname.startsWith("/memory/")) return "Memórias";
   if (pathname.startsWith("/apps")) return "Projetos";
+  if (pathname.startsWith("/store")) return "Store";
   if (pathname.startsWith("/docs")) return "Documentações";
   return "Mem0-Shared";
 }

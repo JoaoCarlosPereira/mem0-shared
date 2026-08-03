@@ -25,7 +25,7 @@ describe("AppSidebar", () => {
     expect(adminLink).toHaveAttribute("href", "/admin");
   });
 
-  it("mantém os links de navegação (Painel, Memórias, Projetos, Documentações)", () => {
+  it("mantém os links de navegação (Painel, Memórias, Projetos, Store, Documentações)", () => {
     render(
       <Provider store={store}>
         <AppSidebar open isMobile={false} onClose={jest.fn()} onNavigate={jest.fn()} />
@@ -34,6 +34,10 @@ describe("AppSidebar", () => {
     expect(screen.getByText("Painel")).toBeInTheDocument();
     expect(screen.getByText("Memórias")).toBeInTheDocument();
     expect(screen.getByText("Projetos")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /store/i })).toHaveAttribute(
+      "href",
+      "/store",
+    );
     const docs = screen.getByText("Documentações").closest("a");
     expect(docs).toHaveAttribute("href", "/docs");
     expect(screen.queryByText("Configurações")).not.toBeInTheDocument();

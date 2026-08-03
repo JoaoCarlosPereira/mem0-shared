@@ -1,0 +1,650 @@
+"use client";
+
+import type { FormEvent, ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Bot,
+  Download,
+  FileText,
+  PackagePlus,
+  Plug,
+  Puzzle,
+  RefreshCcw,
+  Search,
+  Send,
+  Store,
+  TerminalSquare,
+} from "lucide-react";
+
+import { PageHeader } from "@/components/shared/PageHeader";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { useApiSessionReady } from "@/hooks/useApiSessionReady";
+import { useRegistryCatalog } from "@/hooks/useRegistryCatalog";
+import {
+  buildPublishManifest,
+  REGISTRY_KIND_LABELS,
+  REGISTRY_RESOURCE_KINDS,
+  registryDependencySummary,
+  registryResourceDescription,
+  registryResourceNamespace,
+  registryResourceSearchText,
+  registryResourceTag,
+  registryResourceTitle,
+  registrySourceSummary,
+  validatePublishDraft,
+  type PublishDraft,
+  type RegistryResource,
+  type RegistryResourceKind,
+} from "@/lib/registry-client";
+import { cn } from "@/lib/utils";
+
+const KIND_ICONS: Record<RegistryResourceKind, typeof Store> = {
+  skills: TerminalSquare,
+  mcpservers: Plug,
+  prompts: FileText,
+  agents: Bot,
+  plugins: Puzzle,
+};
+
+const DEFAULT_DRAFT: PublishDraft = {
+  kind: "skills",
+  name: "",
+  tag: "latest",
+  title: "",
+  description: "",
+  sourceRepository: "",
+  promptContent: "",
+};
+
+type KindFilter = RegistryResourceKind | "all";
+
+export default function StorePage() {
+  const apiSessionReady = useApiSessionReady();
+  const {
+    resources,
+    selectedResource,
+    applyResponse,
+    loading,
+    detailLoading,
+    publishing,
+    error,
+    publishError,
+    loadCatalog,
+    loadDetail,
+    publishManifest,
+  } = useRegistryCatalog();
+
+  const [query, setQuery] = useState("");
+  const [kindFilter, setKindFilter] = useState<KindFilter>("all");
+  const [installTarget, setInstallTarget] = useState("cursor");
+  const [draft, setDraft] = useState<PublishDraft>(DEFAULT_DRAFT);
+  const [manifest, setManifest] = useState(buildPublishManifest(DEFAULT_DRAFT));
+  const [formErrors, setFormErrors] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!apiSessionReady) return;
+    void loadCatalog();
+  }, [apiSessionReady, loadCatalog]);
+
+  useEffect(() => {
+    setManifest(buildPublishManifest(draft));
+  }, [draft]);
+
+  const filteredResources = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return resources.filter((resource) => {
+      const matchesKind = kindFilter === "all" || resource.registryKind === kindFilter;
+      if (!matchesKind) return false;
+      if (!normalizedQuery) return true;
+      return registryResourceSearchText(resource).includes(normalizedQuery);
+    });
+  }, [kindFilter, query, resources]);
+
+  const countsByKind = useMemo(() => {
+    return REGISTRY_RESOURCE_KINDS.reduce<Record<RegistryResourceKind, number>>(
+      (acc, kind) => {
+        acc[kind] = resources.filter((resource) => resource.registryKind === kind).length;
+        return acc;
+      },
+      {
+        skills: 0,
+        mcpservers: 0,
+        prompts: 0,
+        agents: 0,
+        plugins: 0,
+      },
+    );
+  }, [resources]);
+
+  const handleSelectResource = (resource: RegistryResource) => {
+    void loadDetail(
+      resource.registryKind,
+      resource.metadata.name,
+      registryResourceTag(resource),
+      resource.metadata.namespace,
+    );
+  };
+
+  const handlePublish = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const errors = validatePublishDraft(draft);
+    setFormErrors(errors);
+    if (errors.length > 0) return;
+    await publishManifest(manifest);
+  };
+
+  return (
+    <div className="space-y-6 text-slate-200">
+      <PageHeader
+        icon={Store}
+        title="Store"
+        description="Catálogo interno de skills, MCPs, prompts, agents e plugins"
+      />
+
+      {!apiSessionReady ? (
+        <div role="alert" className="rounded-2xl border border-amber-500/30 bg-amber-950/30 p-4 text-sm text-amber-200">
+          A Store usa a mesma sessão autenticada do OpenMemory. Aguarde a sessão
+          ser validada para carregar o catálogo.
+        </div>
+      ) : null}
+
+      {error ? (
+        <div role="alert" className="rounded-2xl border border-red-500/30 bg-red-950/30 p-4 text-sm text-red-200">
+          {error}
+        </div>
+      ) : null}
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_430px]">
+        <section className="space-y-4">
+          <Card>
+            <CardContent className="space-y-4 p-4 md:p-5">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="relative min-w-0 flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                  <Input
+                    aria-label="Buscar na Store"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Buscar por nome, descrição, label ou tipo..."
+                    className="border-slate-700 bg-slate-950/80 pl-9 text-slate-100"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={!apiSessionReady || loading}
+                  onClick={() => void loadCatalog()}
+                  className="border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800 hover:text-white"
+                >
+                  <RefreshCcw className={cn("mr-2 h-4 w-4", loading && "animate-spin")} />
+                  Atualizar
+                </Button>
+              </div>
+
+              <div className="flex flex-wrap gap-2" aria-label="Filtros por tipo">
+                <KindFilterButton
+                  active={kindFilter === "all"}
+                  label="Todos"
+                  count={resources.length}
+                  onClick={() => setKindFilter("all")}
+                />
+                {REGISTRY_RESOURCE_KINDS.map((kind) => (
+                  <KindFilterButton
+                    key={kind}
+                    active={kindFilter === kind}
+                    label={REGISTRY_KIND_LABELS[kind]}
+                    count={countsByKind[kind]}
+                    onClick={() => setKindFilter(kind)}
+                  />
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            {loading ? (
+              <CatalogEmptyState title="Carregando catálogo..." />
+            ) : filteredResources.length === 0 ? (
+              <CatalogEmptyState title="Nenhum recurso encontrado" />
+            ) : (
+              filteredResources.map((resource) => (
+                <ResourceCard
+                  key={`${resource.registryKind}:${registryResourceNamespace(resource)}:${resource.metadata.name}:${registryResourceTag(resource)}`}
+                  resource={resource}
+                  selected={
+                    selectedResource?.registryKind === resource.registryKind &&
+                    selectedResource.metadata.name === resource.metadata.name &&
+                    registryResourceTag(selectedResource) === registryResourceTag(resource)
+                  }
+                  onSelect={() => handleSelectResource(resource)}
+                />
+              ))
+            )}
+          </div>
+        </section>
+
+        <aside className="space-y-4">
+          <ResourceDetailCard
+            resource={selectedResource}
+            loading={detailLoading}
+            installTarget={installTarget}
+            onInstallTargetChange={setInstallTarget}
+          />
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-lg text-white">
+                <PackagePlus className="h-5 w-5 text-blue-400" />
+                Publicar ou atualizar
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form className="space-y-3" onSubmit={handlePublish}>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="text-sm font-medium text-slate-300">
+                    Tipo
+                    <select
+                      aria-label="Tipo do recurso"
+                      value={draft.kind}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          kind: event.target.value as RegistryResourceKind,
+                        }))
+                      }
+                      className="mt-1 h-10 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100"
+                    >
+                      {REGISTRY_RESOURCE_KINDS.map((kind) => (
+                        <option key={kind} value={kind}>
+                          {REGISTRY_KIND_LABELS[kind]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-sm font-medium text-slate-300">
+                    Tag
+                    <Input
+                      aria-label="Tag"
+                      value={draft.tag}
+                      onChange={(event) =>
+                        setDraft((current) => ({ ...current, tag: event.target.value }))
+                      }
+                      className="mt-1 border-slate-700 bg-slate-950 text-slate-100"
+                    />
+                  </label>
+                </div>
+
+                <label className="block text-sm font-medium text-slate-300">
+                  Nome
+                  <Input
+                    aria-label="Nome do recurso"
+                    value={draft.name}
+                    onChange={(event) =>
+                      setDraft((current) => ({ ...current, name: event.target.value }))
+                    }
+                    placeholder="team/recurso"
+                    className="mt-1 border-slate-700 bg-slate-950 text-slate-100"
+                  />
+                </label>
+
+                <label className="block text-sm font-medium text-slate-300">
+                  Título
+                  <Input
+                    aria-label="Título"
+                    value={draft.title}
+                    onChange={(event) =>
+                      setDraft((current) => ({ ...current, title: event.target.value }))
+                    }
+                    className="mt-1 border-slate-700 bg-slate-950 text-slate-100"
+                  />
+                </label>
+
+                <label className="block text-sm font-medium text-slate-300">
+                  Descrição
+                  <Textarea
+                    aria-label="Descrição"
+                    value={draft.description}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        description: event.target.value,
+                      }))
+                    }
+                    className="mt-1 min-h-20 border-slate-700 bg-slate-950 text-slate-100"
+                  />
+                </label>
+
+                {draft.kind === "prompts" ? (
+                  <label className="block text-sm font-medium text-slate-300">
+                    Conteúdo do prompt
+                    <Textarea
+                      aria-label="Conteúdo do prompt"
+                      value={draft.promptContent}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          promptContent: event.target.value,
+                        }))
+                      }
+                      className="mt-1 min-h-24 border-slate-700 bg-slate-950 font-mono text-slate-100"
+                    />
+                  </label>
+                ) : (
+                  <label className="block text-sm font-medium text-slate-300">
+                    Repositório de origem
+                    <Input
+                      aria-label="Repositório de origem"
+                      value={draft.sourceRepository}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          sourceRepository: event.target.value,
+                        }))
+                      }
+                      placeholder="https://github.com/org/repo"
+                      className="mt-1 border-slate-700 bg-slate-950 text-slate-100"
+                    />
+                  </label>
+                )}
+
+                <label className="block text-sm font-medium text-slate-300">
+                  Manifesto gerado
+                  <Textarea
+                    aria-label="Manifesto YAML"
+                    value={manifest}
+                    onChange={(event) => setManifest(event.target.value)}
+                    className="mt-1 min-h-44 border-slate-700 bg-slate-950 font-mono text-xs text-slate-100"
+                  />
+                </label>
+
+                {formErrors.length > 0 ? (
+                  <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-950/30 p-3 text-sm text-amber-200">
+                    <ul className="list-disc space-y-1 pl-5">
+                      {formErrors.map((formError) => (
+                        <li key={formError}>{formError}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {publishError ? (
+                  <div role="alert" className="rounded-xl border border-red-500/30 bg-red-950/30 p-3 text-sm text-red-200">
+                    {publishError}
+                  </div>
+                ) : null}
+
+                {applyResponse?.results?.length ? (
+                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/30 p-3 text-sm text-emerald-200">
+                    {applyResponse.results.map((result) => (
+                      <div key={`${result.kind}:${result.name}:${result.tag ?? ""}`}>
+                        {result.kind} {result.name}
+                        {result.tag ? `@${result.tag}` : ""}: {result.status}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+
+                <Button
+                  type="submit"
+                  disabled={!apiSessionReady || publishing}
+                  className="w-full bg-blue-600 text-white hover:bg-blue-500"
+                >
+                  <Send className="mr-2 h-4 w-4" />
+                  {publishing ? "Publicando..." : "Publicar via /v0/apply"}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function KindFilterButton({
+  active,
+  label,
+  count,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  count: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        "rounded-full border px-3 py-1.5 text-sm font-semibold transition-colors",
+        active
+          ? "border-blue-500/60 bg-blue-500/15 text-blue-200"
+          : "border-slate-700 bg-slate-900/70 text-slate-300 hover:border-slate-500 hover:text-white",
+      )}
+    >
+      {label} <span className="text-slate-500">{count}</span>
+    </button>
+  );
+}
+
+function CatalogEmptyState({ title }: { title: string }) {
+  return (
+    <Card className="md:col-span-2">
+      <CardContent className="flex min-h-40 items-center justify-center p-6 text-center text-sm text-slate-500">
+        {title}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ResourceCard({
+  resource,
+  selected,
+  onSelect,
+}: {
+  resource: RegistryResource;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const Icon = KIND_ICONS[resource.registryKind];
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        "rounded-2xl border bg-slate-950/50 p-4 text-left transition-all hover:border-blue-500/50 hover:bg-slate-900/80",
+        selected ? "border-blue-500/60 ring-1 ring-blue-500/30" : "border-slate-800",
+      )}
+    >
+      <div className="flex items-start gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-blue-500/20 bg-blue-600/10">
+          <Icon className="h-5 w-5 text-blue-400" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <Badge className="border-blue-500/30 bg-blue-950/40 text-blue-200">
+              {REGISTRY_KIND_LABELS[resource.registryKind]}
+            </Badge>
+            <Badge variant="outline" className="border-slate-700 text-slate-400">
+              {registryResourceTag(resource)}
+            </Badge>
+          </div>
+          <h2 className="truncate text-base font-bold text-white">
+            {registryResourceTitle(resource)}
+          </h2>
+          <p className="mt-1 line-clamp-2 text-sm text-slate-400">
+            {registryResourceDescription(resource)}
+          </p>
+          <p className="mt-3 truncate font-mono text-xs text-slate-500">
+            {registryResourceNamespace(resource)}/{resource.metadata.name}
+          </p>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function ResourceDetailCard({
+  resource,
+  loading,
+  installTarget,
+  onInstallTargetChange,
+}: {
+  resource: RegistryResource | null;
+  loading: boolean;
+  installTarget: string;
+  onInstallTargetChange: (target: string) => void;
+}) {
+  if (loading) {
+    return (
+      <Card>
+        <CardContent className="p-6 text-sm text-slate-400">
+          Carregando detalhe...
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!resource) {
+    return (
+      <Card>
+        <CardContent className="p-6 text-sm text-slate-400">
+          Selecione um recurso do catálogo para ver versão, origem, dependências
+          e instruções.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const sourceSummary = registrySourceSummary(resource);
+  const dependencySummary = registryDependencySummary(resource);
+  const labels = Object.entries(resource.metadata.labels ?? {});
+  const annotations = Object.entries(resource.metadata.annotations ?? {});
+  const Icon = KIND_ICONS[resource.registryKind];
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-lg text-white">
+          <Icon className="h-5 w-5 text-blue-400" />
+          Detalhe
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div>
+          <div className="mb-2 flex flex-wrap gap-2">
+            <Badge className="border-blue-500/30 bg-blue-950/40 text-blue-200">
+              {REGISTRY_KIND_LABELS[resource.registryKind]}
+            </Badge>
+            <Badge variant="outline" className="border-slate-700 text-slate-400">
+              {registryResourceTag(resource)}
+            </Badge>
+          </div>
+          <h2 className="text-xl font-bold text-white">{registryResourceTitle(resource)}</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            {registryResourceDescription(resource)}
+          </p>
+          <p className="mt-2 break-all font-mono text-xs text-slate-500">
+            {registryResourceNamespace(resource)}/{resource.metadata.name}
+          </p>
+        </div>
+
+        <DetailSection title="Origem">
+          {sourceSummary.length ? (
+            sourceSummary.map((summary) => (
+              <li key={summary} className="break-all">
+                {summary}
+              </li>
+            ))
+          ) : (
+            <li>Nenhuma origem declarada no manifesto.</li>
+          )}
+        </DetailSection>
+
+        <DetailSection title="Dependências">
+          {dependencySummary.length ? (
+            dependencySummary.map((summary) => <li key={summary}>{summary}</li>)
+          ) : (
+            <li>Nenhuma dependência declarada.</li>
+          )}
+        </DetailSection>
+
+        {labels.length || annotations.length ? (
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold uppercase tracking-widest text-slate-500">
+              Metadados
+            </h3>
+            <div className="flex flex-wrap gap-2">
+              {[...labels, ...annotations].map(([key, value]) => (
+                <Badge
+                  key={`${key}:${value}`}
+                  variant="outline"
+                  className="border-slate-700 text-slate-300"
+                >
+                  {key}={value}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+          <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-200">
+            <Download className="h-4 w-4 text-blue-400" />
+            Instalação local
+          </div>
+          <label className="block text-sm text-slate-400">
+            Alvo
+            <select
+              aria-label="Alvo de instalação"
+              value={installTarget}
+              onChange={(event) => onInstallTargetChange(event.target.value)}
+              className="mt-1 h-10 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100"
+            >
+              <option value="cursor">Cursor</option>
+              <option value="claude-code">Claude Code</option>
+              <option value="codex">Codex</option>
+            </select>
+          </label>
+          <Button
+            type="button"
+            disabled
+            variant="outline"
+            className="mt-3 w-full border-slate-700 bg-slate-900 text-slate-400"
+          >
+            Receita de instalação na task_06
+          </Button>
+          <p className="mt-2 text-xs text-slate-500">
+            O detalhe já carrega kind/name/tag para acionar o endpoint de recipe
+            assim que ele estiver disponível.
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DetailSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      <h3 className="text-sm font-semibold uppercase tracking-widest text-slate-500">
+        {title}
+      </h3>
+      <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-300">
+        {children}
+      </ul>
+    </div>
+  );
+}

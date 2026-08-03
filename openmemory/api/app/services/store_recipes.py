@@ -8,27 +8,20 @@ the selected editor target.
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Any, Literal, Optional, Protocol, TypedDict
-from urllib.parse import quote
 
-import httpx
+from app.utils.agentregistry import (
+    KIND_TO_REGISTRY_COLLECTION,
+    AgentRegistryError,
+    AgentRegistryHttpClient,
+    AgentRegistryResourceNotFound,
+)
 
 CatalogKind = Literal["skill", "mcpserver", "prompt", "agent", "plugin"]
 InstallTarget = Literal["cursor", "claude", "codex"]
 
 RECIPE_VERSION = "1"
-DEFAULT_REGISTRY_BASE_URL = "http://agentregistry:8080"
-DEFAULT_REGISTRY_TIMEOUT_SECONDS = 5.0
-
-KIND_TO_REGISTRY_COLLECTION: dict[str, str] = {
-    "agent": "agents",
-    "mcpserver": "mcpservers",
-    "plugin": "plugins",
-    "prompt": "prompts",
-    "skill": "skills",
-}
 
 TARGET_DESTINATIONS: dict[str, dict[str, str]] = {
     "cursor": {
@@ -99,59 +92,6 @@ class RegistryResourceNotFound(StoreRecipeError):
         super().__init__(404, detail)
 
 
-class AgentRegistryHttpClient:
-    """Small HTTP client for the internal AgentRegistry service."""
-
-    def __init__(
-        self,
-        base_url: Optional[str] = None,
-        timeout_seconds: float = DEFAULT_REGISTRY_TIMEOUT_SECONDS,
-    ):
-        raw_base_url = (
-            base_url
-            or os.getenv("AGENT_REGISTRY_BASE_URL")
-            or os.getenv("AGENT_REGISTRY_URL")
-            or DEFAULT_REGISTRY_BASE_URL
-        )
-        self.base_url = raw_base_url.rstrip("/")
-        self.timeout_seconds = timeout_seconds
-
-    async def get_resource(
-        self,
-        *,
-        kind: str,
-        name: str,
-        tag: str,
-        auth_headers: Optional[dict[str, str]] = None,
-    ) -> dict[str, Any]:
-        collection = KIND_TO_REGISTRY_COLLECTION[kind]
-        url = f"{self.base_url}/v0/{collection}/{quote(name, safe='')}/{quote(tag, safe='')}"
-        headers = {"Accept": "application/json"}
-        if auth_headers:
-            headers.update(auth_headers)
-
-        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            try:
-                response = await client.get(url, headers=headers)
-            except httpx.RequestError as exc:
-                raise StoreRecipeError(502, "AgentRegistry indisponível") from exc
-
-        if response.status_code == 404:
-            raise RegistryResourceNotFound()
-        if response.status_code in (401, 403):
-            raise StoreRecipeError(response.status_code, "AgentRegistry negou acesso ao recurso")
-        if response.status_code >= 400:
-            raise StoreRecipeError(502, f"AgentRegistry retornou HTTP {response.status_code}")
-
-        try:
-            data = response.json()
-        except ValueError as exc:
-            raise StoreRecipeError(502, "AgentRegistry retornou JSON inválido") from exc
-        if not isinstance(data, dict):
-            raise StoreRecipeError(502, "AgentRegistry retornou payload inválido")
-        return data
-
-
 class InstallRecipeService:
     def __init__(self, registry_client: Optional[RegistryClient] = None):
         self.registry_client = registry_client or AgentRegistryHttpClient()
@@ -171,12 +111,17 @@ class InstallRecipeService:
         safe_name = _validate_segment(name, "name")
         safe_tag = _validate_segment(tag, "tag")
 
-        resource = await self.registry_client.get_resource(
-            kind=safe_kind,
-            name=safe_name,
-            tag=safe_tag,
-            auth_headers=auth_headers,
-        )
+        try:
+            resource = await self.registry_client.get_resource(
+                kind=safe_kind,
+                name=safe_name,
+                tag=safe_tag,
+                auth_headers=auth_headers,
+            )
+        except AgentRegistryResourceNotFound as exc:
+            raise RegistryResourceNotFound() from exc
+        except AgentRegistryError as exc:
+            raise StoreRecipeError(exc.status_code, exc.detail) from exc
         metadata = _metadata(resource)
         spec = _spec(resource)
         source = _resolve_source(safe_kind, resource, spec)

@@ -23,6 +23,7 @@ import logging
 import os
 import time
 import uuid
+from typing import Any
 
 import anyio
 
@@ -46,7 +47,7 @@ from app.utils.db import get_user_and_app
 from app.utils.attribution import author_hostname_from_payload
 from app.utils.groups import ensure_user_group, ensure_user_registered, requester_group_for_mcp
 from app.utils.identity import is_plausible_hostname, resolve_hostname
-from app.utils.logging_context import auth_method_var, auth_user_var, machine_var
+from app.utils.logging_context import auth_method_var, auth_user_var, machine_var, team_var
 from app.utils.memory import get_memory_client_safe
 from app.utils.partitioning import bind_active_collection
 from app.utils.permissions import check_memory_access_permissions
@@ -75,6 +76,10 @@ mcp = FastMCP("mem0-mcp-server")
 # Context variables for user_id and client_name
 user_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("user_id")
 client_name_var: contextvars.ContextVar[str] = contextvars.ContextVar("client_name")
+registry_auth_headers_var: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "registry_auth_headers",
+    default=None,
+)
 
 # Read-path defaults (task_03 / ADR-003): keep search top_k bounded for latency;
 # list uses a higher default and paginated scroll so project audits are complete.
@@ -1041,6 +1046,179 @@ async def search_specs(
 
 
 # --------------------------------------------------------------------------- #
+# Tools da loja interna (AgentRegistry + InstallRecipeService).
+# Publish/install exigem confirmação explícita no schema da tool e na descrição.
+# --------------------------------------------------------------------------- #
+def get_agent_registry_client():
+    from app.utils.agentregistry import AgentRegistryHttpClient
+
+    return AgentRegistryHttpClient()
+
+
+def get_catalog_install_recipe_service():
+    from app.services.store_recipes import InstallRecipeService
+
+    return InstallRecipeService()
+
+
+def _registry_auth_headers_from_request(request: Request) -> dict[str, str] | None:
+    headers: dict[str, str] = {}
+    authorization = request.headers.get("authorization")
+    if authorization:
+        headers["Authorization"] = authorization
+    api_key = request.headers.get("x-api-key")
+    if api_key:
+        headers["X-API-Key"] = api_key
+    if "Authorization" not in headers:
+        token = request.query_params.get("token")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    return headers or None
+
+
+def _registry_auth_headers_for_mcp() -> dict[str, str] | None:
+    return registry_auth_headers_var.get(None)
+
+
+def _current_mcp_actor_id() -> str:
+    if auth_user_var.get():
+        return auth_user_var.get()
+    if team_var.get():
+        return f"team:{team_var.get()}"
+    if auth_method_var.get() == "legacy":
+        return "legacy"
+    hostname = resolve_hostname(user_id_var.get(None))
+    return hostname or "mcp"
+
+
+@mcp.tool(description="Search the internal Mem0 catalog across skills, MCP servers, prompts, agents and plugins via AgentRegistry. Safe read-only operation. `query` may be empty to list recent resources; `kind` optionally narrows to skill|mcpserver|prompt|agent|plugin. Returns JSON results with summaries and raw resources.")
+async def search_catalog(
+    query: str = "",
+    kind: str | None = None,
+    limit: int = 20,
+    namespace: str = "all",
+) -> str:
+    try:
+        from app.utils.agentregistry import (
+            KIND_TO_REGISTRY_COLLECTION,
+            AgentRegistryError,
+            clamp_limit,
+            resource_matches_query,
+            summarize_resource,
+            validate_catalog_kind,
+        )
+
+        client = get_agent_registry_client()
+        safe_limit = clamp_limit(limit)
+        kinds = [validate_catalog_kind(kind)] if kind else list(KIND_TO_REGISTRY_COLLECTION)
+        results: list[dict[str, Any]] = []
+        for catalog_kind in kinds:
+            payload = await client.list_resources(
+                kind=catalog_kind,
+                namespace=namespace,
+                limit=safe_limit,
+                auth_headers=_registry_auth_headers_for_mcp(),
+            )
+            items = payload.get("items")
+            if not isinstance(items, list):
+                items = []
+            for resource in items:
+                if not isinstance(resource, dict):
+                    continue
+                if not resource_matches_query(resource, query):
+                    continue
+                summary = summarize_resource(resource)
+                summary["resource"] = resource
+                results.append(summary)
+                if len(results) >= safe_limit:
+                    return json.dumps({"results": results, "limit": safe_limit}, default=str)
+        return json.dumps({"results": results, "limit": safe_limit}, default=str)
+    except AgentRegistryError as e:
+        return f"Error: {e.detail}"
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="Get one internal catalog resource from AgentRegistry by kind, name and optional tag. Safe read-only operation. Use this before asking for an install recipe so the developer can inspect the resource metadata.")
+async def get_catalog_resource(
+    kind: str,
+    name: str,
+    tag: str | None = None,
+    namespace: str = "default",
+) -> str:
+    try:
+        from app.utils.agentregistry import AgentRegistryError
+
+        resource = await get_agent_registry_client().get_resource(
+            kind=kind,
+            name=name,
+            tag=tag,
+            namespace=namespace,
+            auth_headers=_registry_auth_headers_for_mcp(),
+        )
+        return json.dumps({"resource": resource}, default=str)
+    except AgentRegistryError as e:
+        return f"Error: {e.detail}"
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="Publish or update a catalog resource through AgentRegistry POST /v0/apply. Only call after an explicit developer request to publish/update; pass confirm_user_requested=true to acknowledge that request. `resource` must be a v1alpha1 resource object.")
+async def publish_catalog_resource(
+    resource: dict[str, Any],
+    dry_run: bool = False,
+    confirm_user_requested: bool = False,
+) -> str:
+    try:
+        from app.utils.agentregistry import AgentRegistryError
+
+        if not confirm_user_requested:
+            return "Error: publish_catalog_resource exige pedido explícito do desenvolvedor (confirm_user_requested=true)"
+        result = await get_agent_registry_client().apply_resource(
+            resource=resource,
+            dry_run=dry_run,
+            auth_headers=_registry_auth_headers_for_mcp(),
+        )
+        return json.dumps({"result": result, "dry_run": bool(dry_run)}, default=str)
+    except AgentRegistryError as e:
+        return f"Error: {e.detail}"
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="Build a host-applied install recipe for a catalog resource using OpenMemory InstallRecipeService. This does not write files itself, but it starts an install workflow; only call after an explicit developer request to install and pass confirm_user_requested=true.")
+async def get_install_recipe(
+    kind: str,
+    name: str,
+    tag: str,
+    target: str,
+    confirm_user_requested: bool = False,
+) -> str:
+    try:
+        from app.services.store_recipes import StoreRecipeError
+
+        if not confirm_user_requested:
+            return "Error: get_install_recipe exige pedido explícito do desenvolvedor (confirm_user_requested=true)"
+        recipe = await get_catalog_install_recipe_service().build(
+            kind=kind,
+            name=name,
+            tag=tag,
+            target=target,
+            user_id=_current_mcp_actor_id(),
+            auth_headers=_registry_auth_headers_for_mcp(),
+        )
+        return json.dumps({"recipe": recipe}, default=str)
+    except StoreRecipeError as e:
+        return f"Error: {e.detail}"
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+# --------------------------------------------------------------------------- #
 # Tools de tasks e comentários (Tarefa 8) — completam a superfície MCP do quadro
 # Kanban. Mesmo molde da Tarefa 7; delegam a task_lock (Tarefa 2) e ao router
 # (Tarefa 4), sem duplicar lógica de negócio.
@@ -1427,6 +1605,7 @@ async def handle_sse(request: Request):
     user_token = user_id_var.set(uid or "")
     client_name = request.path_params.get("client_name")
     client_token = client_name_var.set(client_name or "")
+    registry_token = registry_auth_headers_var.set(_registry_auth_headers_from_request(request))
     # ?group= na URL de instalação: vincula equipe na primeira conexão (ADR-004).
     ensure_user_group(uid, request.query_params.get("group"))
     # Token de agente em máquina não vinculada: log estruturado (Fase 2 trata).
@@ -1449,6 +1628,7 @@ async def handle_sse(request: Request):
             )
     finally:
         # Clean up context variables
+        registry_auth_headers_var.reset(registry_token)
         user_id_var.reset(user_token)
         client_name_var.reset(client_token)
 
@@ -1503,6 +1683,7 @@ async def handle_streamable_http(request: Request):
     user_token = user_id_var.set(uid or "")
     client_name = request.path_params.get("client_name")
     client_token = client_name_var.set(client_name or "")
+    registry_token = registry_auth_headers_var.set(_registry_auth_headers_from_request(request))
     ensure_user_group(uid, request.query_params.get("group"))
     # Token de agente em máquina não vinculada: log estruturado (Fase 2 trata).
     _log_machine_divergence_if_any(path_uid)
@@ -1547,6 +1728,7 @@ async def handle_streamable_http(request: Request):
             await transport.terminate()
             tg.cancel_scope.cancel()
     finally:
+        registry_auth_headers_var.reset(registry_token)
         user_id_var.reset(user_token)
         client_name_var.reset(client_token)
 
