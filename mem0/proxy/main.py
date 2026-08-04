@@ -182,6 +182,7 @@ class Completions:
         # Check if self.mem0_client is an instance of Memory or MemoryClient
 
         entities = []
+        memories_text = ""
         if isinstance(self.mem0_client, mem0.memory.main.Memory):
             memories_text = "\n".join(memory["memory"] for memory in relevant_memories["results"])
             if relevant_memories.get("relations"):
