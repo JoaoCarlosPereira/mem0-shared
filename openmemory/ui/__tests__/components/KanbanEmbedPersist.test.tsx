@@ -108,4 +108,31 @@ describe("KanbanEmbedCanvas persistence", () => {
       (screen.getByTestId("kanban-board-canvas") as HTMLIFrameElement).src,
     ).toBe(srcBefore);
   });
+
+  it("evento de atualização renova o embed com um token novo", async () => {
+    mockedAxios.get
+      .mockResolvedValueOnce({
+        data: { embed_url: "/planka/", access_token: "token.inicial.jwt" },
+      })
+      .mockResolvedValueOnce({
+        data: { embed_url: "/planka/", access_token: "token.renovado.jwt" },
+      });
+
+    render(<KanbanEmbedCanvas />);
+    const iframe = (await screen.findByTestId(
+      "kanban-home-canvas",
+    )) as HTMLIFrameElement;
+    expect(iframe.src).toContain("token.inicial.jwt");
+
+    act(() => {
+      window.dispatchEvent(new Event("mem0-kanban-reload"));
+    });
+
+    await waitFor(() => {
+      expect(mockedAxios.get).toHaveBeenCalledTimes(2);
+      expect(
+        (screen.getByTestId("kanban-home-canvas") as HTMLIFrameElement).src,
+      ).toContain("token.renovado.jwt");
+    });
+  });
 });
