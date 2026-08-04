@@ -218,6 +218,7 @@ module.exports.routes = {
 
   'GET /api/cards/:cardId/comments': 'comments/index',
   'POST /api/cards/:cardId/comments': 'comments/create',
+  'POST /api/cards/:cardId/mem0-comments': 'comments/mem0-create',
   'PATCH /api/comments/:id': 'comments/update',
   'DELETE /api/comments/:id': 'comments/delete',
 
