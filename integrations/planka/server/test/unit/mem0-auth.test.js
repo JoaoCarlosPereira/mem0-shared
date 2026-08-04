@@ -4,8 +4,6 @@
  *   node --test test/unit/mem0-auth.test.js
  */
 
-'use strict';
-
 const assert = require('assert');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
@@ -36,9 +34,20 @@ describe('mem0-auth validate-auth', () => {
     assert.strictEqual(r.method, 'disabled');
   });
 
-  it('rejects missing token when secret set (fail-closed)', () => {
+  it('allows the bootstrap route without a token so the login screen can load', () => {
     const r = authenticateMem0Request({
       authorizationHeader: '',
+      path: '/api/bootstrap',
+      env: { AUTH_JWT_SECRET: SECRET },
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.method, 'public');
+  });
+
+  it('keeps protected API routes fail-closed without a token', () => {
+    const r = authenticateMem0Request({
+      authorizationHeader: '',
+      path: '/api/users/me',
       env: { AUTH_JWT_SECRET: SECRET },
     });
     assert.strictEqual(r.ok, false);
@@ -95,13 +104,25 @@ describe('mem0-auth validate-auth', () => {
   });
 
   it('rejects JWT without sub', () => {
-    const token = jwt.sign({ email: 'a@example.com' }, SECRET, { algorithm: 'HS256' });
+    const token = jwt.sign({ email: 'a@example.com' }, SECRET, {
+      algorithm: 'HS256',
+    });
     const r = authenticateMem0Request({
       authorizationHeader: `Bearer ${token}`,
       env: { AUTH_JWT_SECRET: SECRET },
     });
     assert.strictEqual(r.ok, false);
     assert.strictEqual(r.reason, 'missing_sub');
+  });
+
+  it('allows public routes with query strings', () => {
+    const r = authenticateMem0Request({
+      authorizationHeader: '',
+      path: '/api/terms?lang=pt-BR',
+      env: { AUTH_JWT_SECRET: SECRET },
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.method, 'public');
   });
 
   it('accepts Bearer local when MEM0_AUTH_ALLOW_LEGACY=1', () => {
