@@ -151,6 +151,7 @@
  */
 
 const { idInput } = require('../../../utils/inputs');
+const getActiveMemberUserIds = require('../../helpers/boards/get-active-member-user-ids');
 
 const Errors = {
   BOARD_NOT_FOUND: {
@@ -211,21 +212,33 @@ module.exports = {
 
     const cards = await Card.qm.getByListIds(finiteListIds);
     const cardIds = sails.helpers.utils.mapRecords(cards);
+    const cardMemberships = await CardMembership.qm.getByCardIds(cardIds);
+    const comments = await Comment.qm.getByCardIds(cardIds);
+    const actions = await Action.qm.getAllByBoardId(board.id);
+    const attachments = await Attachment.qm.getByCardIds(cardIds);
+
+    const cardLabels = await CardLabel.qm.getByCardIds(cardIds);
+    const taskLists = await TaskList.qm.getByCardIds(cardIds);
+    const taskListIds = sails.helpers.utils.mapRecords(taskLists);
+    const tasks = await Task.qm.getByTaskListIds(taskListIds);
+
+    const activeMemberUserIds = getActiveMemberUserIds({
+      cards,
+      cardMemberships,
+      comments,
+      actions,
+      attachments,
+      tasks,
+    });
+
+    board.activeMemberUserIds = activeMemberUserIds;
 
     const userIds = _.union(
       sails.helpers.utils.mapRecords(boardMemberships, 'userId'),
-      sails.helpers.utils.mapRecords(cards, 'creatorUserId', true, true),
+      activeMemberUserIds,
     );
 
     const users = await User.qm.getByIds(userIds);
-    const cardMemberships = await CardMembership.qm.getByCardIds(cardIds);
-    const cardLabels = await CardLabel.qm.getByCardIds(cardIds);
-
-    const taskLists = await TaskList.qm.getByCardIds(cardIds);
-    const taskListIds = sails.helpers.utils.mapRecords(taskLists);
-
-    const tasks = await Task.qm.getByTaskListIds(taskListIds);
-    const attachments = await Attachment.qm.getByCardIds(cardIds);
 
     const boardCustomFieldGroups = await CustomFieldGroup.qm.getByBoardId(board.id);
     const cardCustomFieldGroups = await CustomFieldGroup.qm.getByCardIds(cardIds);
