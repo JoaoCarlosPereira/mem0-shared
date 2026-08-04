@@ -152,6 +152,7 @@ const Filters = React.memo(() => {
       <span className={styles.filter}>
         <BoardMembershipsPopup
           currentUserIds={userIds}
+          activeOnly
           title="common.filterByMembers"
           onUserSelect={handleUserSelect}
           onUserDeselect={handleUserDeselect}
