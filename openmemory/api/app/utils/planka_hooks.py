@@ -131,10 +131,16 @@ def mirror_document_best_effort(db: Session, workspace_id: UUID, doc_type: str) 
     )
 
 
-def mirror_comment_best_effort(db: Session, target_type: str, target_id: UUID, body: str) -> None:
+def mirror_comment_best_effort(
+    db: Session,
+    target_type: str,
+    target_id: UUID,
+    body: str,
+    author: Optional[str] = None,
+) -> None:
     run_mirror_best_effort(
         db,
-        lambda c: c.mirror_comment(target_type, target_id, body),
+        lambda c: c.mirror_comment(target_type, target_id, body, author),
         action="mirror_comment",
     )
 
