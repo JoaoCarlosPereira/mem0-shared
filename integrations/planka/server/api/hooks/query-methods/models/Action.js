@@ -11,6 +11,8 @@ const create = (arrayOfValues) => Action.createEach(arrayOfValues).fetch();
 
 const createOne = (values) => Action.create({ ...values }).fetch();
 
+const getAllByBoardId = (boardId) => Action.find({ boardId }).sort('id');
+
 const getByBoardId = (boardId, { beforeId } = {}) => {
   const criteria = {
     boardId,
@@ -47,6 +49,7 @@ const delete_ = (criteria) => Action.destroy(criteria).fetch();
 module.exports = {
   create,
   createOne,
+  getAllByBoardId,
   getByBoardId,
   getByCardId,
   update,
