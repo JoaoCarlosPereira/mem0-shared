@@ -39,6 +39,9 @@ export default class extends BaseModel {
     isSubscribed: attr({
       getDefault: () => false,
     }),
+    activeMemberUserIds: attr({
+      getDefault: () => [],
+    }),
     isFetching: attr({
       getDefault: () => null,
     }),
