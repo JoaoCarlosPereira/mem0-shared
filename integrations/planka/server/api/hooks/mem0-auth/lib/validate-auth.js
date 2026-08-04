@@ -3,8 +3,6 @@
  * Pure Node module (no Sails) so unit tests can run without lifting the app.
  */
 
-'use strict';
-
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 
@@ -16,17 +14,34 @@ function bearerToken(header) {
   const h = String(header || '').trim();
   if (!h) return '';
   const prefix = 'Bearer ';
-  if (h.length > prefix.length && h.slice(0, prefix.length).toLowerCase() === prefix.toLowerCase()) {
+  if (
+    h.length > prefix.length &&
+    h.slice(0, prefix.length).toLowerCase() === prefix.toLowerCase()
+  ) {
     return h.slice(prefix.length).trim();
   }
   return '';
+}
+
+const PUBLIC_API_PATHS = new Set([
+  '/api/bootstrap',
+  '/api/terms',
+  '/api/access-tokens',
+  '/api/access-tokens/exchange-with-oidc',
+  '/api/access-tokens/debug-oidc',
+  '/api/access-tokens/accept-terms',
+  '/api/access-tokens/revoke-pending-token',
+]);
+
+function isPublicMem0Route(path) {
+  return PUBLIC_API_PATHS.has(String(path || '').split('?', 1)[0]);
 }
 
 /**
  * Synchronous Mem0 credential check (JWT / legacy / internal).
  * omtk_ tokens need async DB lookup — see authenticateOmtk.
  *
- * @param {{ authorizationHeader?: string, env?: NodeJS.ProcessEnv }} input
+ * @param {{ authorizationHeader?: string, path?: string, env?: NodeJS.ProcessEnv }} input
  * @returns {{ ok: boolean, method?: string, subject?: string, email?: string, reason?: string, needsOmtkLookup?: boolean, token?: string }}
  */
 function authenticateMem0Request(input = {}) {
@@ -35,6 +50,10 @@ function authenticateMem0Request(input = {}) {
 
   if (!secret) {
     return { ok: true, method: 'disabled' };
+  }
+
+  if (isPublicMem0Route(input.path)) {
+    return { ok: true, method: 'public' };
   }
 
   const raw = bearerToken(input.authorizationHeader);
@@ -52,7 +71,12 @@ function authenticateMem0Request(input = {}) {
   }
 
   if (raw.startsWith('omtk_')) {
-    return { ok: false, reason: 'omtk_pending', needsOmtkLookup: true, token: raw };
+    return {
+      ok: false,
+      reason: 'omtk_pending',
+      needsOmtkLookup: true,
+      token: raw,
+    };
   }
 
   try {
