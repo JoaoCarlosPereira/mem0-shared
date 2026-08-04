@@ -540,7 +540,8 @@ class TestComments:
 
         assert response.status_code == 201
         assert len(mirrored) == 1
-        assert mirrored[0][1:] == (ws["id"], "Nota do workspace")
+        assert mirrored[0][1] == uuid.UUID(ws["id"])
+        assert mirrored[0][2:] == ("workspace", "Nota do workspace")
 
 
 class TestEndToEndLifecycle:
