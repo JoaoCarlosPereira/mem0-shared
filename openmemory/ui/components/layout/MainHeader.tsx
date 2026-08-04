@@ -85,6 +85,11 @@ export function MainHeader({ sidebarOpen, onToggleSidebar }: MainHeaderProps) {
   };
 
   const handleRefresh = async () => {
+    if (/^\/docs(?:\/|$)/.test(pathname)) {
+      window.dispatchEvent(new Event("mem0-kanban-reload"));
+      return;
+    }
+
     const fetchers = getFetchersForPath(pathname);
     await Promise.allSettled(fetchers.map((fn) => fn()));
   };
