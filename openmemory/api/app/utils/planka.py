@@ -71,6 +71,8 @@ class PlankaMirrorClient(Protocol):
 
     async def mirror_document(self, workspace_id: UUID, doc_type: str) -> None: ...
 
+    async def mirror_comment(self, target_type: str, target_id: UUID, body: str) -> None: ...
+
     async def delete_task(self, task_id: UUID) -> None: ...
 
 
@@ -211,6 +213,28 @@ class PlankaMirrorHttpClient:
         )
         await self._mirror_task_assignee(task, existing.planka_id)
         self.db.commit()
+
+    async def mirror_comment(self, target_type: str, target_id: UUID, body: str) -> None:
+        """Project a Spec comment onto its mapped PLANKA card."""
+        if target_type != "task":
+            return
+
+        task_map = self._get_map(ENTITY_TASK, target_id)
+        if not task_map:
+            task = self.db.query(TaskCard).filter(TaskCard.id == target_id).first()
+            if not task:
+                raise PlankaMirrorNotFound(f"TaskCard {target_id} não encontrada")
+            await self.mirror_task(target_id)
+            task_map = self._get_map(ENTITY_TASK, target_id)
+
+        if not task_map:
+            raise PlankaMirrorError(502, "PLANKA card não mapeado para o task")
+
+        await self._request(
+            "POST",
+            f"/api/cards/{task_map.planka_id}/comments",
+            json={"text": body},
+        )
 
     async def mirror_document(self, workspace_id: UUID, doc_type: str) -> None:
         workspace = self.db.query(SpecWorkspace).filter(SpecWorkspace.id == workspace_id).first()
