@@ -48,7 +48,6 @@
  *                 example: Implement user authentication
  *               description:
  *                 type: string
- *                 maxLength: 1048576
  *                 nullable: true
  *                 description: Detailed description of the card
  *                 example: Add JWT-based authentication system...
@@ -142,7 +141,6 @@ module.exports = {
     description: {
       type: 'string',
       isNotEmptyString: true,
-      maxLength: 1048576,
       allowNull: true,
     },
     dueDate: {
