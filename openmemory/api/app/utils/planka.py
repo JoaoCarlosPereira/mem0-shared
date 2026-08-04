@@ -71,7 +71,9 @@ class PlankaMirrorClient(Protocol):
 
     async def mirror_document(self, workspace_id: UUID, doc_type: str) -> None: ...
 
-    async def mirror_comment(self, target_type: str, target_id: UUID, body: str) -> None: ...
+    async def mirror_comment(
+        self, target_type: str, target_id: UUID, body: str, author: Optional[str] = None
+    ) -> None: ...
 
     async def delete_task(self, task_id: UUID) -> None: ...
 
@@ -214,8 +216,10 @@ class PlankaMirrorHttpClient:
         await self._mirror_task_assignee(task, existing.planka_id)
         self.db.commit()
 
-    async def mirror_comment(self, target_type: str, target_id: UUID, body: str) -> None:
-        """Project a Spec comment onto its mapped PLANKA card."""
+    async def mirror_comment(
+        self, target_type: str, target_id: UUID, body: str, author: Optional[str] = None
+    ) -> None:
+        """Project a Spec comment onto its mapped PLANKA card with author identity."""
         if target_type != "task":
             return
 
@@ -230,10 +234,31 @@ class PlankaMirrorHttpClient:
         if not task_map:
             raise PlankaMirrorError(502, "PLANKA card não mapeado para o task")
 
+        from app.utils.creator_identity import (
+            identity_for_actor,
+            resolve_actor_identities_with_db,
+        )
+
+        identity = identity_for_actor(
+            author,
+            resolve_actor_identities_with_db(self.db, [author]),
+        )
+        email = identity.email if identity else None
+        if not email and author:
+            email = normalize_assignee_email(author)
+        name = identity.display_name if identity else None
+        if not name and author:
+            name = author.split("@", 1)[0] if "@" in author else author
+
         await self._request(
             "POST",
-            f"/api/cards/{task_map.planka_id}/comments",
-            json={"text": body},
+            f"/api/cards/{task_map.planka_id}/mem0-comments",
+            json={
+                "text": body,
+                "email": email,
+                "name": name,
+                "picture": identity.avatar_url if identity else None,
+            },
         )
 
     async def mirror_document(self, workspace_id: UUID, doc_type: str) -> None:
