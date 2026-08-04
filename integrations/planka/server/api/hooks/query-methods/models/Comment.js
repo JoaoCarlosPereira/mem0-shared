@@ -32,6 +32,11 @@ const createOne = (values) =>
 
 const getByIds = (ids) => defaultFind(ids);
 
+const getByCardIds = (cardIds) =>
+  defaultFind({
+    cardId: cardIds,
+  });
+
 const getByCardId = (cardId, { beforeId } = {}) => {
   const criteria = {
     cardId,
@@ -117,6 +122,7 @@ module.exports = {
   createOne,
   getByIds,
   getByCardId,
+  getByCardIds,
   getOneById,
   update,
   updateOne,
