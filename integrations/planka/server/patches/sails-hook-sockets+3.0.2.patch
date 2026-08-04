@@ -1,0 +1,53 @@
+diff --git a/node_modules/sails-hook-sockets/lib/initialize.js b/node_modules/sails-hook-sockets/lib/initialize.js
+index fb3d045..6a004c7 100644
+--- a/node_modules/sails-hook-sockets/lib/initialize.js
++++ b/node_modules/sails-hook-sockets/lib/initialize.js
+@@ -141,9 +141,27 @@
+         if (app.config.sockets.onlyAllowOrigins) {
+           // As of Socket.io v3.X, the origins option was changed to origin, and is now nested in a dictionary named cors.
+           opts.cors = {};// [?]: https://socket.io/docs/v4/migrating-from-2-x-to-3-0/#cors-handling
++          opts.cors.credentials = true;
+           opts.cors.origin = function(origin, cb) {
++            // Same-origin XHR/fetch often omits the Origin header; Socket.IO still
++            // invokes this callback with undefined and must not reject that case.
++            if (!origin) {
++              return cb(null, true);
++            }
+             // If the socket's origin is in the `onlyAllowOrigins` array, allow the connection to continue.
+-            if (_.contains(app.config.sockets.onlyAllowOrigins, origin)) {
++            var environmentOrigins = (process.env.SOCKET_ALLOWED_ORIGINS || '')
++              .split(',')
++              .map(function(configuredOrigin) {
++                try {
++                  return new URL(configuredOrigin).origin;
++                } catch (e) {
++                  return configuredOrigin.trim();
++                }
++              });
++            if (
++              _.contains(app.config.sockets.onlyAllowOrigins, origin) ||
++              _.contains(environmentOrigins, origin)
++            ) {
+               return cb(null, true);
+             }
+             // Otherwise log a console message and reject the connection by returning `false` via the callback.
+diff --git a/node_modules/sails-hook-sockets/lib/load-session-from-socket.js b/node_modules/sails-hook-sockets/lib/load-session-from-socket.js
+index b0c4267..971f0f4 100644
+--- a/node_modules/sails-hook-sockets/lib/load-session-from-socket.js
++++ b/node_modules/sails-hook-sockets/lib/load-session-from-socket.js
+@@ -23,7 +23,14 @@
+   // See:
+   // • https://github.com/socketio/engine.io-client/issues/554
+   // • https://trello.com/c/7oqnpaxT/88-verify-that-extraheaders-is-actually-still-100-fixed-for-browser-usage-in-socket-io-client-engine-io-client-and-if-so-1-update-t
+-  if (!app.session || socketHandshake.headers.nosession || socketHandshake.query.nosession) {
++  var query = socketHandshake.query || socketHandshake._query || {};
++  socketHandshake.query = query;
++  if (!app.hooks.session || socketHandshake.headers.nosession || query.nosession) {
++    socketHandshake.session = {};
++    socketHandshake.sessionID = undefined;
++    socketHandshake.session.save = function (done) {
++      return done ? done() : undefined;
++    };
+     return cb(null, {}, undefined);
+   }
+ 
