@@ -191,6 +191,9 @@ class SQLiteManager:
                 raise
 
     def batch_add_history(self, records: List[Dict[str, Any]]) -> None:
+        records = [record for record in records if record is not None]
+        if not records:
+            return
         with self._lock:
             try:
                 self.connection.execute("BEGIN")
