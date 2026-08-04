@@ -1439,7 +1439,11 @@ async def add_spec_comment(target_type: str, target_id: str, body: str) -> str:
         from app.routers.specs import CommentCreate, CommentResponse
         from app.routers.specs import create_comment as _create_comment_endpoint
 
-        author = resolve_hostname(user_id_var.get(None))
+        author = (
+            (auth_user_var.get() or "").strip()
+            if auth_method_var.get() == "agent_token"
+            else ""
+        ) or resolve_hostname(user_id_var.get(None))
         db = SessionLocal()
         try:
             payload = CommentCreate(
