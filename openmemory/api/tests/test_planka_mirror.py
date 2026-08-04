@@ -123,7 +123,7 @@ class _PlankaRouter:
         if method == "POST" and path.startswith("/api/lists/") and path.endswith("/cards"):
             return _json_response(200, {"item": {"id": self._next_id(), "name": "c"}})
 
-        if method == "POST" and path.startswith("/api/cards/") and path.endswith("/comments"):
+        if method == "POST" and path.startswith("/api/cards/") and path.endswith("/mem0-comments"):
             try:
                 body = json.loads(request.content.decode("utf-8") or "{}")
             except json.JSONDecodeError:
@@ -343,12 +343,22 @@ class TestMirrorTask:
         db_session.refresh(task)
 
         await client.mirror_task(task.id)
-        await client.mirror_comment("task", task.id, "Evidência do teste")
+        await client.mirror_comment(
+            "task",
+            task.id,
+            "Evidência do teste",
+            "joao@example.com",
+        )
 
         assert len(planka_router.comment_calls) == 1
         path, body = planka_router.comment_calls[0]
-        assert path.startswith("/api/cards/") and path.endswith("/comments")
-        assert body == {"text": "Evidência do teste"}
+        assert path.startswith("/api/cards/") and path.endswith("/mem0-comments")
+        assert body == {
+            "text": "Evidência do teste",
+            "email": "joao@example.com",
+            "name": "joao",
+            "picture": None,
+        }
 
     @pytest.mark.asyncio
     async def test_mirror_task_syncs_assignee_membership(
