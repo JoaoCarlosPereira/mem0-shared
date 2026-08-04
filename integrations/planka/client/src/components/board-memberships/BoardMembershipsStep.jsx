@@ -19,12 +19,17 @@ const BoardMembershipsStep = React.memo(
     onUserDeselect,
     onClear,
     onBack,
+    activeOnly,
   }) => {
     const boardMemberships = useSelector(selectors.selectMembershipsForCurrentBoard);
+    const activeMemberUserIds = useSelector(selectors.selectActiveMemberUserIdsForCurrentBoard);
+    const items = activeOnly
+      ? boardMemberships.filter(({ user }) => activeMemberUserIds.includes(user.id))
+      : boardMemberships;
 
     return (
       <PureBoardMembershipsStep
-        items={boardMemberships}
+        items={items}
         currentUserIds={currentUserIds}
         title={title}
         clearButtonContent={clearButtonContent}
@@ -45,6 +50,7 @@ BoardMembershipsStep.propTypes = {
   onUserDeselect: PropTypes.func.isRequired,
   onClear: PropTypes.func,
   onBack: PropTypes.func,
+  activeOnly: PropTypes.bool,
 };
 
 BoardMembershipsStep.defaultProps = {
@@ -52,6 +58,7 @@ BoardMembershipsStep.defaultProps = {
   clearButtonContent: undefined,
   onClear: undefined,
   onBack: undefined,
+  activeOnly: false,
 };
 
 export default BoardMembershipsStep;
