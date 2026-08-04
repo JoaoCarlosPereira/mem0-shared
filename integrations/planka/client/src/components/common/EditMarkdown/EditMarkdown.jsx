@@ -17,8 +17,6 @@ import MarkdownEditor from '../MarkdownEditor';
 
 import styles from './EditMarkdown.module.scss';
 
-const MAX_LENGTH = 1048576;
-
 const EditMarkdown = React.memo(({ defaultValue, draftValue, onUpdate, onClose }) => {
   const defaultMode = useSelector((state) => selectors.selectCurrentUser(state).defaultEditorMode);
 
@@ -41,17 +39,15 @@ const EditMarkdown = React.memo(({ defaultValue, draftValue, onUpdate, onClose }
     [dispatch],
   );
 
-  const isExceeded = value.length > MAX_LENGTH;
-
   const submit = useCallback(() => {
     const cleanValue = value.trim() || null;
 
-    if (!isExceeded && cleanValue !== defaultValue) {
+    if (cleanValue !== defaultValue) {
       onUpdate(cleanValue);
     }
 
-    onClose(isExceeded ? cleanValue : null);
-  }, [onUpdate, onClose, defaultValue, value, isExceeded]);
+    onClose(null);
+  }, [onUpdate, onClose, defaultValue, value]);
 
   const handleChange = useCallback((nextValue) => {
     setValue(nextValue);
@@ -86,7 +82,7 @@ const EditMarkdown = React.memo(({ defaultValue, draftValue, onUpdate, onClose }
         ref={fieldRef}
         defaultValue={value}
         defaultMode={defaultMode}
-        isError={isExceeded}
+        isError={false}
         onChange={handleChange}
         onSubmit={handleSubmit}
         onCancel={handleCancel}
@@ -98,14 +94,7 @@ const EditMarkdown = React.memo(({ defaultValue, draftValue, onUpdate, onClose }
             {...clickAwayProps} // eslint-disable-line react/jsx-props-no-spreading
             positive
             ref={handleSubmitButtonRef}
-            content={
-              isExceeded
-                ? t('common.contentExceedsLimit', {
-                    limit: '1MB',
-                  })
-                : t('action.save')
-            }
-            disabled={isExceeded}
+            content={t('action.save')}
           />
           <Button
             {...clickAwayProps} // eslint-disable-line react/jsx-props-no-spreading
