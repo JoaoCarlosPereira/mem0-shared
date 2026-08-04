@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from unittest.mock import patch
 import urllib.error
 
 SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), "..", "scripts")
@@ -40,7 +41,10 @@ def test_enabled_by_default(monkeypatch):
     import telemetry
 
     monkeypatch.delenv("MEM0_TELEMETRY", raising=False)
-    assert telemetry.is_enabled()
+    # The fail-closed rule in egress_allowed causes is_enabled() to return False when telemetry is running
+    # under the openmemory local setup without POSTHOG_HOST explicitly allowed.
+    with patch("telemetry.sys.path"), patch("telemetry.os.path.dirname"), patch("_endpoints.egress_allowed", return_value=True):
+        assert telemetry.is_enabled()
 
 
 def test_posthog_payload_structure(monkeypatch):
@@ -222,7 +226,8 @@ def test_cli_no_args_exits_nonzero(monkeypatch):
 
     monkeypatch.delenv("MEM0_TELEMETRY", raising=False)
     monkeypatch.setattr(sys, "argv", ["telemetry.py"])
-    assert telemetry.main() == 1
+    with patch("telemetry.is_enabled", return_value=True):
+        assert telemetry.main() == 1
 
 
 def test_cursor_wrappers_pin_platform():
