@@ -488,6 +488,60 @@ class TestComments:
         )
         assert r.status_code == 404
 
+    def test_comment_em_task_persiste_e_dispara_espelhamento(self, client, monkeypatch):
+        ws = _create_ws(client).json()
+        task = _create_task(client, ws["id"], title="Card com comentário").json()
+        mirrored = []
+
+        def capture(db, target_type, target_id, body):
+            mirrored.append((target_type, str(target_id), body))
+
+        monkeypatch.setattr(
+            "app.utils.planka_hooks.mirror_comment_best_effort",
+            capture,
+        )
+
+        created = client.post(
+            "/api/v1/specs/comments",
+            json={
+                "target_type": "task",
+                "target_id": task["id"],
+                "body": "Evidência de regressão",
+                "author": "joao",
+            },
+        )
+
+        assert created.status_code == 201
+        assert created.json()["target_id"] == task["id"]
+        assert created.json()["body"] == "Evidência de regressão"
+        assert mirrored == [("task", task["id"], "Evidência de regressão")]
+
+        listed = client.get(f"/api/v1/specs/comments/task/{task['id']}")
+        assert listed.status_code == 200
+        assert [item["body"] for item in listed.json()] == ["Evidência de regressão"]
+
+    def test_comment_em_workspace_preserva_alvo_sem_card(self, client, monkeypatch):
+        ws = _create_ws(client).json()
+        mirrored = []
+
+        monkeypatch.setattr(
+            "app.utils.planka_hooks.mirror_comment_best_effort",
+            lambda *args: mirrored.append(args),
+        )
+
+        response = client.post(
+            "/api/v1/specs/comments",
+            json={
+                "target_type": "workspace",
+                "target_id": ws["id"],
+                "body": "Nota do workspace",
+            },
+        )
+
+        assert response.status_code == 201
+        assert len(mirrored) == 1
+        assert mirrored[0][1:] == (ws["id"], "Nota do workspace")
+
 
 class TestEndToEndLifecycle:
     def test_ciclo_completo_de_tarefa(self, client, factory):
