@@ -159,6 +159,24 @@ export const selectMembershipsForCurrentBoard = createSelector(
   },
 );
 
+export const selectActiveMemberUserIdsForCurrentBoard = createSelector(
+  orm,
+  (state) => selectPath(state).boardId,
+  ({ Board }, id) => {
+    if (!id) {
+      return id;
+    }
+
+    const boardModel = Board.withId(id);
+
+    if (!boardModel) {
+      return boardModel;
+    }
+
+    return boardModel.activeMemberUserIds;
+  },
+);
+
 export const selectMemberUserIdsForCurrentBoard = createSelector(
   orm,
   (state) => selectPath(state).boardId,
@@ -477,6 +495,7 @@ export default {
   selectIsBoardWithIdAvailableForCurrentUser,
   selectCurrentBoard,
   selectMembershipsForCurrentBoard,
+  selectActiveMemberUserIdsForCurrentBoard,
   selectMemberUserIdsForCurrentBoard,
   selectCurrentUserMembershipForCurrentBoard,
   selectLabelsForCurrentBoard,
