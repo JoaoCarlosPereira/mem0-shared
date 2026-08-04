@@ -493,8 +493,8 @@ class TestComments:
         task = _create_task(client, ws["id"], title="Card com comentário").json()
         mirrored = []
 
-        def capture(db, target_type, target_id, body):
-            mirrored.append((target_type, str(target_id), body))
+        def capture(db, target_type, target_id, body, author):
+            mirrored.append((target_type, str(target_id), body, author))
 
         monkeypatch.setattr(
             "app.utils.planka_hooks.mirror_comment_best_effort",
@@ -514,7 +514,7 @@ class TestComments:
         assert created.status_code == 201
         assert created.json()["target_id"] == task["id"]
         assert created.json()["body"] == "Evidência de regressão"
-        assert mirrored == [("task", task["id"], "Evidência de regressão")]
+        assert mirrored == [("task", task["id"], "Evidência de regressão", "joao")]
 
         listed = client.get(f"/api/v1/specs/comments/task/{task['id']}")
         assert listed.status_code == 200
