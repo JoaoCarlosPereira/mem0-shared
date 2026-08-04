@@ -151,7 +151,6 @@
  */
 
 const { idInput } = require('../../../utils/inputs');
-const getActiveMemberUserIds = require('../../helpers/boards/get-active-member-user-ids');
 
 const Errors = {
   BOARD_NOT_FOUND: {
@@ -222,7 +221,7 @@ module.exports = {
     const taskListIds = sails.helpers.utils.mapRecords(taskLists);
     const tasks = await Task.qm.getByTaskListIds(taskListIds);
 
-    const activeMemberUserIds = getActiveMemberUserIds({
+    const activeMemberUserIds = await sails.helpers.boards.getActiveMemberUserIds.with({
       cards,
       cardMemberships,
       comments,

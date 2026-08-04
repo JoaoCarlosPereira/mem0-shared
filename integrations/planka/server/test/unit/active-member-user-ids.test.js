@@ -1,17 +1,20 @@
 const assert = require('assert');
 const { describe, it } = require('node:test');
 
-const getActiveMemberUserIds = require('../../api/helpers/boards/get-active-member-user-ids');
 
-global._ = {
-  uniq(values) {
-    return [...new Set(values)];
-  },
+global.sails = {
+  helpers: {
+    boards: {
+      getActiveMemberUserIds: {
+        with: require('../../api/helpers/boards/get-active-member-user-ids').fn
+      }
+    }
+  }
 };
 
 describe('get-active-member-user-ids', () => {
-  it('returns users who interacted with cards through supported activity types', () => {
-    const result = getActiveMemberUserIds({
+  it('returns users who interacted with cards through supported activity types', async () => {
+    const result = await sails.helpers.boards.getActiveMemberUserIds.with({
       cards: [{ creatorUserId: 'creator-1' }],
       cardMemberships: [{ userId: 'member-1' }],
       comments: [{ userId: 'commenter-1' }],
@@ -30,8 +33,8 @@ describe('get-active-member-user-ids', () => {
     ]);
   });
 
-  it('removes duplicates and ignores missing actors', () => {
-    const result = getActiveMemberUserIds({
+  it('removes duplicates and ignores missing actors', async () => {
+    const result = await sails.helpers.boards.getActiveMemberUserIds.with({
       cards: [{ creatorUserId: 'user-1' }, { creatorUserId: 'user-1' }, { creatorUserId: null }],
       cardMemberships: [{ userId: 'user-1' }, { userId: undefined }],
       comments: [],
