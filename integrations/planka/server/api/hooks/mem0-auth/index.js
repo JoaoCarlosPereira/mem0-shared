@@ -26,7 +26,7 @@ module.exports = function defineMem0AuthHook(sails) {
   let cachedAdminAt = 0;
   /** userId → last ensure timestamp (ms); re-sync to pick up boards novos. */
   const membershipEnsuredAt = new Map();
-  const MEMBERSHIP_TTL_MS = 30_000;
+  const MEMBERSHIP_TTL_MS = 30000;
 
   const getPgClient = async () => {
     if (pgClient) return pgClient;
@@ -50,7 +50,7 @@ module.exports = function defineMem0AuthHook(sails) {
 
   const resolveServiceUser = async () => {
     const now = Date.now();
-    if (cachedAdminUser && now - cachedAdminAt < 60_000) {
+    if (cachedAdminUser && now - cachedAdminAt < 60000) {
       return cachedAdminUser;
     }
     const email = String(process.env.DEFAULT_ADMIN_EMAIL || '')
@@ -108,28 +108,27 @@ module.exports = function defineMem0AuthHook(sails) {
           });
         }
 
-        if (typeof Board === 'undefined' || !Board.qm || typeof BoardMembership === 'undefined') {
-          continue;
-        }
-        // eslint-disable-next-line no-await-in-loop
-        const boards = await Board.qm.getByProjectIds([project.id]);
-        // eslint-disable-next-line no-restricted-syntax
-        for (const board of boards || []) {
+        if (typeof Board !== 'undefined' && Board.qm && typeof BoardMembership !== 'undefined') {
           // eslint-disable-next-line no-await-in-loop
-          const existingBm = await BoardMembership.qm.getOneByBoardIdAndUserId(board.id, user.id);
-          if (!existingBm) {
+          const boards = await Board.qm.getByProjectIds([project.id]);
+          // eslint-disable-next-line no-restricted-syntax
+          for (const board of boards || []) {
             // eslint-disable-next-line no-await-in-loop
-            await BoardMembership.qm.createOne({
-              projectId: project.id,
-              boardId: board.id,
-              userId: user.id,
-              role: BoardMembership.Roles.EDITOR,
-            });
-          } else if (existingBm.role !== BoardMembership.Roles.EDITOR) {
-            // eslint-disable-next-line no-await-in-loop
-            await BoardMembership.qm.updateOne(existingBm.id, {
-              role: BoardMembership.Roles.EDITOR,
-            });
+            const existingBm = await BoardMembership.qm.getOneByBoardIdAndUserId(board.id, user.id);
+            if (!existingBm) {
+              // eslint-disable-next-line no-await-in-loop
+              await BoardMembership.qm.createOne({
+                projectId: project.id,
+                boardId: board.id,
+                userId: user.id,
+                role: BoardMembership.Roles.EDITOR,
+              });
+            } else if (existingBm.role !== BoardMembership.Roles.EDITOR) {
+              // eslint-disable-next-line no-await-in-loop
+              await BoardMembership.qm.updateOne(existingBm.id, {
+                role: BoardMembership.Roles.EDITOR,
+              });
+            }
           }
         }
       }
@@ -177,6 +176,7 @@ module.exports = function defineMem0AuthHook(sails) {
           async fn(req, res, next) {
             const result = authenticateMem0Request({
               authorizationHeader: req.headers && req.headers.authorization,
+              path: req.path,
               env: process.env,
             });
 
@@ -232,11 +232,7 @@ module.exports = function defineMem0AuthHook(sails) {
               const serviceUser = await resolveServiceUser();
               if (serviceUser) {
                 req.currentUser = serviceUser;
-              } else if (
-                !req.currentUser &&
-                typeof User !== 'undefined' &&
-                User.INTERNAL
-              ) {
+              } else if (!req.currentUser && typeof User !== 'undefined' && User.INTERNAL) {
                 req.currentUser = User.INTERNAL;
               }
             }
