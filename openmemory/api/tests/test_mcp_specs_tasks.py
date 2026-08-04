@@ -45,6 +45,8 @@ def _wire(factory, monkeypatch):
     monkeypatch.setattr(mcp_server, "SessionLocal", factory)
     mcp_server.user_id_var.set("DESKTOP-01")
     mcp_server.client_name_var.set("cursor")
+    mcp_server.auth_method_var.set("legacy")
+    mcp_server.auth_user_var.set("")
     yield
 
 
@@ -158,6 +160,18 @@ class TestComments:
         _, task = await _mk_ws_and_task()
         out = json.loads(await add_spec_comment("task", task["id"], "comentário"))
         assert out["body"] == "comentário"
+        assert out["author"] == "DESKTOP-01"
+
+    @pytest.mark.asyncio
+    async def test_add_comment_com_agent_token_preserva_pessoa_autenticada(self):
+        _, task = await _mk_ws_and_task()
+        person_id = str(uuid.uuid4())
+        mcp_server.auth_method_var.set("agent_token")
+        mcp_server.auth_user_var.set(person_id)
+
+        out = json.loads(await add_spec_comment("task", task["id"], "comentário"))
+
+        assert out["author"] == person_id
 
     @pytest.mark.asyncio
     async def test_add_comment_target_inexistente_error(self):
