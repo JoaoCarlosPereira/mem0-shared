@@ -1479,6 +1479,10 @@ def create_comment(
     db.add(comment)
     db.commit()
     db.refresh(comment)
+
+    from app.utils.planka_hooks import mirror_comment_best_effort
+
+    mirror_comment_best_effort(db, payload.target_type.value, payload.target_id, payload.body)
     return comment
 
 
