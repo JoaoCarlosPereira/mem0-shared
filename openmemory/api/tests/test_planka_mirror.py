@@ -83,6 +83,7 @@ class _PlankaRouter:
         self.calls: list[tuple[str, str]] = []
         self.list_names: list[str] = []
         self.assignee_calls: list[tuple[str, dict]] = []
+        self.comment_calls: list[tuple[str, dict]] = []
         self._seq = 1000
         self.fail_next: dict[str, int] | None = None
         self.timeout_paths: set[str] = set()
@@ -121,6 +122,14 @@ class _PlankaRouter:
 
         if method == "POST" and path.startswith("/api/lists/") and path.endswith("/cards"):
             return _json_response(200, {"item": {"id": self._next_id(), "name": "c"}})
+
+        if method == "POST" and path.startswith("/api/cards/") and path.endswith("/comments"):
+            try:
+                body = json.loads(request.content.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                body = {}
+            self.comment_calls.append((path, body))
+            return _json_response(200, {"item": {"id": self._next_id(), "text": body.get("text")}})
 
         if method == "PUT" and path.endswith("/mem0-assignee"):
             try:
@@ -318,6 +327,28 @@ class TestMirrorTask:
             .count()
             == 1
         )
+
+    @pytest.mark.asyncio
+    async def test_mirror_comment_posts_to_mapped_task_card(
+        self, db_session, client, planka_router
+    ):
+        ws = _mk_workspace(db_session)
+        task = TaskCard(
+            workspace_id=ws.id,
+            title="Comentário via MCP",
+            status=TaskCardStatus.tasks,
+        )
+        db_session.add(task)
+        db_session.commit()
+        db_session.refresh(task)
+
+        await client.mirror_task(task.id)
+        await client.mirror_comment("task", task.id, "Evidência do teste")
+
+        assert len(planka_router.comment_calls) == 1
+        path, body = planka_router.comment_calls[0]
+        assert path.startswith("/api/cards/") and path.endswith("/comments")
+        assert body == {"text": "Evidência do teste"}
 
     @pytest.mark.asyncio
     async def test_mirror_task_syncs_assignee_membership(
