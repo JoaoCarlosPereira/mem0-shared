@@ -166,7 +166,7 @@ export function KanbanEmbedCanvas({ boardId: propBoardId, reloadToken = 0 }: Pro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiSessionReady]);
 
-  // reloadToken explícito (criar task etc.) — único caso de remount forçado.
+  // reloadToken explícito (criar task etc.) — remount com JWT novo.
   const prevReload = useRef(reloadToken);
   useEffect(() => {
     if (prevReload.current === reloadToken) return;
@@ -175,6 +175,17 @@ export function KanbanEmbedCanvas({ boardId: propBoardId, reloadToken = 0 }: Pro
     void hardLoad(mountBoardRef.current ?? activeBoardId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadToken, apiSessionReady]);
+
+  // O botão Atualizar do shell precisa renovar o JWT do iframe. Isso também
+  // recupera o canvas depois que o sidecar PLANKA reinicia e perde o socket.
+  useEffect(() => {
+    const onReload = () => {
+      if (!apiSessionReady) return;
+      void hardLoad(mountBoardRef.current ?? activeBoardId);
+    };
+    window.addEventListener("mem0-kanban-reload", onReload);
+    return () => window.removeEventListener("mem0-kanban-reload", onReload);
+  }, [activeBoardId, apiSessionReady, hardLoad]);
 
   // Deep-link Next: prop mudou → hard load só se for outro quadro.
   useEffect(() => {
