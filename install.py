@@ -45,7 +45,7 @@ Atualização (preserva memórias):
   python install.py --update --no-pull                # rebuild sem 'git pull' (código atual)
   python install.py --update --backup-dir /srv/mem0-backups   # define o destino dos .zip
 
-  O --update faz: git pull (best-effort) → rebuild só de API/UI → migrations
+  O --update faz: git pull (ou --no-pull explícito) → rebuild só de API/UI → migrations
   aditivas (produção) → recria os containers de app no lugar → sobe sidecars
   (agentregistry/planka, profile ``sidecars``). NUNCA remove volumes, então
   Qdrant + SQLite/PostgreSQL e os segredos do .env permanecem intactos.
@@ -1184,27 +1184,29 @@ def wait_for_pgbouncer(compose_file, attempts=60):
 # Atualização in-place (preserva memórias) — flag --update
 # --------------------------------------------------------------------------- #
 def git_pull():
-    """Atualiza o código com 'git pull --ff-only' (best-effort).
+    """Atualiza o código com ``git pull --ff-only`` e informa se aplicou.
 
-    Não é fatal: se não for um repositório git, não houver git, a árvore estiver
-    suja ou o fast-forward falhar, avisa e segue com o código já presente (o
-    usuário pode ter atualizado manualmente).
+    Um update que continua após um pull recusado pode reconstruir imagens com
+    código antigo, principalmente quando há alterações rastreadas locais. O
+    chamador decide se deve abortar ou permitir explicitamente ``--no-pull``.
     """
     if not (ROOT / ".git").exists():
         warn("Diretório não é um repositório git — pulando 'git pull' "
              "(atualize o código manualmente se necessário).")
-        return
+        return False
     if not shutil.which("git"):
         warn("git não encontrado no PATH — pulando 'git pull'.")
-        return
+        return False
     log("Atualizando o código (git pull --ff-only)")
     r = run(["git", "pull", "--ff-only"], cwd=str(ROOT))
     if r.returncode != 0:
         warn("'git pull --ff-only' não aplicou (árvore com alterações locais, "
-             "sem upstream configurado ou divergência). Seguindo com o código "
-             "atual — atualize manualmente se quiser a versão mais nova.")
-    else:
-        ok("Código atualizado para a versão mais recente.")
+             "sem upstream configurado ou divergência). O update será abortado "
+             "para não reconstruir imagens com código potencialmente antigo. "
+             "Use --no-pull se quiser atualizar somente o checkout atual.")
+        return False
+    ok("Código atualizado para a versão mais recente.")
+    return True
 
 
 def _rebuild_with_retry(dc):
@@ -1295,7 +1297,13 @@ def run_update(args):
 
     # 1. Código novo (opcional) ----------------------------------------------
     if not args.no_pull:
-        git_pull()
+        if not git_pull():
+            die(
+                "Não foi possível atualizar o checkout com 'git pull --ff-only'. "
+                "Nenhum container foi parado. Resolva a árvore Git e rode "
+                "novamente, ou use --no-pull para aplicar explicitamente o "
+                "código local."
+            )
     else:
         log("'git pull' pulado (--no-pull): usando o código já presente.")
 

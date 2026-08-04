@@ -138,3 +138,33 @@ class TestInstallerWiringHardening:
         assert "wait_for_ui(" in src
         assert "ensure_docker_access(" in src
         assert 'set_env(compose_env, "AUTH_UI_REQUIRED", "0")' in src
+
+
+class TestInstallerUpdatePull:
+    def test_git_pull_reports_failure(self, monkeypatch):
+        calls = []
+
+        class Result:
+            returncode = 1
+
+        monkeypatch.setattr(install, "shutil", SimpleNamespace(which=lambda _: "/usr/bin/git"))
+        monkeypatch.setattr(install, "run", lambda *args, **kwargs: calls.append((args, kwargs)) or Result())
+        monkeypatch.setattr(install, "ROOT", _ROOT.parent)
+
+        assert install.git_pull() is False
+        assert calls[0][0][0] == ["git", "pull", "--ff-only"]
+
+    def test_git_pull_success_is_reported(self, monkeypatch):
+        class Result:
+            returncode = 0
+
+        monkeypatch.setattr(install, "shutil", SimpleNamespace(which=lambda _: "/usr/bin/git"))
+        monkeypatch.setattr(install, "run", lambda *args, **kwargs: Result())
+        monkeypatch.setattr(install, "ROOT", _ROOT.parent)
+
+        assert install.git_pull() is True
+
+    def test_update_requires_explicit_no_pull_after_pull_failure(self):
+        src = _INSTALL_PATH.read_text(encoding="utf-8")
+        assert "if not git_pull():" in src
+        assert "use --no-pull" in src
