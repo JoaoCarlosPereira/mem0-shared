@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from app.models import SpecPlankaIdMap, TaskCard, TaskCardStatus
-from app.utils.planka import ENTITY_TASK
+from app.models import SpecPlankaIdMap, SpecWorkspace, SpecWorkspaceStatus, TaskCard, TaskCardStatus
+from app.utils.planka import ENTITY_PROJECT, ENTITY_TASK
 from app.utils.task_lock import (
     ClaimTaskResult,
     TaskStatusPolicyError,
@@ -27,6 +28,71 @@ class PlankaBridgeError(Exception):
         self.code = code
         self.detail = detail
         super().__init__(detail)
+
+
+def reconcile_planka_board_lifecycle(
+    db: Session,
+    *,
+    planka_card_id: str,
+    actor: str,
+) -> Optional[dict]:
+    """Conclui/reabre o workspace pela posição real dos cards no PLANKA."""
+    try:
+        state = db.execute(
+            sa.text(
+                """
+                SELECT b.project_id::text AS project_id,
+                       count(*) AS total,
+                       count(*) FILTER (
+                         WHERE lower(coalesce(l.name, '')) NOT IN ('sdd', 'concluído', 'concluido')
+                       ) AS outside_allowed
+                  FROM planka.card moved
+                  JOIN planka.list moved_list ON moved_list.id = moved.list_id
+                  JOIN planka.board b ON b.id = moved_list.board_id
+                  JOIN planka.list l ON l.board_id = b.id
+                  JOIN planka.card c ON c.list_id = l.id
+                 WHERE moved.id::text = :card_id
+                 GROUP BY b.project_id
+                """
+            ),
+            {"card_id": planka_card_id},
+        ).mappings().first()
+    except Exception:  # SQLite/unit tests and installations without the PLANKA schema
+        logger.debug("PLANKA board lifecycle query unavailable", exc_info=True)
+        return None
+    if not state or int(state["total"] or 0) == 0:
+        return None
+
+    project_map = (
+        db.query(SpecPlankaIdMap)
+        .filter(
+            SpecPlankaIdMap.entity_type == ENTITY_PROJECT,
+            SpecPlankaIdMap.planka_id == state["project_id"],
+        )
+        .first()
+    )
+    if project_map is None:
+        return None
+    workspace = db.get(SpecWorkspace, project_map.spec_id)
+    if workspace is None or workspace.status == SpecWorkspaceStatus.arquivado:
+        return None
+
+    completed = int(state["outside_allowed"] or 0) == 0
+    if completed:
+        target = SpecWorkspaceStatus.concluido
+    elif workspace.status == SpecWorkspaceStatus.concluido:
+        target = SpecWorkspaceStatus.ativo
+    else:
+        return {
+            "workspace_id": str(workspace.id),
+            "status": workspace.status.value,
+            "completed": False,
+        }
+    if workspace.status != target:
+        from app.utils.workspace_lifecycle import apply_status_change
+
+        apply_status_change(db, workspace, target, actor=actor or "planka-ui")
+    return {"workspace_id": str(workspace.id), "status": target.value, "completed": completed}
 
 
 def _status_for_list_id(db: Session, planka_list_id: str) -> Optional[str]:

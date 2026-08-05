@@ -977,7 +977,11 @@ def planka_card_moved(
     db: Session = Depends(get_db),
 ) -> PlankaCardMoveResponse:
     """Bridge PLANKA → Spec (ADR-007): aplica claim/release/status após move humano."""
-    from app.utils.planka_bridge import PlankaBridgeError, apply_planka_card_move
+    from app.utils.planka_bridge import (
+        PlankaBridgeError,
+        apply_planka_card_move,
+        reconcile_planka_board_lifecycle,
+    )
 
     _assert_planka_bridge_token(authorization)
     actor = (payload.actor or resolve_spec_actor() or "ui-user").strip()
@@ -989,10 +993,26 @@ def planka_card_moved(
             actor=actor,
         )
     except PlankaBridgeError as exc:
+        lifecycle = reconcile_planka_board_lifecycle(
+            db,
+            planka_card_id=payload.planka_card_id.strip(),
+            actor=actor,
+        )
+        if lifecycle and lifecycle["completed"]:
+            return PlankaCardMoveResponse(
+                applied=True,
+                reason="workspace_completed",
+                status="concluido",
+            )
         raise HTTPException(
             status_code=exc.status_code,
             detail={"code": exc.code, "detail": exc.detail},
         ) from exc
+    reconcile_planka_board_lifecycle(
+        db,
+        planka_card_id=payload.planka_card_id.strip(),
+        actor=actor,
+    )
     return PlankaCardMoveResponse(**result)
 
 
