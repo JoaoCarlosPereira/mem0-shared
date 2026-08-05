@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/agentregistry-dev/agentregistry/internal/registry/api/handlers/v0/skillartifact"
+	"github.com/agentregistry-dev/agentregistry/pkg/registry/artifact"
 	pkgdb "github.com/agentregistry-dev/agentregistry/pkg/registry/database"
 	"github.com/agentregistry-dev/agentregistry/pkg/registry/resource"
 	"github.com/agentregistry-dev/agentregistry/pkg/types"
@@ -163,4 +164,25 @@ func TestGetArtifactMapsErrorsAndAuthorization(t *testing.T) {
 			assert.Equal(t, tt.want, resp.Code, resp.Body.String())
 		})
 	}
+}
+
+func TestDownloadSkillPackageReturnsCompleteZip(t *testing.T) {
+	tarGz, err := artifact.PackFiles(map[string][]byte{
+		"SKILL.md":           []byte("# Skill em português"),
+		"references/guia.md": []byte("Conteúdo da referência."),
+	})
+	require.NoError(t, err)
+	store := &memoryStore{artifact: types.SkillArtifact{
+		Content: io.NopCloser(bytes.NewReader(tarGz)),
+		Size:    int64(len(tarGz)),
+		SHA256:  func() []byte { sum := sha256.Sum256(tarGz); return sum[:] }(),
+	}}
+	_, api := humatest.New(t)
+	skillartifact.Register(api, skillartifact.Config{BasePrefix: "/v0", Store: store})
+
+	resp := api.Get("/v0/skills/demo/v1/download")
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	assert.Equal(t, "application/zip", resp.Header().Get("Content-Type"))
+	assert.Contains(t, resp.Header().Get("Content-Disposition"), "demo-v1.zip")
+	assert.Greater(t, len(resp.Body.Bytes()), 0)
 }

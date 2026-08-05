@@ -4,6 +4,7 @@ package types
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"reflect"
 
@@ -42,6 +43,34 @@ type AuthorizeInput struct {
 // nil to allow; a huma error to set the response status; any other
 // error to surface as 500. Wired into resource.Config.Authorize.
 type Authorizer func(ctx context.Context, in AuthorizeInput) error
+
+// SkillArtifactKey identifies one complete Skill package.
+type SkillArtifactKey struct {
+	Namespace string
+	Name      string
+	Tag       string
+}
+
+// SkillArtifact is the transport shape used by the HTTP artifact endpoints.
+// Content is owned by the caller and must be closed after streaming.
+type SkillArtifact struct {
+	Content io.ReadCloser
+	Size    int64
+	SHA256  []byte
+}
+
+// SkillArtifactPutOptions carries transport-level integrity metadata.
+type SkillArtifactPutOptions struct {
+	Size   int64
+	SHA256 []byte
+}
+
+// SkillArtifactStore persists complete Skill packages independently from the
+// declarative Skill metadata row.
+type SkillArtifactStore interface {
+	Put(ctx context.Context, key SkillArtifactKey, content io.Reader, opts SkillArtifactPutOptions) (SkillArtifact, error)
+	Get(ctx context.Context, key SkillArtifactKey) (SkillArtifact, error)
+}
 
 // ListFilter returns a SQL predicate fragment + bind args to
 // inject into the list query as ListOpts.ExtraWhere / ExtraArgs. Wired

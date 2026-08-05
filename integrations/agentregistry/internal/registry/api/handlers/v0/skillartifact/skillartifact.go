@@ -2,6 +2,7 @@
 package skillartifact
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -10,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime"
 	"net/http"
 	"net/url"
@@ -19,6 +21,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/agentregistry-dev/agentregistry/pkg/api/v1alpha1"
+	"github.com/agentregistry-dev/agentregistry/pkg/registry/artifact"
 	pkgdb "github.com/agentregistry-dev/agentregistry/pkg/registry/database"
 	"github.com/agentregistry-dev/agentregistry/pkg/registry/resource"
 	"github.com/agentregistry-dev/agentregistry/pkg/types"
@@ -140,6 +143,71 @@ func Register(api huma.API, cfg Config) {
 			hctx.SetHeader("Digest", digestHeader(artifact.SHA256))
 			hctx.SetHeader("X-Content-Type-Options", "nosniff")
 			_, _ = io.Copy(hctx.BodyWriter(), artifact.Content)
+		}}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "download-skill-package",
+		Method:      http.MethodGet,
+		Path:        strings.TrimRight(cfg.BasePrefix, "/") + "/skills/{name}/{tag}/download",
+		Summary:     "Download a complete Skill package as ZIP",
+		Tags:        []string{"skills"},
+	}, func(ctx context.Context, in *artifactInput) (*huma.StreamResponse, error) {
+		key, err := resolveKey(in.Namespace, in.Name, in.Tag)
+		if err != nil {
+			return nil, err
+		}
+		if cfg.Authorize != nil {
+			if err := cfg.Authorize(ctx, resource.AuthorizeInput{
+				Verb: "get", Kind: v1alpha1.KindSkill,
+				Namespace: key.Namespace, Name: key.Name, Tag: key.Tag,
+			}); err != nil {
+				return nil, err
+			}
+		}
+		stored, err := cfg.Store.Get(ctx, key)
+		if err != nil {
+			return nil, mapStoreError(err, key, "load")
+		}
+		if stored.Content == nil || stored.Size < 0 {
+			if stored.Content != nil {
+				_ = stored.Content.Close()
+			}
+			return nil, huma.Error500InternalServerError("load Skill package", errors.New("artifact store returned invalid metadata"))
+		}
+		archiveData, readErr := io.ReadAll(io.LimitReader(stored.Content, 32<<20+1))
+		_ = stored.Content.Close()
+		if readErr != nil {
+			return nil, huma.Error500InternalServerError("read Skill artifact", readErr)
+		}
+		files, readErr := artifact.ReadFiles(archiveData)
+		if readErr != nil {
+			return nil, huma.Error500InternalServerError("validate Skill artifact", readErr)
+		}
+		var out bytes.Buffer
+		zw := zip.NewWriter(&out)
+		for _, file := range files {
+			header := &zip.FileHeader{Name: file.Path, Method: zip.Deflate}
+			header.SetMode(fs.FileMode(file.Mode))
+			writer, writeErr := zw.CreateHeader(header)
+			if writeErr != nil {
+				return nil, huma.Error500InternalServerError("create Skill ZIP", writeErr)
+			}
+			if _, writeErr = writer.Write(file.Content); writeErr != nil {
+				return nil, huma.Error500InternalServerError("write Skill ZIP", writeErr)
+			}
+		}
+		if err := zw.Close(); err != nil {
+			return nil, huma.Error500InternalServerError("close Skill ZIP", err)
+		}
+		return &huma.StreamResponse{Body: func(hctx huma.Context) {
+			hctx.SetHeader("Content-Type", "application/zip")
+			hctx.SetHeader("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{
+				"filename": key.Name + "-" + key.Tag + ".zip",
+			}))
+			hctx.SetHeader("Content-Length", strconv.Itoa(out.Len()))
+			hctx.SetHeader("X-Content-Type-Options", "nosniff")
+			_, _ = hctx.BodyWriter().Write(out.Bytes())
 		}}, nil
 	})
 }

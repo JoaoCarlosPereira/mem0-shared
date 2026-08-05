@@ -1,5 +1,7 @@
 package v1alpha1
 
+import "fmt"
+
 func (s *Skill) Validate() error {
 	var errs FieldErrors
 	errs = append(errs, ValidateObjectMeta(s.Metadata)...)
@@ -13,6 +15,9 @@ func (s *Skill) Validate() error {
 func validateSkillSpec(s *SkillSpec) FieldErrors {
 	var errs FieldErrors
 	errs.Append("spec.title", validateTitle(s.Title))
+	if s.Language != "" && s.Language != "pt-BR" {
+		errs.Append("spec.language", fmt.Errorf("%w: Skills da Store devem usar pt-BR", ErrInvalidFormat))
+	}
 	if s.Source != nil {
 		for _, e := range validateRepository(s.Source.Repository) {
 			errs.Append("spec.source."+e.Path, e.Cause)

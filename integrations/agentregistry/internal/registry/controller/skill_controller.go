@@ -14,6 +14,7 @@ import (
 
 	"github.com/agentregistry-dev/agentregistry/internal/cli/common/gitutil"
 	"github.com/agentregistry-dev/agentregistry/pkg/api/v1alpha1"
+	"github.com/agentregistry-dev/agentregistry/pkg/registry/artifact"
 	pkgdb "github.com/agentregistry-dev/agentregistry/pkg/registry/database"
 	"github.com/agentregistry-dev/agentregistry/pkg/registry/v1alpha1store"
 )
@@ -27,7 +28,8 @@ type SkillResolveFunc func(ctx context.Context, repo *v1alpha1.Repository) (comm
 // skill's git source ref to a commit; it defaults to a git ls-remote resolver
 // when nil.
 type SkillControllerDeps struct {
-	Resolve SkillResolveFunc
+	Resolve   SkillResolveFunc
+	Artifacts artifact.ArtifactStore
 }
 
 // defaultSkillResolve pins a skill's git source by resolving its ref (an
@@ -62,12 +64,10 @@ type skillQueueKey struct {
 	Tag       string
 }
 
-// SkillController reconciles Skill resources out of band of the API write: it
-// resolves each skill's pinned git source ref to a concrete commit and records
-// it in SkillStatus.ResolvedSource. It stores NOTHING: the skill content stays
-// at its origin and is materialized from source at deploy time. It mirrors the
-// Plugin controller's resolve-and-pin model, minus the manifest/inventory scan
-// (a skill has no bundle to enumerate).
+// SkillController reconciles Skill resources out of band of the API write. For
+// complete LAN packages it validates the associated immutable artifact and
+// records its digest in SkillStatus.ResolvedSource. Legacy Git-backed Skills
+// continue to use the resolve-and-pin path below.
 //
 // It is level-triggered — every control-plane wakeup (and the resync tick)
 // re-lists skills and enqueues those whose status is behind their generation.
@@ -75,9 +75,10 @@ type skillQueueKey struct {
 // updates), so the controller does not wake itself. Each controller opens its
 // OWN control-plane LISTEN subscription.
 type SkillController struct {
-	Store   skillStore
-	Resolve SkillResolveFunc
-	Wakeups <-chan struct{}
+	Store     skillStore
+	Resolve   SkillResolveFunc
+	Artifacts artifact.ArtifactStore
+	Wakeups   <-chan struct{}
 
 	pool   *pgxpool.Pool
 	resync time.Duration
@@ -109,10 +110,11 @@ func NewSkillController(
 		resolve = defaultSkillResolve
 	}
 	return &SkillController{
-		Store:   store,
-		Resolve: resolve,
-		pool:    pool,
-		resync:  defaultControllerResyncInterval,
+		Store:     store,
+		Resolve:   resolve,
+		Artifacts: deps.Artifacts,
+		pool:      pool,
+		resync:    defaultControllerResyncInterval,
 	}, nil
 }
 
@@ -350,6 +352,39 @@ func (c *SkillController) reconcileKey(ctx context.Context, key skillQueueKey) (
 func (c *SkillController) reconcile(ctx context.Context, sk *v1alpha1.Skill) (string, string, error) {
 	gen := sk.Metadata.Generation
 	ns, name, tag := sk.Metadata.NamespaceOrDefault(), sk.Metadata.Name, sk.Metadata.Tag
+
+	// Uploaded packages are the canonical LAN distribution mechanism. Validate
+	// the associated archive before declaring the Skill ready; provenance in a
+	// legacy git source never overrides a missing or invalid package.
+	if c.Artifacts != nil {
+		stored, artifactErr := c.Artifacts.Get(ctx, artifact.SkillRef{Namespace: ns, Name: name, Tag: tag})
+		if errors.Is(artifactErr, pkgdb.ErrNotFound) {
+			return "pending", "ArtifactMissing", c.patchStatus(ctx, ns, name, tag, gen, func(st *v1alpha1.SkillStatus) {
+				setSkillReady(st, v1alpha1.ConditionFalse, "ArtifactMissing", "skill package has not been uploaded")
+			})
+		}
+		if artifactErr != nil {
+			return "failed", "ArtifactInvalid", c.patchStatus(ctx, ns, name, tag, gen, func(st *v1alpha1.SkillStatus) {
+				setSkillReady(st, v1alpha1.ConditionFalse, "ArtifactInvalid", artifactErr.Error())
+			})
+		}
+		if stored == nil {
+			return "failed", "ArtifactInvalid", c.patchStatus(ctx, ns, name, tag, gen, func(st *v1alpha1.SkillStatus) {
+				setSkillReady(st, v1alpha1.ConditionFalse, "ArtifactInvalid", "artifact store returned an empty package")
+			})
+		}
+		if _, artifactErr = artifact.Validate(stored.Archive); artifactErr != nil {
+			return "failed", "ArtifactInvalid", c.patchStatus(ctx, ns, name, tag, gen, func(st *v1alpha1.SkillStatus) {
+				setSkillReady(st, v1alpha1.ConditionFalse, "ArtifactInvalid", artifactErr.Error())
+			})
+		}
+		return "ready", "ArtifactReady", c.patchStatus(ctx, ns, name, tag, gen, func(st *v1alpha1.SkillStatus) {
+			st.ResolvedSource = &v1alpha1.SkillResolvedSource{Artifact: &v1alpha1.SkillResolvedArtifact{
+				Digest: stored.Digest, MediaType: stored.MediaType, Size: stored.Size,
+			}}
+			setSkillReady(st, v1alpha1.ConditionTrue, "ArtifactReady", "skill package validated")
+		})
+	}
 
 	// A skill with embedded SKILL.md (mem0 LAN catalog) is already materializable —
 	// do not require a git repository URL.

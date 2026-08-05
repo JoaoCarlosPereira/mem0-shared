@@ -66,6 +66,23 @@ export function isRegistryProxyPathAllowed(
     return segments.length === 2 && segments[0] === "v0" && segments[1] === "apply";
   }
 
+  if (normalizedMethod === "PUT") {
+    return (
+      segments.length === 5 &&
+      segments[0] === "v0" &&
+      segments[1] === "skills" &&
+      segments[4] === "artifact"
+    );
+  }
+
+  if (normalizedMethod === "DELETE") {
+    return (
+      segments.length === 4 &&
+      segments[0] === "v0" &&
+      segments[1] === "skills"
+    );
+  }
+
   return false;
 }
 
@@ -81,9 +98,13 @@ export function registryProxyTarget(
 }
 
 function isNativeCatalogReadAllowed(pathSegments: string[]): boolean {
-  if (pathSegments.length < 2 || pathSegments.length > 4) return false;
+  if (pathSegments.length < 2 || pathSegments.length > 5) return false;
   if (pathSegments[0] !== "v0") return false;
-  return REGISTRY_CATALOG_RESOURCES.has(pathSegments[1]);
+  if (!REGISTRY_CATALOG_RESOURCES.has(pathSegments[1])) return false;
+  if (pathSegments.length === 5) {
+    return pathSegments[1] === "skills" && pathSegments[4] === "download";
+  }
+  return true;
 }
 
 function isMcpRegistryCompatReadAllowed(pathSegments: string[]): boolean {

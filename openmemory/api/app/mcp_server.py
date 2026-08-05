@@ -1199,6 +1199,92 @@ async def publish_catalog_resource(
         return f"Error: {e}"
 
 
+@mcp.tool(description="Publica uma Skill completa na Store. Informe nome, descrição em PT-BR e todos os arquivos da pasta, incluindo SKILL.md. Arquivos binários devem usar encoding=base64. Exige pedido explícito e confirm_user_requested=true.")
+async def publish_skill_package(
+    name: str,
+    description: str,
+    files: list[dict[str, Any]],
+    tag: str = "latest",
+    title: str | None = None,
+    language: str = "pt-BR",
+    confirm_user_requested: bool = False,
+) -> str:
+    try:
+        from app.services.skill_packages import SkillPackageInput, build_skill_archive
+        from app.utils.agentregistry import AgentRegistryError
+
+        if not confirm_user_requested:
+            return "Error: publish_skill_package exige pedido explícito do desenvolvedor (confirm_user_requested=true)"
+        payload = SkillPackageInput(
+            name=name,
+            tag=tag,
+            title=title,
+            description=description,
+            language=language,
+            files=files,
+        )
+        archive, inventory = build_skill_archive(payload)
+        client = get_agent_registry_client()
+        resource = {
+            "apiVersion": "ar.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": name, "tag": tag},
+            "spec": {
+                "title": title or name,
+                "description": description,
+                "language": language,
+            },
+        }
+        auth_headers = _registry_auth_headers_for_mcp()
+        apply_result = await client.apply_resource(resource=resource, auth_headers=auth_headers)
+        artifact_result = await client.put_skill_artifact(
+            name=name, tag=tag, archive=archive, auth_headers=auth_headers
+        )
+        return json.dumps(
+            {
+                "resource": resource,
+                "apply": apply_result,
+                "artifact": {
+                    "sha256": hashlib.sha256(archive).hexdigest(),
+                    "size": len(archive),
+                    "files": inventory,
+                    "transport": artifact_result,
+                },
+            },
+            default=str,
+        )
+    except (ValueError, AgentRegistryError) as e:
+        return f"Error: {getattr(e, 'detail', str(e))}"
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
+@mcp.tool(description="Exclui uma Skill completa da Store por nome e tag. Operação irreversível no catálogo e exige pedido explícito com confirm_user_requested=true.")
+async def delete_skill_package(
+    name: str,
+    tag: str = "latest",
+    confirm_user_requested: bool = False,
+) -> str:
+    try:
+        from app.utils.agentregistry import AgentRegistryError
+
+        if not confirm_user_requested:
+            return "Error: delete_skill_package exige pedido explícito do desenvolvedor (confirm_user_requested=true)"
+        result = await get_agent_registry_client().delete_resource(
+            kind="skill",
+            name=name,
+            tag=tag,
+            auth_headers=_registry_auth_headers_for_mcp(),
+        )
+        return json.dumps({"deleted": True, "name": name, "tag": tag, "result": result})
+    except AgentRegistryError as e:
+        return f"Error: {e.detail}"
+    except Exception as e:  # noqa: BLE001
+        logging.exception(e)
+        return f"Error: {e}"
+
+
 @mcp.tool(description="Build a host-applied install recipe for a catalog resource using OpenMemory InstallRecipeService. This does not write files itself, but it starts an install workflow; only call after an explicit developer request to install and pass confirm_user_requested=true.")
 async def get_install_recipe(
     kind: str,

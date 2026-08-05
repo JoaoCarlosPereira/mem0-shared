@@ -12,6 +12,7 @@ import (
 	"github.com/agentregistry-dev/agentregistry/internal/registry/api/handlers/v0/deploymentlogs"
 	v0health "github.com/agentregistry-dev/agentregistry/internal/registry/api/handlers/v0/health"
 	v0ping "github.com/agentregistry-dev/agentregistry/internal/registry/api/handlers/v0/ping"
+	"github.com/agentregistry-dev/agentregistry/internal/registry/api/handlers/v0/skillartifact"
 	v0version "github.com/agentregistry-dev/agentregistry/internal/registry/api/handlers/v0/version"
 	"github.com/agentregistry-dev/agentregistry/internal/registry/config"
 	internaldb "github.com/agentregistry-dev/agentregistry/internal/registry/database"
@@ -46,6 +47,11 @@ type RouteOptions struct {
 	// namespace.
 	// REQUIRED — RegisterRoutes errors when this is nil/empty.
 	Stores Stores
+
+	// SkillArtifactStore enables complete Skill package upload/download routes.
+	// It is optional so the upstream OSS registry can still boot without the
+	// Mem0 Shared artifact tables.
+	SkillArtifactStore types.SkillArtifactStore
 
 	// DeploymentLogResolver supports the Deployment logs subresource. Adapter
 	// Apply/Remove side effects are owned by the Deployment controller, not by
@@ -132,6 +138,7 @@ func RegisterRoutes(
 		opts.DeleteAdmission,
 		opts.ResolverWrapper,
 		opts.ExtraResourceRoutes,
+		opts.SkillArtifactStore,
 	)
 
 	if opts.ExtraRoutes != nil {
@@ -184,6 +191,7 @@ func registerKindRoutes(
 	deleteAdmission types.DeleteAdmission,
 	resolverWrapper func(v1alpha1.ResolverFunc) v1alpha1.ResolverFunc,
 	extraResourceRoutes func(api huma.API, pathPrefix string, ctx types.ResourceRouteContext),
+	skillArtifacts types.SkillArtifactStore,
 ) resource.ApplyConfig {
 	resolver := internaldb.NewResolver(stores)
 	if resolverWrapper != nil {
@@ -195,6 +203,13 @@ func registerKindRoutes(
 	// Per-kind CRUD endpoints — one call per built-in kind, hidden
 	// inside crud.Register.
 	crud.Register(api, basePrefix, stores, resolver, registryValidator, perKind, deleteAdmission)
+	if skillArtifacts != nil {
+		skillartifact.Register(api, skillartifact.Config{
+			BasePrefix: basePrefix,
+			Store:      skillArtifacts,
+			Authorize:  perKind.Authorizers[v1alpha1.KindSkill],
+		})
+	}
 
 	// Deployment-specific endpoints: logs stream (cancel is subsumed
 	// by DesiredState=undeployed + DELETE in the v1alpha1 lifecycle).

@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import io
+import zipfile
 from typing import Literal, Optional
 
 from app.services.store_recipes import (
     InstallRecipeService,
     StoreRecipeError,
 )
+from app.services.skill_packages import SkillPackageInput
+from app.utils.agentregistry import AgentRegistryHttpClient, AgentRegistryError
 from app.utils.logging_context import auth_method_var, auth_user_var, team_var
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/api/v1/store", tags=["store"])
@@ -47,6 +53,133 @@ def _registry_auth_headers(request: Request) -> Optional[dict[str, str]]:
     )
 
     return resolve_registry_auth_headers(auth_headers_from_http_request(request))
+
+
+def get_registry_client() -> AgentRegistryHttpClient:
+    return AgentRegistryHttpClient()
+
+
+@router.put("/skills/{name:path}/{tag}")
+async def publish_skill_package(
+    name: str,
+    tag: str,
+    payload: SkillPackageInput,
+    request: Request,
+    client: AgentRegistryHttpClient = Depends(get_registry_client),
+) -> dict:
+    """Publish a complete Skill directory and its declarative metadata."""
+    if payload.name != name or payload.tag != tag:
+        raise HTTPException(status_code=422, detail="nome/tag do caminho não conferem com o payload")
+    from app.services.skill_packages import build_skill_archive
+
+    try:
+        archive, inventory = build_skill_archive(payload)
+        resource = {
+            "apiVersion": "ar.dev/v1alpha1",
+            "kind": "Skill",
+            "metadata": {"name": name, "tag": tag},
+            "spec": {
+                "title": payload.title or name,
+                "description": payload.description,
+                "language": payload.language,
+            },
+        }
+        auth_headers = _registry_auth_headers(request)
+        apply_result = await client.apply_resource(resource=resource, auth_headers=auth_headers)
+        artifact_result = await client.put_skill_artifact(
+            name=name,
+            tag=tag,
+            archive=archive,
+            auth_headers=auth_headers,
+        )
+        return {
+            "resource": resource,
+            "apply": apply_result,
+            "artifact": {
+                "size": len(archive),
+                "sha256": hashlib.sha256(archive).hexdigest(),
+                "files": inventory,
+                "transport": artifact_result,
+            },
+        }
+    except (ValueError, AgentRegistryError) as exc:
+        status = getattr(exc, "status_code", 422)
+        detail = getattr(exc, "detail", str(exc))
+        raise HTTPException(status_code=status, detail=detail) from exc
+
+
+@router.get("/skills/{name:path}/{tag}/download")
+async def download_skill_package(
+    name: str,
+    tag: str,
+    request: Request,
+    client: AgentRegistryHttpClient = Depends(get_registry_client),
+) -> Response:
+    """Download the complete Skill directory as a ZIP file."""
+    try:
+        data, headers = await client.get_skill_download(
+            name=name,
+            tag=tag,
+            auth_headers=_registry_auth_headers(request),
+        )
+    except AgentRegistryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": headers.get(
+                "content-disposition", f'attachment; filename="{name}-{tag}.zip"'
+            ),
+            "X-Content-Type-Options": "nosniff",
+            "X-Skill-SHA256": hashlib.sha256(data).hexdigest(),
+        },
+    )
+
+
+@router.get("/skills/{name:path}/{tag}/files")
+async def list_skill_package_files(
+    name: str,
+    tag: str,
+    request: Request,
+    client: AgentRegistryHttpClient = Depends(get_registry_client),
+) -> dict:
+    """Return the ZIP inventory for the UI file tree."""
+    try:
+        data, _ = await client.get_skill_download(
+            name=name,
+            tag=tag,
+            auth_headers=_registry_auth_headers(request),
+        )
+    except AgentRegistryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        files = [
+            {"path": info.filename, "size": info.file_size}
+            for info in archive.infolist()
+            if not info.is_dir()
+        ]
+    return {"name": name, "tag": tag, "sha256": hashlib.sha256(data).hexdigest(), "files": files}
+
+
+@router.delete("/skills/{name:path}/{tag}")
+async def delete_skill_package(
+    name: str,
+    tag: str,
+    request: Request,
+    client: AgentRegistryHttpClient = Depends(get_registry_client),
+) -> dict:
+    """Delete one Skill tag through AgentRegistry authorization."""
+    try:
+        result = await client.delete_resource(
+            kind="skill",
+            name=name,
+            tag=tag,
+            auth_headers=_registry_auth_headers(request),
+        )
+    except AgentRegistryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return {"deleted": True, "name": name, "tag": tag, "result": result}
 
 
 @router.post("/install-recipes")

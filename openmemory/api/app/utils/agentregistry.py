@@ -8,6 +8,8 @@ the AgentRegistry REST API.
 from __future__ import annotations
 
 import json
+import base64
+import hashlib
 import os
 from typing import Any, Optional
 from urllib.parse import quote
@@ -137,6 +139,68 @@ class AgentRegistryHttpClient:
             auth_headers=auth_headers,
         )
 
+    async def put_skill_artifact(
+        self,
+        *,
+        name: str,
+        tag: str,
+        archive: bytes,
+        namespace: str = "default",
+        auth_headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
+        safe_name = validate_path_segment(name, "name")
+        safe_tag = validate_path_segment(tag, "tag")
+        digest = hashlib.sha256(archive).digest()
+        response = await self._request_raw(
+            "PUT",
+            f"/v0/skills/{quote(safe_name, safe='')}/{quote(safe_tag, safe='')}/artifact",
+            params={"namespace": namespace or "default"},
+            content=archive,
+            headers={
+                "Content-Type": "application/vnd.agentregistry.skill.v1.tar+gzip",
+                "Digest": "sha-256=" + base64.b64encode(digest).decode("ascii"),
+            },
+            auth_headers=auth_headers,
+        )
+        return response
+
+    async def get_skill_download(
+        self,
+        *,
+        name: str,
+        tag: str,
+        namespace: str = "default",
+        auth_headers: Optional[dict[str, str]] = None,
+    ) -> tuple[bytes, dict[str, str]]:
+        safe_name = validate_path_segment(name, "name")
+        safe_tag = validate_path_segment(tag, "tag")
+        return await self._request_bytes(
+            "GET",
+            f"/v0/skills/{quote(safe_name, safe='')}/{quote(safe_tag, safe='')}/download",
+            params={"namespace": namespace or "default"},
+            auth_headers=auth_headers,
+        )
+
+    async def delete_resource(
+        self,
+        *,
+        kind: str,
+        name: str,
+        tag: str,
+        namespace: str = "default",
+        auth_headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
+        safe_kind = validate_catalog_kind(kind)
+        safe_name = validate_path_segment(name, "name")
+        safe_tag = validate_path_segment(tag, "tag")
+        response = await self._request_response(
+            "DELETE",
+            f"/v0/{KIND_TO_REGISTRY_COLLECTION[safe_kind]}/{quote(safe_name, safe='')}/{quote(safe_tag, safe='')}",
+            params={"namespace": namespace or "default"},
+            auth_headers=auth_headers,
+        )
+        return {"status_code": response.status_code}
+
     async def _request(
         self,
         method: str,
@@ -160,6 +224,60 @@ class AgentRegistryHttpClient:
             except httpx.RequestError as exc:
                 raise AgentRegistryError(502, "AgentRegistry indisponível") from exc
         return _json_response(response)
+
+    async def _request_raw(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+        content: Optional[bytes] = None,
+        headers: Optional[dict[str, str]] = None,
+        auth_headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
+        response = await self._request_response(method, path, params=params, content=content, headers=headers, auth_headers=auth_headers)
+        return {"status_code": response.status_code, "headers": dict(response.headers)}
+
+    async def _request_bytes(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+        auth_headers: Optional[dict[str, str]] = None,
+    ) -> tuple[bytes, dict[str, str]]:
+        response = await self._request_response(method, path, params=params, auth_headers=auth_headers)
+        return response.content, dict(response.headers)
+
+    async def _request_response(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+        content: Optional[bytes] = None,
+        headers: Optional[dict[str, str]] = None,
+        auth_headers: Optional[dict[str, str]] = None,
+    ) -> httpx.Response:
+        request_headers = self._headers(headers=headers, auth_headers=auth_headers)
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            try:
+                response = await client.request(
+                    method,
+                    f"{self.base_url}{path}",
+                    params=params,
+                    content=content,
+                    headers=request_headers,
+                )
+            except httpx.RequestError as exc:
+                raise AgentRegistryError(502, "AgentRegistry indisponível") from exc
+        if response.status_code == 404:
+            raise AgentRegistryResourceNotFound()
+        if response.status_code in (401, 403):
+            raise AgentRegistryError(response.status_code, "AgentRegistry negou acesso ao recurso")
+        if response.status_code >= 400:
+            raise AgentRegistryError(response.status_code, f"AgentRegistry retornou HTTP {response.status_code}")
+        return response
 
     def _headers(
         self,

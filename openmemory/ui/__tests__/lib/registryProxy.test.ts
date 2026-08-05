@@ -44,6 +44,12 @@ describe("registry proxy allowlist", () => {
     expect(isRegistryProxyPathAllowed("POST", ["v0", "apply"])).toBe(true);
     expect(isRegistryProxyPathAllowed("POST", ["v0", "skills"])).toBe(false);
     expect(isRegistryProxyPathAllowed("DELETE", ["v0", "apply"])).toBe(false);
+    expect(
+      isRegistryProxyPathAllowed("PUT", ["v0", "skills", "demo", "latest", "artifact"]),
+    ).toBe(true);
+    expect(
+      isRegistryProxyPathAllowed("DELETE", ["v0", "skills", "demo", "latest"]),
+    ).toBe(true);
   });
 
   it("nega endpoints fora do catálogo seguro", () => {

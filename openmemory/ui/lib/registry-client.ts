@@ -217,6 +217,52 @@ export async function fetchInstallRecipe(input: {
   return response.data;
 }
 
+export async function downloadSkillPackage(input: {
+  name: string;
+  tag: string;
+  namespace?: string;
+}): Promise<Blob> {
+  const response = await apiClient.get<Blob>(
+    `/registry-api/v0/skills/${encodeURIComponent(input.name)}/${encodeURIComponent(input.tag)}/download`,
+    {
+      params: { namespace: input.namespace || "default" },
+      responseType: "blob",
+    },
+  );
+  return response.data;
+}
+
+export async function deleteSkillPackage(input: {
+  name: string;
+  tag: string;
+  namespace?: string;
+}): Promise<void> {
+  await apiClient.delete(
+    `/registry-api/v0/skills/${encodeURIComponent(input.name)}/${encodeURIComponent(input.tag)}`,
+    { params: { namespace: input.namespace || "default" } },
+  );
+}
+
+export async function publishSkillPackage(input: {
+  name: string;
+  tag: string;
+  title?: string;
+  description: string;
+  language?: "pt-BR";
+  files: Array<{
+    path: string;
+    content: string;
+    encoding: "utf-8" | "base64";
+    mode?: number;
+  }>;
+}): Promise<Record<string, unknown>> {
+  const response = await apiClient.put<Record<string, unknown>>(
+    `/api-proxy/api/v1/store/skills/${encodeURIComponent(input.name)}/${encodeURIComponent(input.tag)}`,
+    { ...input, language: input.language || "pt-BR" },
+  );
+  return response.data;
+}
+
 export function normalizeRegistryItems(
   kind: RegistryResourceKind,
   items: RegistryResource[],
@@ -284,12 +330,19 @@ export function registrySourceSummary(resource: RegistryResource): string[] {
   const spec = resource.spec ?? {};
   const source = asRecord(spec.source);
   const remote = asRecord(spec.remote);
+  const status = asRecord(resource.status);
+  const resolvedSource = asRecord(status?.resolvedSource);
+  const artifact = asRecord(resolvedSource?.artifact);
   const summaries: string[] = [];
 
   const annotations = resource.metadata.annotations ?? {};
   const skillMd = annotations[SKILL_MD_ANNOTATION];
   if (typeof skillMd === "string" && skillMd.trim()) {
     summaries.push("Conteúdo embutido (SKILL.md)");
+  }
+  if (typeof artifact?.digest === "string" && artifact.digest.trim()) {
+    const size = typeof artifact.size === "number" ? `, ${artifact.size} bytes` : "";
+    summaries.push(`Pacote completo AgentRegistry (SHA-256 ${artifact.digest}${size})`);
   }
 
   const repository = asRecord(source?.repository);
@@ -334,7 +387,7 @@ export function registryDependencySummary(resource: RegistryResource): string[] 
   return summaries;
 }
 
-export function validatePublishDraft(draft: PublishDraft): string[] {
+export function validatePublishDraft(draft: PublishDraft, hasCompleteFiles = false): string[] {
   const errors: string[] = [];
   if (!REGISTRY_RESOURCE_KINDS.includes(draft.kind)) {
     errors.push("Escolha um tipo de recurso válido.");
@@ -350,8 +403,8 @@ export function validatePublishDraft(draft: PublishDraft): string[] {
       errors.push("Informe o conteúdo do prompt.");
     }
   } else if (draft.kind === "skills") {
-    if (!draft.skillContent.trim() && !draft.sourceRepository.trim()) {
-      errors.push("Informe o conteúdo da skill (SKILL.md) ou a URL do repositório.");
+    if (!hasCompleteFiles && !draft.skillContent.trim()) {
+      errors.push("Informe o conteúdo completo da Skill, incluindo SKILL.md.");
     }
   } else if (!draft.sourceRepository.trim()) {
     errors.push("Informe a URL do repositório de origem.");
@@ -397,8 +450,9 @@ export function buildPublishManifest(draft: PublishDraft): string {
     return lines.join("\n") + "\n";
   }
 
-  if (draft.kind === "skills" && draft.skillContent.trim() && !draft.sourceRepository.trim()) {
-    // Inline-only skill — no git source required for the mem0 LAN catalog.
+  if (draft.kind === "skills") {
+    // Skills are self-contained packages; Git is deliberately not part of the
+    // publication contract.
     return lines.join("\n") + "\n";
   }
 

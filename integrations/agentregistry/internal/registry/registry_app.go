@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -36,6 +37,7 @@ import (
 	arv0 "github.com/agentregistry-dev/agentregistry/pkg/api/v0"
 	"github.com/agentregistry-dev/agentregistry/pkg/api/v1alpha1"
 	"github.com/agentregistry-dev/agentregistry/pkg/logging"
+	"github.com/agentregistry-dev/agentregistry/pkg/registry/artifact"
 	"github.com/agentregistry-dev/agentregistry/pkg/registry/auth"
 	pkgdb "github.com/agentregistry-dev/agentregistry/pkg/registry/database"
 	"github.com/agentregistry-dev/agentregistry/pkg/registry/resource"
@@ -103,6 +105,42 @@ func App(ctx context.Context, opts ...types.AppOptions) error {
 	maps.Copy(deploymentAdapters, options.DeploymentAdapters)
 	pool := db.Pool()
 	stores := buildStores(pool, options.V1Alpha1StoreTables, options.V1Alpha1MutableStoreKinds, options.Auditor)
+	var skillArtifacts types.SkillArtifactStore
+	var skillArtifactStore *internaldb.PostgresArtifactStore
+	if pool != nil {
+		sch := pkgdb.OSSSchemaRegistry().MustGet(pkgdb.OSSSourceName)
+		skillArtifactStore = internaldb.NewPostgresArtifactStore(pool, sch)
+		skillArtifacts = internaldb.NewSkillArtifactTransportStore(skillArtifactStore, func(ctx context.Context, ref artifact.SkillRef) error {
+			store := stores[v1alpha1.KindSkill]
+			if store == nil {
+				return nil
+			}
+			_, err := store.Get(ctx, ref.Namespace, ref.Name, ref.Tag)
+			if err != nil {
+				return err
+			}
+			stored, err := skillArtifactStore.Get(ctx, ref)
+			if err != nil {
+				return err
+			}
+			return store.ApplyPatch(ctx, ref.Namespace, ref.Name, ref.Tag, v1alpha1store.PatchOpts{
+				Status: func(current json.RawMessage) (json.RawMessage, error) {
+					skill := &v1alpha1.Skill{}
+					if err := skill.UnmarshalStatus(current); err != nil {
+						return nil, err
+					}
+					skill.Status.ResolvedSource = &v1alpha1.SkillResolvedSource{Artifact: &v1alpha1.SkillResolvedArtifact{
+						Digest: stored.Digest, MediaType: stored.MediaType, Size: stored.Size,
+					}}
+					skill.Status.SetCondition(v1alpha1.Condition{Type: "Ready", Status: v1alpha1.ConditionTrue, Reason: "ArtifactReady", Message: "skill package validated"})
+					if skill.Metadata.Generation > skill.Status.ObservedGeneration {
+						skill.Status.ObservedGeneration = skill.Metadata.Generation
+					}
+					return skill.MarshalStatus()
+				},
+			})
+		})
+	}
 	controllerConfig := deploymentControllerConfig(cfg)
 	controllerConfig.DependencyKinds = maps.Clone(options.DeploymentDependencyKinds)
 	if _, err := controller.StartDeploymentController(ctx, pool, stores, deploymentAdapters, controllerConfig); err != nil {
@@ -125,7 +163,7 @@ func App(ctx context.Context, opts ...types.AppOptions) error {
 	// concrete commit and records it in SkillStatus out of band of the API write
 	// — the resolve-and-pin counterpart to the Plugin controller, minus the
 	// manifest/inventory scan (a skill has no bundle to enumerate).
-	skillController, err := controller.NewSkillController(pool, stores, controller.SkillControllerDeps{})
+	skillController, err := controller.NewSkillController(pool, stores, controller.SkillControllerDeps{Artifacts: skillArtifactStore})
 	if err != nil {
 		return fmt.Errorf("create skill controller: %w", err)
 	}
@@ -158,6 +196,7 @@ func App(ctx context.Context, opts ...types.AppOptions) error {
 
 	perKindHooks := crudPerKindHooks(options)
 	routeOpts := buildRouteOptions(options, stores, deploymentAdapters, perKindHooks)
+	routeOpts.SkillArtifactStore = skillArtifacts
 
 	// Initialize HTTP server
 	baseServer, err := api.NewServer(cfg, metrics, versionInfo, options.UIHandler, authnProvider, routeOpts, options.OpenAPISchemaNamer)
