@@ -139,6 +139,33 @@ class TestInstallerWiringHardening:
         assert "ensure_docker_access(" in src
         assert 'set_env(compose_env, "AUTH_UI_REQUIRED", "0")' in src
 
+    def test_agentregistry_sidecar_is_started_and_healthchecked(self):
+        src = _INSTALL_PATH.read_text(encoding="utf-8")
+        assert "def wait_for_agentregistry" in src
+        assert src.count("ensure_sidecars_after_update(dc") >= 2
+        assert "http://127.0.0.1:8080/v0/ping" in src
+
+    def test_wait_for_agentregistry_probes_inside_container(self):
+        calls = []
+
+        class Result:
+            returncode = 0
+
+        def dc(*args, **kwargs):
+            calls.append((args, kwargs))
+            return Result()
+
+        assert install.wait_for_agentregistry(dc, timeout=1, interval=0) is True
+        assert calls[0][0] == (
+            "exec",
+            "-T",
+            "agentregistry",
+            "wget",
+            "-qO-",
+            "http://127.0.0.1:8080/v0/ping",
+        )
+        assert calls[0][1]["stdout"] is install.subprocess.DEVNULL
+
 
 class TestInstallerUpdatePull:
     def test_git_pull_reports_failure(self, monkeypatch):

@@ -22,8 +22,8 @@ Faz, ponta a ponta:
      Sem Google (--skip-google-auth ou Enter): grava AUTH_UI_REQUIRED=0 (UI legado).
   4. Garante Docker utilizável nesta sessão (ACL no socket se o grupo docker
      ainda não entrou em vigor) e Ollama em 0.0.0.0 quando o LLM é local.
-  5. Sobe a infra base, roda migrations Alembic em container, sobe o stack completo
-     e valida GET /health + UI :3000 via proxy.
+  5. Sobe a infra base, roda migrations Alembic em container, ativa os sidecars
+     Agent Registry/Planka e valida GET /health + UI :3000 via proxy.
 
 Uso:
   python install.py                                   # interativo (produção)
@@ -45,9 +45,9 @@ Atualização (preserva memórias):
   python install.py --update --no-pull                # rebuild sem 'git pull' (código atual)
   python install.py --update --backup-dir /srv/mem0-backups   # define o destino dos .zip
 
-  O --update faz: git pull (ou --no-pull explícito) → rebuild só de API/UI → migrations
-  aditivas (produção) → recria os containers de app no lugar → sobe sidecars
-  (agentregistry/planka, profile ``sidecars``). NUNCA remove volumes, então
+  O --update faz: git pull (ou --no-pull explícito) → rebuild de API/UI → migrations
+  aditivas (produção) → recria os containers de app no lugar → rebuild/healthcheck
+  dos sidecars (agentregistry/planka, profile ``sidecars``). NUNCA remove volumes, então
   Qdrant + SQLite/PostgreSQL e os segredos do .env permanecem intactos.
   Não para Qdrant/Postgres/Redis no meio do rebuild (se o build falhar, dados
   continuam no ar). Preenche defaults vazios de S3/MinIO e PLANKA no .env
@@ -628,12 +628,36 @@ def ensure_update_ops_env(compose_env):
         ok("Defaults de ops preenchidos (só chaves vazias): " + ", ".join(filled))
 
 
-def ensure_sidecars_after_update(dc):
+def wait_for_agentregistry(dc, timeout=120, interval=2):
+    """Aguarda o endpoint interno do Agent Registry ficar saudável.
+
+    O serviço não publica a porta 8080 no host; a verificação precisa ocorrer
+    dentro do container. Isso também confirma que as migrações próprias do
+    Agent Registry terminaram antes de declararmos a Store disponível.
+    """
+    deadline = time.time() + timeout
+    last_rc = None
+    while time.time() < deadline:
+        probe = dc(
+            "exec", "-T", "agentregistry", "wget", "-qO-",
+            "http://127.0.0.1:8080/v0/ping",
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        last_rc = probe.returncode
+        if last_rc == 0:
+            return True
+        time.sleep(min(interval, max(0, deadline - time.time())))
+    warn(f"Agent Registry não respondeu ao healthcheck interno (rc={last_rc}).")
+    return False
+
+
+def ensure_sidecars_after_update(dc, timeout=120):
     """Sobe Store (agentregistry) + Kanban (planka) com profile ``sidecars``.
 
     O ``compose up`` sem profile para containers de serviços com profile
-    inativo — isso derrubava Store/Kanban após --update. Aqui reativamos
-    explicitamente (best-effort; falha não aborta a atualização das memórias).
+    inativo — isso deixava a Store indisponível após instalação/atualização.
+    Aqui reativamos explicitamente e aguardamos o endpoint interno do Registry.
     """
     log("Subindo sidecars Store/Kanban (profile sidecars: agentregistry + planka)")
     rc = dc(
@@ -648,7 +672,13 @@ def ensure_sidecars_after_update(dc):
             "up -d --no-deps --build agentregistry planka"
         )
         return False
-    ok("Sidecars agentregistry + planka no ar (ou já estavam).")
+    if not wait_for_agentregistry(dc, timeout=timeout):
+        warn(
+            "O container agentregistry iniciou, mas a API ainda não está saudável. "
+            "Verifique os logs antes de usar a Store."
+        )
+        return False
+    ok("Sidecars agentregistry + planka no ar; Agent Registry saudável.")
     return True
 
 
@@ -1217,8 +1247,9 @@ def _rebuild_with_retry(dc):
     age SOMENTE na imagem (untag/rebuild) — NUNCA toca em volumes ou dados; as
     memórias do Qdrant/SQLite/PostgreSQL permanecem intactas.
 
-    Só reconstrói API/UI (imagem compartilhada pelos workers). Sidecars
-    (agentregistry/planka) ficam em profile ``sidecars`` e não bloqueiam o update.
+    Só reconstrói API/UI (imagem compartilhada pelos workers). Os sidecars
+    (agentregistry/planka) são reconstruídos separadamente após as migrations,
+    pois pertencem ao profile ``sidecars``.
     """
     build_services = ("openmemory-mcp", "openmemory-ui")
     if dc("build", "--pull", *build_services).returncode == 0:
@@ -1363,7 +1394,9 @@ def run_update(args):
     if dc("--profile", "sidecars", "up", "-d", "--remove-orphans").returncode != 0:
         die("Falha ao subir os serviços auxiliares do stack.")
     # Sidecars Store/Kanban: build+up explícito (imagens locais).
-    ensure_sidecars_after_update(dc)
+    if not ensure_sidecars_after_update(dc, timeout=min(args.timeout, 120)):
+        die("Agent Registry não ficou saudável após a atualização. "
+            "Os dados persistentes foram preservados; verifique os logs do sidecar.")
     port = int(args.proxy_port)
 
     # 5. Validação ------------------------------------------------------------
@@ -1857,6 +1890,12 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
     log("Subindo o stack completo (inclui a UI na porta 3000)")
     if dc("up", "-d", "--build").returncode != 0:
         die("Falha ao subir o stack completo (docker compose up).")
+    # Agent Registry e Planka usam o profile sidecars e, portanto, não são
+    # iniciados pelo `compose up` padrão. A Store é parte da instalação oficial:
+    # constrói/ativa os sidecars e confirma o healthcheck antes do handoff.
+    if not ensure_sidecars_after_update(dc, timeout=min(args.timeout, 120)):
+        die("Agent Registry não ficou saudável; a instalação foi interrompida. "
+            "Os dados persistentes não foram removidos.")
 
     log(f"Aguardando GET /health via proxy (até {args.timeout}s)")
     healthy, detail = wait_for_health(args.proxy_port, args.timeout)
