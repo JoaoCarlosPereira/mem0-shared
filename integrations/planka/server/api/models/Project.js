@@ -156,6 +156,16 @@ module.exports = {
       defaultsTo: false, // TODO: implement via normalizeValues?
       columnName: 'is_hidden',
     },
+    isArchived: {
+      type: 'boolean',
+      defaultsTo: false,
+      columnName: 'is_archived',
+    },
+    isCompleted: {
+      type: 'boolean',
+      defaultsTo: false,
+      columnName: 'is_completed',
+    },
 
     //  ╔═╗╔╦╗╔╗ ╔═╗╔╦╗╔═╗
     //  ║╣ ║║║╠╩╗║╣  ║║╚═╗
