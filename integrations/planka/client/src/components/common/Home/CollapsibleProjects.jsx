@@ -24,7 +24,12 @@ const CollapsibleProjects = React.memo(
 
     return (
       <div className={styles.collapsibleWrapper}>
-        <button type="button" className={styles.collapsibleHeader} onClick={toggleExpanded}>
+        <button
+          type="button"
+          className={styles.collapsibleHeader}
+          aria-expanded={isExpanded}
+          onClick={toggleExpanded}
+        >
           <Icon
             name={isExpanded ? 'chevron down' : 'chevron right'}
             className={styles.collapsibleChevron}
