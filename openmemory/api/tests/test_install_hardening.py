@@ -118,6 +118,57 @@ class TestHealthAndUiHelpers:
         install.ensure_docker_access(args, interactive=False)  # não deve die
 
 
+class TestBuildxHardening:
+    """Sidecars agentregistry/planka usam ARG BUILDPLATFORM (Dockerfiles
+    multi-stage) — sem o plugin buildx, o builder clássico deixa
+    BUILDPLATFORM vazio e falha com 'failed to parse platform', sem indicar
+    a causa raiz (missing buildx). ``ensure_buildx_installed`` detecta e
+    instala (ou orienta) antes do build acontecer."""
+
+    def test_have_buildx_true_when_run_succeeds(self, monkeypatch):
+        class Result:
+            returncode = 0
+
+        monkeypatch.setattr(install, "run", lambda *a, **k: Result())
+        assert install.have_buildx() is True
+
+    def test_have_buildx_false_when_run_fails(self, monkeypatch):
+        class Result:
+            returncode = 1
+
+        monkeypatch.setattr(install, "run", lambda *a, **k: Result())
+        assert install.have_buildx() is False
+
+    def test_ensure_buildx_installed_noop_when_present(self, monkeypatch):
+        monkeypatch.setattr(install, "have_buildx", lambda: True)
+        monkeypatch.setattr(
+            install,
+            "install_buildx_plugin",
+            lambda: pytest.fail("não deveria tentar instalar; buildx já presente"),
+        )
+        args = SimpleNamespace(yes=True)
+        install.ensure_buildx_installed(args, interactive=False)  # não deve die
+
+    def test_ensure_buildx_installed_installs_with_yes(self, monkeypatch):
+        state = {"installed": False}
+        monkeypatch.setattr(install, "have_buildx", lambda: state["installed"])
+
+        def fake_install():
+            state["installed"] = True
+            return True
+
+        monkeypatch.setattr(install, "install_buildx_plugin", fake_install)
+        args = SimpleNamespace(yes=True)
+        install.ensure_buildx_installed(args, interactive=False)  # não deve die
+        assert state["installed"] is True
+
+    def test_ensure_buildx_installed_never_dies_without_consent(self, monkeypatch):
+        """Diferente de Docker/Compose, buildx ausente é best-effort (warn, não die)."""
+        monkeypatch.setattr(install, "have_buildx", lambda: False)
+        args = SimpleNamespace(yes=False)
+        install.ensure_buildx_installed(args, interactive=False)  # não deve die
+
+
 class TestEntrypointAndRequirements:
     def test_entrypoint_nao_faz_sed_bare_de_identifiers(self):
         src = (_ROOT / "ui" / "entrypoint.sh").read_text(encoding="utf-8")
@@ -142,8 +193,16 @@ class TestInstallerWiringHardening:
     def test_agentregistry_sidecar_is_started_and_healthchecked(self):
         src = _INSTALL_PATH.read_text(encoding="utf-8")
         assert "def wait_for_agentregistry" in src
-        assert src.count("ensure_sidecars_after_update(dc") >= 2
+        # Exatamente uma chamada por fluxo (--update e instalação nova); uma
+        # segunda chamada órfã (bug de merge entre duas correções da mesma
+        # lacuna) reconstruiria os sidecars duas vezes sem necessidade.
+        assert src.count("ensure_sidecars_after_update(dc") == 3  # def + 2 chamadas
         assert "http://127.0.0.1:8080/v0/ping" in src
+
+    def test_buildx_checado_nos_dois_fluxos_de_prerequisito(self):
+        src = _INSTALL_PATH.read_text(encoding="utf-8")
+        assert "def ensure_buildx_installed" in src
+        assert src.count("ensure_buildx_installed(args, prereq_interactive)") == 2
 
     def test_wait_for_agentregistry_probes_inside_container(self):
         calls = []

@@ -384,6 +384,68 @@ def ensure_docker_compose_installed(args, interactive):
     ok("Plugin docker compose instalado.")
 
 
+def have_buildx():
+    r = run(["docker", "buildx", "version"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return r.returncode == 0
+
+
+def install_buildx_plugin():
+    """Instala o plugin 'docker buildx'. No Linux, via gerenciador de pacote;
+    no macOS/Windows ele já vem no Docker Desktop."""
+    if not sys.platform.startswith("linux"):
+        warn("No macOS/Windows o Buildx vem junto do Docker Desktop — "
+             "instale/atualize o Docker Desktop.")
+        return False
+    managers = (
+        ("apt-get", ["apt-get", "install", "-y", "docker-buildx-plugin"]),
+        ("dnf", ["dnf", "install", "-y", "docker-buildx-plugin"]),
+        ("pacman", ["pacman", "-Sy", "--noconfirm", "docker-buildx"]),
+        ("zypper", ["zypper", "install", "-y", "docker-buildx"]),
+    )
+    for exe, step in managers:
+        if not shutil.which(exe):
+            continue
+        log(f"Instalando o plugin docker buildx via {exe}")
+        if exe == "apt-get":
+            run(_maybe_sudo(["apt-get", "update"]))
+        return run(_maybe_sudo(step)).returncode == 0
+    warn("Nenhum gerenciador de pacote conhecido para instalar o plugin buildx.")
+    return False
+
+
+def ensure_buildx_installed(args, interactive):
+    """Garante o plugin 'docker buildx'; instala se ausente (com consentimento).
+
+    Os Dockerfiles de agentregistry/planka (sidecars Store/Kanban) usam
+    ``ARG BUILDPLATFORM`` + ``FROM --platform=$BUILDPLATFORM ... AS ui-builder``
+    — sintaxe exclusiva do BuildKit. Sem o plugin buildx, o builder clássico
+    do Docker deixa ``BUILDPLATFORM`` vazio e falha com
+    "failed to parse platform : \"\" is an invalid OS component", derrubando
+    a construção dos sidecars (Store/Kanban ficam 502) sem indicar a causa raiz.
+    Diferente de Docker/Compose, a ausência de buildx NUNCA aborta a instalação
+    (best-effort: os sidecars são best-effort desde antes) — só avisa.
+    """
+    if have_buildx():
+        return
+    warn("Plugin 'docker buildx' não encontrado — os sidecars Store/Kanban "
+         "(agentregistry/planka) usam Dockerfiles com ARG BUILDPLATFORM e "
+         "exigem BuildKit/buildx para compilar; sem ele, o build falha com "
+         "'failed to parse platform' e os sidecars ficam fora do ar.")
+    if not _confirm_install("Instalar o plugin docker buildx agora?",
+                            args, interactive):
+        warn("Buildx não instalado — os sidecars Store/Kanban podem falhar ao "
+             "(re)construir. Instale manualmente (ex.: "
+             "apt-get install docker-buildx-plugin) e rode novamente.")
+        return
+    if not install_buildx_plugin() or not have_buildx():
+        warn("Não foi possível instalar o plugin buildx automaticamente. "
+             "Instale manualmente e rode novamente para habilitar os "
+             "sidecars Store/Kanban.")
+        return
+    ok("Plugin docker buildx instalado.")
+
+
 def detect_lan_ip():
     """Return the primary private IPv4 of this host, or None."""
     import socket
@@ -1449,6 +1511,7 @@ def run_update_entry(args):
     prereq_interactive = sys.stdin.isatty()
     ensure_docker(args, prereq_interactive)
     ensure_docker_compose_installed(args, prereq_interactive)
+    ensure_buildx_installed(args, prereq_interactive)
 
     api_env = COMPOSE_DIR / "api" / ".env"
     compose_env = COMPOSE_DIR / ".env"
@@ -1902,12 +1965,6 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
         die("Agent Registry não ficou saudável; a instalação foi interrompida. "
             "Os dados persistentes não foram removidos.")
 
-    # Sidecars Store/Kanban (agentregistry/planka, profile ``sidecars``): o
-    # 'up -d --build' acima sobe só os serviços sem profile — sem isto, uma
-    # instalação nova nunca inicia o Kanban (mesma lacuna já corrigida no
-    # --update via ensure_sidecars_after_update).
-    ensure_sidecars_after_update(dc)
-
     log(f"Aguardando GET /health via proxy (até {args.timeout}s)")
     healthy, detail = wait_for_health(args.proxy_port, args.timeout)
     if not healthy:
@@ -2072,6 +2129,7 @@ def main(argv=None):
     prereq_interactive = sys.stdin.isatty()
     ensure_docker(args, prereq_interactive)
     ensure_docker_compose_installed(args, prereq_interactive)
+    ensure_buildx_installed(args, prereq_interactive)
     if not COMPOSE_DIR.is_dir() or not (COMPOSE_DIR / SCALE_COMPOSE).is_file():
         die(f"{SCALE_COMPOSE} não encontrado em {COMPOSE_DIR}.")
     ok("Docker e Docker Compose v2 disponíveis (modo: produção — único).")
