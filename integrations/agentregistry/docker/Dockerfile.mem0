@@ -1,6 +1,7 @@
 # Slim AgentRegistry image for Mem0 Shared catalog (MVP: no docker.sock / runtime).
-ARG BUILDPLATFORM
-FROM --platform=$BUILDPLATFORM node:22-alpine AS ui-builder
+# Keep the sidecar build compatible with Docker's classic builder.  Compose can
+# fall back to it when the optional buildx plugin is unavailable.
+FROM node:22-alpine AS ui-builder
 RUN apk add --no-cache make
 WORKDIR /app
 COPY Makefile ./
@@ -8,8 +9,7 @@ COPY ui/package.json ui/package-lock.json ./
 COPY ui ui
 RUN mkdir -p internal/registry/api/ui/dist && make build-ui
 
-ARG BUILDPLATFORM
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+FROM golang:1.26-alpine AS builder
 RUN apk add --no-cache git make
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -19,7 +19,7 @@ COPY internal internal
 COPY pkg pkg
 COPY --from=ui-builder /app/internal/registry/api/ui/dist /app/internal/registry/api/ui/dist
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} \
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-$(go env GOARCH)} \
     go build -o /out/mem0registry ./cmd/mem0registry
 
 FROM alpine:3.20

@@ -119,11 +119,15 @@ class TestHealthAndUiHelpers:
 
 
 class TestBuildxHardening:
-    """Sidecars agentregistry/planka usam ARG BUILDPLATFORM (Dockerfiles
-    multi-stage) — sem o plugin buildx, o builder clássico deixa
-    BUILDPLATFORM vazio e falha com 'failed to parse platform', sem indicar
-    a causa raiz (missing buildx). ``ensure_buildx_installed`` detecta e
-    instala (ou orienta) antes do build acontecer."""
+    """Buildx é uma otimização opcional; o builder clássico deve funcionar."""
+
+    def test_agentregistry_dockerfile_supports_classic_builder(self):
+        dockerfile = (
+            _ROOT.parent / "integrations" / "agentregistry" / "docker" / "Dockerfile.mem0"
+        ).read_text(encoding="utf-8")
+        assert "BUILDPLATFORM" not in dockerfile
+        assert "FROM --platform=" not in dockerfile
+        assert "${TARGETARCH:-$(go env GOARCH)}" in dockerfile
 
     def test_have_buildx_true_when_run_succeeds(self, monkeypatch):
         class Result:

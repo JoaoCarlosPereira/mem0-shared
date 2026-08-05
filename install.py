@@ -415,27 +415,19 @@ def install_buildx_plugin():
 
 
 def ensure_buildx_installed(args, interactive):
-    """Garante o plugin 'docker buildx'; instala se ausente (com consentimento).
+    """Tenta garantir o plugin 'docker buildx'; instala se ausente com consentimento.
 
-    Os Dockerfiles de agentregistry/planka (sidecars Store/Kanban) usam
-    ``ARG BUILDPLATFORM`` + ``FROM --platform=$BUILDPLATFORM ... AS ui-builder``
-    — sintaxe exclusiva do BuildKit. Sem o plugin buildx, o builder clássico
-    do Docker deixa ``BUILDPLATFORM`` vazio e falha com
-    "failed to parse platform : \"\" is an invalid OS component", derrubando
-    a construção dos sidecars (Store/Kanban ficam 502) sem indicar a causa raiz.
-    Diferente de Docker/Compose, a ausência de buildx NUNCA aborta a instalação
-    (best-effort: os sidecars são best-effort desde antes) — só avisa.
+    Buildx melhora o build, mas os Dockerfiles do projeto também suportam o
+    builder clássico. Portanto sua ausência nunca deve abortar a instalação.
     """
     if have_buildx():
         return
-    warn("Plugin 'docker buildx' não encontrado — os sidecars Store/Kanban "
-         "(agentregistry/planka) usam Dockerfiles com ARG BUILDPLATFORM e "
-         "exigem BuildKit/buildx para compilar; sem ele, o build falha com "
-         "'failed to parse platform' e os sidecars ficam fora do ar.")
+    warn("Plugin 'docker buildx' não encontrado — o Docker Compose usará o "
+         "builder clássico, que pode ser mais lento.")
     if not _confirm_install("Instalar o plugin docker buildx agora?",
                             args, interactive):
-        warn("Buildx não instalado — os sidecars Store/Kanban podem falhar ao "
-             "(re)construir. Instale manualmente (ex.: "
+        warn("Buildx não instalado — o build seguirá com o builder clássico. "
+             "Para habilitá-lo depois, instale manualmente (ex.: "
              "apt-get install docker-buildx-plugin) e rode novamente.")
         return
     if not install_buildx_plugin() or not have_buildx():

@@ -321,7 +321,7 @@ services:
   # Catálogo da loja interna (AgentRegistry / mem0registry). Schema PostgreSQL
   # `agentregistry` no mesmo DB openmemory. NÃO usa Qdrant / mem0_store.
   # Profile ``sidecars``: build multi-stage (Dockerfile.mem0). O ``install.py
-  # --update`` não rebuilda este serviço (só mcp+ui); suba com:
+  # --update`` faz rebuild explícito deste serviço; para subir manualmente use:
   #   COMPOSE_PROFILES=sidecars docker compose -f docker-compose.scale.yml up -d agentregistry planka
   agentregistry:
     profiles: ["sidecars"]
@@ -425,4 +425,3 @@ volumes:
   mem0_storage:
   spec_attachments:
   planka_attachments:
-
