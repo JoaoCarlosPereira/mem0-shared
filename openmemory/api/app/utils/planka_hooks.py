@@ -155,3 +155,42 @@ def mirror_ensure_workspace(db: Session, workspace_id: UUID) -> None:
 
 def mirror_delete_task(db: Session, task_id: UUID) -> None:
     run_mirror(db, lambda c: c.delete_task(task_id), action="delete_task")
+
+
+def _lifecycle_flags(db: Session, workspace_id: UUID) -> tuple[bool, bool]:
+    """Deriva ``(is_archived, is_completed)`` do ``SpecWorkspace.status`` atual.
+
+    Fonte única de verdade: um workspace ``arquivado`` conta como completo E
+    arquivado (evita ficar preso em "Concluídos" depois de arquivado); os
+    demais status contam como ``(False, False)``.
+    """
+    from app.models import SpecWorkspace, SpecWorkspaceStatus
+
+    ws = db.query(SpecWorkspace).filter(SpecWorkspace.id == workspace_id).first()
+    if ws is None:
+        return (False, False)
+    is_archived = ws.status == SpecWorkspaceStatus.arquivado
+    is_completed = ws.status in (SpecWorkspaceStatus.concluido, SpecWorkspaceStatus.arquivado)
+    return (is_archived, is_completed)
+
+
+def mirror_set_project_lifecycle(db: Session, workspace_id: UUID) -> None:
+    is_archived, is_completed = _lifecycle_flags(db, workspace_id)
+    run_mirror(
+        db,
+        lambda c: c.set_project_lifecycle(
+            workspace_id, is_archived=is_archived, is_completed=is_completed
+        ),
+        action="set_project_lifecycle",
+    )
+
+
+def mirror_set_project_lifecycle_best_effort(db: Session, workspace_id: UUID) -> None:
+    is_archived, is_completed = _lifecycle_flags(db, workspace_id)
+    run_mirror_best_effort(
+        db,
+        lambda c: c.set_project_lifecycle(
+            workspace_id, is_archived=is_archived, is_completed=is_completed
+        ),
+        action="set_project_lifecycle",
+    )

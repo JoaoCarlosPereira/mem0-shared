@@ -153,6 +153,20 @@ export const selectFilteredProjctIdsByGroupForCurrentUser = createSelector(
         const group = projectModel.ownerProjectManager ? ProjectGroups.MY_OWN : ProjectGroups.TEAM;
 
         result[group].push(projectModel.id);
+
+        // Mem0 Shared: kanban-archive-lifecycle — sub-particiona o grupo TEAM
+        // por isArchived/isCompleted na mesma passada, para a home separar em
+        // três seções (ativos / concluídos / arquivados) sem nova travessia.
+        if (group === ProjectGroups.TEAM) {
+          if (projectModel.isArchived) {
+            result.teamArchivedIds.push(projectModel.id);
+          } else if (projectModel.isCompleted) {
+            result.teamCompletedIds.push(projectModel.id);
+          } else {
+            result.teamActiveIds.push(projectModel.id);
+          }
+        }
+
         return result;
       },
       {
@@ -162,6 +176,9 @@ export const selectFilteredProjctIdsByGroupForCurrentUser = createSelector(
           (projectModel) => projectModel.id,
         ),
         [ProjectGroups.OTHERS]: adminProjectModels.map((projectModel) => projectModel.id),
+        teamActiveIds: [],
+        teamCompletedIds: [],
+        teamArchivedIds: [],
       },
     );
   },

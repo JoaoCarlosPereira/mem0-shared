@@ -1867,6 +1867,11 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
         llm_spec=llm_spec, emb_spec=emb_spec,
     )
 
+    # Defaults de MinIO/PLANKA (mesma função usada pelo --update): sem isso,
+    # uma instalação nova do zero fica com PLANKA_BASE_URL/PLANKA_MIRROR_SYNC/
+    # tokens vazios (Kanban 502/CSP) até alguém rodar --update pela primeira vez.
+    ensure_update_ops_env(compose_env)
+
     # Orquestração ------------------------------------------------------------
     log("Subindo infraestrutura base (PostgreSQL, PgBouncer, Redis, Qdrant)")
     if dc("up", "-d", "postgres", "pgbouncer", "redis", "mem0_store").returncode != 0:
@@ -1896,6 +1901,12 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
     if not ensure_sidecars_after_update(dc, timeout=min(args.timeout, 120)):
         die("Agent Registry não ficou saudável; a instalação foi interrompida. "
             "Os dados persistentes não foram removidos.")
+
+    # Sidecars Store/Kanban (agentregistry/planka, profile ``sidecars``): o
+    # 'up -d --build' acima sobe só os serviços sem profile — sem isto, uma
+    # instalação nova nunca inicia o Kanban (mesma lacuna já corrigida no
+    # --update via ensure_sidecars_after_update).
+    ensure_sidecars_after_update(dc)
 
     log(f"Aguardando GET /health via proxy (até {args.timeout}s)")
     healthy, detail = wait_for_health(args.proxy_port, args.timeout)
@@ -1945,6 +1956,10 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
 
   Stack: PostgreSQL + PgBouncer + Redis + Qdrant + workers (write/governance)
          + Traefik + observabilidade + backup (MinIO) + UI.
+  Store:      /store  (agentregistry via /registry-api)
+  Kanban:     /docs   (PLANKA via /planka, same-origin)
+  Se o Kanban ficar vazio: POST /admin/planka/resync (espelha Spec → PLANKA;
+  Spec permanece SoT).
   Auth de equipe: AUTH_MODE={secrets['AUTH_MODE']} (defina tokens com --auth-tokens).
   Auth UI:        AUTH_UI_REQUIRED={read_env(compose_env, 'AUTH_UI_REQUIRED') or '(auto)'}
 

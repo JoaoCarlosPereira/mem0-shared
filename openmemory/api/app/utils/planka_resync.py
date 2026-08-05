@@ -11,7 +11,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models import SpecDocument, SpecPlankaIdMap, SpecWorkspace, TaskCard
+from app.models import SpecDocument, SpecPlankaIdMap, SpecWorkspace, SpecWorkspaceStatus, TaskCard
 from app.utils.planka import (
     ENTITY_BOARD,
     ENTITY_DOCUMENT,
@@ -61,6 +61,20 @@ async def resync_workspace(
     except PlankaMirrorError as exc:
         result.errors.append(f"ensure_workspace_board: {exc.detail}")
         return result
+
+    # Reafirma isArchived/isCompleted a partir do status Spec atual (Tarefa
+    # kanban-archive-lifecycle) — sem isso, resync depois de um workspace ser
+    # arquivado deixaria o card "desarquivado" no PLANKA até a próxima
+    # mudança de status manual.
+    try:
+        await mirror.set_project_lifecycle(
+            workspace_id,
+            is_archived=workspace.status == SpecWorkspaceStatus.arquivado,
+            is_completed=workspace.status
+            in (SpecWorkspaceStatus.concluido, SpecWorkspaceStatus.arquivado),
+        )
+    except PlankaMirrorError as exc:
+        result.errors.append(f"set_project_lifecycle: {exc.detail}")
 
     tasks = db.query(TaskCard).filter(TaskCard.workspace_id == workspace_id).all()
     result.spec_tasks = len(tasks)

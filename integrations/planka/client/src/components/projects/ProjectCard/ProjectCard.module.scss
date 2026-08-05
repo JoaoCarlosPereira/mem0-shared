@@ -68,6 +68,29 @@
     opacity: 0;
   }
 
+  /* Mem0 Shared: kanban-archive-lifecycle — mesma aparência do favoriteButton,
+   * ancorado à esquerda para não colidir com o botão de favorito. */
+  .archiveButton {
+    background: none;
+    box-shadow: none;
+    height: 36px;
+    left: 4px;
+    line-height: 1;
+    margin: 0;
+    padding: 0;
+    position: absolute;
+    top: 4px;
+    width: 36px;
+
+    &:hover {
+      background: rgba(0, 0, 0, 0.12);
+    }
+  }
+
+  .archiveButtonAppearable {
+    opacity: 0;
+  }
+
   .icon {
     color: rgba(255, 255, 255, 0.8);
     font-size: 18px;

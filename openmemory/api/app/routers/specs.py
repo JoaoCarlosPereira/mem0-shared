@@ -51,6 +51,7 @@ from app.utils.task_lock import (
     update_task_metadata,
     update_task_status,
 )
+from app.utils.workspace_lifecycle import apply_status_change
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func
@@ -73,6 +74,7 @@ class WorkspaceCreate(BaseModel):
 
 class WorkspaceStatusUpdate(BaseModel):
     status: SpecWorkspaceStatus
+    actor: Optional[str] = None
 
 
 class WorkspaceResponse(BaseModel):
@@ -86,6 +88,9 @@ class WorkspaceResponse(BaseModel):
     created_by: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    archived_at: Optional[datetime] = None
+    archived_by: Optional[str] = None
 
 
 class WorkspaceSummaryResponse(BaseModel):
@@ -574,14 +579,19 @@ def update_workspace_status(
     payload: WorkspaceStatusUpdate,
     db: Session = Depends(get_db),
 ) -> WorkspaceResponse:
-    """Atualiza o status do workspace. Em transição para ``concluido``, indexa docs."""
+    """Atualiza o status do workspace. Em transição para ``concluido``, indexa docs.
+
+    Transições para ``concluido``/``arquivado`` gravam ``completed_at``/
+    ``archived_at`` e espelham o resultado no PLANKA (Tarefa
+    kanban-archive-lifecycle) — ver ``apply_status_change``.
+    """
     ws = _get_workspace_or_404(db, workspace_id)
     _assert_access(db, workspace_id)
 
     previous = ws.status
-    ws.status = payload.status
-    db.commit()
-    db.refresh(ws)
+    ws = apply_status_change(
+        db, ws, payload.status, actor=resolve_spec_actor(body_actor=payload.actor)
+    )
 
     if (
         payload.status == SpecWorkspaceStatus.concluido
@@ -984,6 +994,73 @@ def planka_card_moved(
             detail={"code": exc.code, "detail": exc.detail},
         ) from exc
     return PlankaCardMoveResponse(**result)
+
+
+class PlankaProjectLifecycleRequest(BaseModel):
+    planka_project_id: str
+    is_archived: bool
+    is_completed: bool
+    actor: Optional[str] = None
+
+
+class PlankaProjectLifecycleResponse(BaseModel):
+    applied: bool
+    skipped: bool = False
+    workspace_id: Optional[str] = None
+    status: Optional[str] = None
+
+
+@router.post(
+    "/planka/project-lifecycle",
+    response_model=PlankaProjectLifecycleResponse,
+)
+def planka_project_lifecycle(
+    payload: PlankaProjectLifecycleRequest,
+    authorization: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+) -> PlankaProjectLifecycleResponse:
+    """Bridge PLANKA → Spec (Tarefa kanban-archive-lifecycle).
+
+    Chamado por ``notify-spec-project-lifecycle.js`` depois que um humano
+    arquiva/desarquiva ou marca um projeto como concluído direto no board
+    PLANKA. Resolve o ``SpecWorkspace`` pelo mapa inverso e aplica a mesma
+    ``apply_status_change`` do PATCH — Spec continua a única fonte de verdade,
+    isso só traduz a ação humana de volta para o status Spec.
+    """
+    from app.models import SpecPlankaIdMap
+    from app.utils.planka import ENTITY_PROJECT
+
+    _assert_planka_bridge_token(authorization)
+
+    project_map = (
+        db.query(SpecPlankaIdMap)
+        .filter(
+            SpecPlankaIdMap.entity_type == ENTITY_PROJECT,
+            SpecPlankaIdMap.planka_id == payload.planka_project_id.strip(),
+        )
+        .first()
+    )
+    if project_map is None:
+        # Projeto PLANKA sem workspace Spec mapeado (ex.: criado direto no
+        # PLANKA fora do fluxo Spec) — ignora, não há o que sincronizar.
+        return PlankaProjectLifecycleResponse(applied=False, skipped=True)
+
+    ws = _get_workspace_or_404(db, project_map.spec_id)
+    actor = (payload.actor or resolve_spec_actor() or "planka-ui").strip()
+
+    if payload.is_archived:
+        new_status = SpecWorkspaceStatus.arquivado
+    elif payload.is_completed:
+        new_status = SpecWorkspaceStatus.concluido
+    else:
+        new_status = SpecWorkspaceStatus.ativo
+
+    if new_status != ws.status:
+        ws = apply_status_change(db, ws, new_status, actor=actor)
+
+    return PlankaProjectLifecycleResponse(
+        applied=True, workspace_id=str(ws.id), status=ws.status.value
+    )
 
 
 # --------------------------------------------------------------------------- #

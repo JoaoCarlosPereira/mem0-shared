@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.database import Base  # noqa: F401 — load Base before models
-from app.models import SpecDocument, SpecWorkspace, TaskCard
+from app.models import SpecDocument, SpecWorkspace, SpecWorkspaceStatus, TaskCard
 from app.utils.planka_resync import resync_all, resync_workspace
 
 
@@ -30,6 +30,7 @@ async def test_resync_empty_workspace_idempotent():
         project_id="mem0-shared",
         slug="empty",
         name="Empty",
+        status=SpecWorkspaceStatus.ativo,
     )
     db = MagicMock()
 
@@ -50,6 +51,7 @@ async def test_resync_empty_workspace_idempotent():
     db.query.side_effect = query_side_effect
     client = MagicMock()
     client.ensure_workspace_board = AsyncMock(return_value="board-1")
+    client.set_project_lifecycle = AsyncMock()
     client.mirror_task = AsyncMock()
     client.mirror_document = AsyncMock()
 
@@ -68,7 +70,9 @@ async def test_resync_empty_workspace_idempotent():
 async def test_resync_mirrors_tasks_and_documents():
     workspace_id = uuid.uuid4()
     task_id = uuid.uuid4()
-    workspace = SimpleNamespace(id=workspace_id, slug="ws", name="WS", project_id="p")
+    workspace = SimpleNamespace(
+        id=workspace_id, slug="ws", name="WS", project_id="p", status=SpecWorkspaceStatus.ativo
+    )
     task = SimpleNamespace(id=task_id, workspace_id=workspace_id, title="T")
     document = SimpleNamespace(
         id=uuid.uuid4(),
@@ -95,6 +99,7 @@ async def test_resync_mirrors_tasks_and_documents():
     db.query.side_effect = query_side_effect
     client = MagicMock()
     client.ensure_workspace_board = AsyncMock(return_value="board-9")
+    client.set_project_lifecycle = AsyncMock()
     client.mirror_task = AsyncMock()
     client.mirror_document = AsyncMock()
 
@@ -103,7 +108,48 @@ async def test_resync_mirrors_tasks_and_documents():
     assert result.mirrored_documents == 1
     client.mirror_task.assert_awaited_once_with(task_id)
     client.mirror_document.assert_awaited_once_with(workspace_id, "prd")
+    client.set_project_lifecycle.assert_awaited_once_with(
+        workspace_id, is_archived=False, is_completed=False
+    )
 
     report = await resync_all(db, client=client)
     assert report["totals"]["workspaces"] == 1
     assert report["totals"]["mirrored_tasks"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_resync_pushes_lifecycle_flags_for_archived_workspace():
+    """Reafirma isArchived/isCompleted no PLANKA a partir do status Spec atual."""
+    workspace_id = uuid.uuid4()
+    workspace = SimpleNamespace(
+        id=workspace_id,
+        slug="ws-arquivado",
+        name="WS",
+        project_id="p",
+        status=SpecWorkspaceStatus.arquivado,
+    )
+    db = MagicMock()
+
+    def query_side_effect(model):
+        q = MagicMock()
+        if model is SpecWorkspace:
+            q.filter.return_value.first.return_value = workspace
+        elif model in (TaskCard, SpecDocument):
+            q.filter.return_value.all.return_value = []
+        else:
+            q.filter.return_value.first.return_value = None
+            q.filter.return_value.all.return_value = []
+            q.filter.return_value.count.return_value = 0
+        return q
+
+    db.query.side_effect = query_side_effect
+    client = MagicMock()
+    client.ensure_workspace_board = AsyncMock(return_value="board-arq")
+    client.set_project_lifecycle = AsyncMock()
+    client.mirror_task = AsyncMock()
+    client.mirror_document = AsyncMock()
+
+    await resync_workspace(db, workspace_id, client=client)
+    client.set_project_lifecycle.assert_awaited_once_with(
+        workspace_id, is_archived=True, is_completed=True
+    )

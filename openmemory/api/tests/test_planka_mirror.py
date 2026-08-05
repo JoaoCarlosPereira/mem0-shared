@@ -84,6 +84,7 @@ class _PlankaRouter:
         self.list_names: list[str] = []
         self.assignee_calls: list[tuple[str, dict]] = []
         self.comment_calls: list[tuple[str, dict]] = []
+        self.project_patch_calls: list[tuple[str, dict]] = []
         self._seq = 1000
         self.fail_next: dict[str, int] | None = None
         self.timeout_paths: set[str] = set()
@@ -151,6 +152,15 @@ class _PlankaRouter:
         if method == "PATCH" and path.startswith("/api/cards/"):
             card_id = path.rsplit("/", 1)[-1]
             return _json_response(200, {"item": {"id": card_id, "name": "c"}})
+
+        if method == "PATCH" and path.startswith("/api/projects/"):
+            try:
+                body = json.loads(request.content.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                body = {}
+            project_id = path.rsplit("/", 1)[-1]
+            self.project_patch_calls.append((project_id, body))
+            return _json_response(200, {"item": {"id": project_id, **body}})
 
         if method == "PATCH" and path.startswith("/api/lists/"):
             list_id = path.rsplit("/", 1)[-1]
@@ -531,6 +541,43 @@ class TestMirrorDocumentAndDelete:
             .count()
             == 0
         )
+
+
+class TestSetProjectLifecycle:
+    """Tarefa kanban-archive-lifecycle: espelho de isArchived/isCompleted."""
+
+    @pytest.mark.asyncio
+    async def test_noop_without_project_map(self, db_session, client, planka_router):
+        ws = _mk_workspace(db_session)
+        await client.set_project_lifecycle(ws.id, is_archived=True, is_completed=True)
+        assert planka_router.project_patch_calls == []
+
+    @pytest.mark.asyncio
+    async def test_patches_mapped_project(self, db_session, client, planka_router):
+        ws = _mk_workspace(db_session)
+        board_id = await client.ensure_workspace_board(ws.id)
+        assert board_id
+
+        await client.set_project_lifecycle(ws.id, is_archived=True, is_completed=True)
+
+        assert len(planka_router.project_patch_calls) == 1
+        _project_id, body = planka_router.project_patch_calls[0]
+        assert body == {"isArchived": True, "isCompleted": True}
+
+    @pytest.mark.asyncio
+    async def test_404_on_mapped_project_is_swallowed(
+        self, db_session, client, planka_router
+    ):
+        ws = _mk_workspace(db_session)
+        await client.ensure_workspace_board(ws.id)
+        project_row = (
+            db_session.query(SpecPlankaIdMap)
+            .filter_by(entity_type=ENTITY_PROJECT, spec_id=ws.id)
+            .one()
+        )
+        planka_router.fail_next = {"path": f"/api/projects/{project_row.planka_id}", "status": 404}
+        # Não deve levantar — projeto removido direto no PLANKA, mapa órfão.
+        await client.set_project_lifecycle(ws.id, is_archived=True, is_completed=True)
 
 
 class TestPlankaErrors:
