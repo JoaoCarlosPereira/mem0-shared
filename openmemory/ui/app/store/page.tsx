@@ -37,6 +37,9 @@ import {
   registryResourceTag,
   registryResourceTitle,
   registrySourceSummary,
+  downloadSkillPackage,
+  deleteSkillPackage,
+  publishSkillPackage as publishSkillPackageRequest,
   validatePublishDraft,
   type InstallRecipe,
   type InstallTarget,
@@ -98,6 +101,8 @@ export default function StorePage() {
   const [draft, setDraft] = useState<PublishDraft>(DEFAULT_DRAFT);
   const [manifest, setManifest] = useState(buildPublishManifest(DEFAULT_DRAFT));
   const [formErrors, setFormErrors] = useState<string[]>([]);
+  const [skillFiles, setSkillFiles] = useState<File[]>([]);
+  const [packageMessage, setPackageMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!apiSessionReady) return;
@@ -145,10 +150,86 @@ export default function StorePage() {
 
   const handlePublish = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const errors = validatePublishDraft(draft);
+    const errors = validatePublishDraft(draft, skillFiles.length > 0);
     setFormErrors(errors);
     if (errors.length > 0) return;
+    if (draft.kind === "skills" && (skillFiles.length > 0 || draft.skillContent.trim())) {
+      try {
+        const files = skillFiles.length
+          ? await Promise.all(skillFiles.map(async (file) => ({
+              path: relativeSkillPath(file),
+              content: await fileToBase64(file),
+              encoding: "base64" as const,
+              mode: 0o644,
+            })))
+          : [{ path: "SKILL.md", content: draft.skillContent, encoding: "utf-8" as const, mode: 0o644 }];
+        await publishSkillPackageRequest({
+          name: draft.name.trim(),
+          tag: draft.tag.trim() || "latest",
+          title: draft.title.trim(),
+          description: draft.description.trim(),
+          files,
+        });
+        setPackageMessage("Skill completa publicada com sucesso.");
+        setSkillFiles([]);
+        await loadCatalog();
+      } catch (error) {
+        setFormErrors([error instanceof Error ? error.message : "Falha ao publicar a Skill completa."]);
+      }
+      return;
+    }
     await publishManifest(manifest);
+  };
+
+  const handleDownload = async () => {
+    if (!selectedResource || selectedResource.registryKind !== "skills") return;
+    try {
+      const blob = await downloadSkillPackage({
+        name: selectedResource.metadata.name,
+        tag: registryResourceTag(selectedResource),
+        namespace: registryResourceNamespace(selectedResource),
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${selectedResource.metadata.name}-${registryResourceTag(selectedResource)}.zip`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setPackageMessage(error instanceof Error ? error.message : "Falha ao baixar a Skill completa.");
+    }
+  };
+
+  const handleEdit = (resource: RegistryResource) => {
+    const skillMd = resource.metadata.annotations?.["agentregistry.mem0.ai/skill-md"];
+    setDraft({
+      kind: resource.registryKind,
+      name: resource.metadata.name,
+      tag: registryResourceTag(resource),
+      title: registryResourceTitle(resource),
+      description: registryResourceDescription(resource),
+      sourceRepository: "",
+      promptContent: "",
+      skillContent: typeof skillMd === "string" ? skillMd : "",
+    });
+    setPackageMessage("Modo de edição carregado. Selecione a pasta completa para substituir o pacote.");
+  };
+
+  const handleDelete = async (resource: RegistryResource) => {
+    if (!window.confirm(`Excluir ${resource.metadata.name}@${registryResourceTag(resource)}?`)) return;
+    try {
+      await deleteSkillPackage({
+        name: resource.metadata.name,
+        tag: registryResourceTag(resource),
+        namespace: registryResourceNamespace(resource),
+      });
+      setPackageMessage("Skill excluída com sucesso.");
+      await loadCatalog();
+    } catch (error) {
+      setPackageMessage(error instanceof Error ? error.message : "Falha ao excluir a Skill.");
+    }
   };
 
   return (
@@ -258,6 +339,13 @@ export default function StorePage() {
                 registryResourceTag(selectedResource),
                 installTarget,
               );
+            }}
+            onDownload={() => void handleDownload()}
+            onEdit={() => {
+              if (selectedResource) handleEdit(selectedResource);
+            }}
+            onDelete={() => {
+              if (selectedResource) void handleDelete(selectedResource);
             }}
           />
 
@@ -383,19 +471,18 @@ export default function StorePage() {
                       </span>
                     </label>
                     <label className="block text-sm font-medium text-slate-300">
-                      Repositório de origem (opcional)
+                      Pasta completa da Skill
                       <Input
-                        aria-label="Repositório de origem"
-                        value={draft.sourceRepository}
-                        onChange={(event) =>
-                          setDraft((current) => ({
-                            ...current,
-                            sourceRepository: event.target.value,
-                          }))
-                        }
-                        placeholder="https://github.com/org/repo (opcional)"
+                        aria-label="Arquivos completos da Skill"
+                        type="file"
+                        multiple
+                        {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+                        onChange={(event) => setSkillFiles(Array.from(event.target.files ?? []))}
                         className="mt-1 border-slate-700 bg-slate-950 text-slate-100"
                       />
+                      <span className="mt-1 block text-xs font-normal text-slate-500">
+                        Selecione todos os arquivos, incluindo SKILL.md. O pacote será armazenado como uma Skill completa.
+                      </span>
                     </label>
                   </>
                 ) : (
@@ -439,6 +526,12 @@ export default function StorePage() {
                 {publishError ? (
                   <div role="alert" className="rounded-xl border border-red-500/30 bg-red-950/30 p-3 text-sm text-red-200">
                     {publishError}
+                  </div>
+                ) : null}
+
+                {packageMessage ? (
+                  <div role="status" className="rounded-xl border border-emerald-500/30 bg-emerald-950/30 p-3 text-sm text-emerald-200">
+                    {packageMessage}
                   </div>
                 ) : null}
 
@@ -574,6 +667,9 @@ function ResourceDetailCard({
   installRecipe,
   onInstallTargetChange,
   onRequestRecipe,
+  onDownload,
+  onEdit,
+  onDelete,
 }: {
   resource: RegistryResource | null;
   loading: boolean;
@@ -583,6 +679,9 @@ function ResourceDetailCard({
   installRecipe: InstallRecipe | null;
   onInstallTargetChange: (target: InstallTarget) => void;
   onRequestRecipe: () => void;
+  onDownload: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
 }) {
   if (loading) {
     return (
@@ -714,6 +813,27 @@ function ResourceDetailCard({
             <Download className="mr-2 h-4 w-4" />
             {installing ? "Gerando receita..." : "Gerar receita de instalação"}
           </Button>
+          {resource.registryKind === "skills" ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onDownload}
+              className="mt-2 w-full border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800 hover:text-white"
+            >
+              <Download className="mr-2 h-4 w-4" />
+              Baixar Skill completa (.zip)
+            </Button>
+          ) : null}
+          {resource.registryKind === "skills" ? (
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <Button type="button" variant="outline" onClick={onEdit} className="border-slate-700 bg-slate-900 text-slate-200">
+                Editar
+              </Button>
+              <Button type="button" variant="destructive" onClick={onDelete}>
+                Excluir
+              </Button>
+            </div>
+          ) : null}
           <p className="mt-2 text-xs text-slate-500">
             Gera os passos para aplicar no host ({INSTALL_TARGET_LABELS[installTarget]}).
             A aplicação automática no disco fica a cargo do agente/usuário.
@@ -768,4 +888,20 @@ function DetailSection({
       </ul>
     </div>
   );
+}
+
+function relativeSkillPath(file: File): string {
+  const candidate = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+  const parts = candidate.split("/");
+  return parts.length > 1 ? parts.slice(1).join("/") : candidate;
+}
+
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
 }

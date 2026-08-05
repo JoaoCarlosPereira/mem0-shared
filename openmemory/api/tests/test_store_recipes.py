@@ -75,6 +75,20 @@ def mcp_resource():
     }
 
 
+def packaged_skill_resource():
+    resource = skill_resource()
+    resource["status"] = {
+        "resolvedSource": {
+            "artifact": {
+                "digest": "a" * 64,
+                "mediaType": "application/vnd.agentregistry.skill.v1.tar+gzip",
+                "size": 1234,
+            }
+        }
+    }
+    return resource
+
+
 @pytest.mark.asyncio
 async def test_cursor_skill_recipe_uses_cursor_skill_path_and_rollback():
     registry = FakeRegistryClient(skill_resource())
@@ -101,6 +115,18 @@ async def test_cursor_skill_recipe_uses_cursor_skill_path_and_rollback():
             "if_backup_exists": True,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_packaged_skill_recipe_prefers_complete_artifact_over_legacy_git():
+    registry = FakeRegistryClient(packaged_skill_resource())
+    recipe = await InstallRecipeService(registry_client=registry).build(
+        kind="skill", name="team-skill", tag="v1", target="cursor", user_id="user-1"
+    )
+
+    assert recipe["source"]["type"] == "registry_artifact"
+    assert recipe["steps"][1]["type"] == "download_and_extract"
+    assert recipe["steps"][1]["verify_artifact_sha256"] == "a" * 64
 
 
 @pytest.mark.asyncio

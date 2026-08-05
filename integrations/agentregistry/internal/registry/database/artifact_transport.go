@@ -50,11 +50,10 @@ func (s *SkillArtifactTransportStore) Put(ctx context.Context, key types.SkillAr
 		}
 		return types.SkillArtifact{}, err
 	}
-	if s.afterPut == nil {
-		return types.SkillArtifact{}, errors.New("refresh skill artifact status: callback is required")
-	}
-	if err := s.afterPut(ctx, ref); err != nil {
-		return types.SkillArtifact{}, fmt.Errorf("refresh skill artifact status: %w", err)
+	if s.afterPut != nil {
+		if err := s.afterPut(ctx, ref); err != nil {
+			return types.SkillArtifact{}, fmt.Errorf("refresh skill artifact status: %w", err)
+		}
 	}
 	return types.SkillArtifact{Size: descriptor.Size, SHA256: sum[:]}, nil
 }

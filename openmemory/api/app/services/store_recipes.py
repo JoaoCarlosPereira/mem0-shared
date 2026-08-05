@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Any, Literal, Optional, Protocol, TypedDict
+from urllib.parse import quote
 
 from app.utils.agentregistry import (
     KIND_TO_REGISTRY_COLLECTION,
@@ -228,6 +229,21 @@ def _resolve_source(kind: str, resource: dict[str, Any], spec: dict[str, Any]) -
     metadata = resource.get("metadata") if isinstance(resource.get("metadata"), dict) else {}
     annotations = metadata.get("annotations") if isinstance(metadata.get("annotations"), dict) else {}
 
+    # Skills published as complete packages are self-contained. Prefer the
+    # immutable AgentRegistry artifact even if an older metadata record still
+    # carries a Git repository for provenance.
+    if kind == "skill":
+        resolved_artifact = resolved.get("artifact")
+        if isinstance(resolved_artifact, dict) and resolved_artifact.get("digest"):
+            return {
+                "type": "registry_artifact",
+                "media_type": resolved_artifact.get("mediaType")
+                or "application/vnd.agentregistry.skill.v1.tar+gzip",
+                "artifact_digest": resolved_artifact.get("digest"),
+                "size": resolved_artifact.get("size"),
+                "endpoint": f"/v0/skills/{quote(str(metadata.get('name') or 'skill'), safe='')}/{quote(str(metadata.get('tag') or 'latest'), safe='')}/artifact",
+            }
+
     repository = _first_dict(
         source.get("repository"),
         (source.get("git") or {}).get("repository") if isinstance(source.get("git"), dict) else None,
@@ -258,7 +274,6 @@ def _resolve_source(kind: str, resource: dict[str, Any], spec: dict[str, Any]) -
         skill_md = annotations.get(CONTENT_ANNOTATION)
         if isinstance(skill_md, str) and skill_md.strip():
             return {"type": "inline", "filename": "SKILL.md", "content": skill_md}
-
     return {
         "type": "registry",
         "note": "recurso sem fonte materializada; agente deve consultar o AgentRegistry",
@@ -308,6 +323,17 @@ def _file_steps(
     }
     if content is not None:
         copy_step["content"] = content
+
+    if source.get("type") == "registry_artifact":
+        copy_step = {
+            "id": "download-and-extract-resource",
+            "type": "download_and_extract",
+            "from": source,
+            "to": destination,
+            "overwrite": True,
+            "idempotent": True,
+            "verify_artifact_sha256": source.get("artifact_digest"),
+        }
 
     return [
         {

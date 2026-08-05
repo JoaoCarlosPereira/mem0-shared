@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Seed local mem0 skills into an AgentRegistry catalog.
-
-The current AgentRegistry Skill schema supports title/description and an
-optional repository source. It does not yet expose an inline content field, so
-this script preserves the SKILL.md body in metadata.annotations while filling
-the official Skill fields for catalog listing.
-"""
+"""Seed complete local mem0 Skill directories into AgentRegistry."""
 
 from __future__ import annotations
 
 import argparse
+import base64
+import gzip
+import hashlib
+import io
 import json
 import re
 import sys
+import tarfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -182,9 +182,28 @@ def build_skill_doc(skill_path: Path, skills_dir: Path, namespace: str, tag: str
             "spec:",
             f"  title: {yaml_scalar(title)}",
             f"  description: {yaml_block(description, 4)}",
+            "  language: pt-BR",
         ]
     )
     return name, "\n".join(lines) + "\n"
+
+
+def build_skill_archive(skill_path: Path) -> bytes:
+    """Pack the entire Skill directory, preserving relative paths and modes."""
+    output = io.BytesIO()
+    with gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as gz:
+        with tarfile.open(fileobj=gz, mode="w") as archive:
+            for path in sorted(skill_path.parent.rglob("*")):
+                if path.is_dir() or ".git" in path.parts or path.is_symlink():
+                    continue
+                relative = path.relative_to(skill_path.parent).as_posix()
+                data = path.read_bytes()
+                info = tarfile.TarInfo(relative)
+                info.size = len(data)
+                info.mode = path.stat().st_mode & 0o777
+                info.mtime = 0
+                archive.addfile(info, io.BytesIO(data))
+    return output.getvalue()
 
 
 def discover_skill_files(skills_dir: Path) -> list[Path]:
@@ -211,6 +230,22 @@ def request_json(method: str, url: str, token: str, body: bytes | None = None) -
     return json.loads(data.decode("utf-8"))
 
 
+def request_binary(method: str, url: str, token: str, body: bytes, media_type: str) -> dict[str, Any]:
+    digest = hashlib.sha256(body).digest()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": media_type,
+        "Digest": "sha-256=" + base64.b64encode(digest).decode("ascii"),
+    }
+    request = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return {"status": response.status, "digest": response.headers.get("Digest", "")}
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"{method} {url} failed with HTTP {exc.code}: {detail}") from exc
+
+
 def endpoint(base_url: str, path: str) -> str:
     base = base_url.rstrip("/")
     if base.endswith("/v0"):
@@ -232,9 +267,11 @@ def main() -> int:
     skill_files = discover_skill_files(args.skills_dir)
     docs: list[str] = []
     names: list[str] = []
+    skill_by_name: dict[str, Path] = {}
     for skill_file in skill_files:
         name, doc = build_skill_doc(skill_file, args.skills_dir, args.namespace, args.tag)
         names.append(name)
+        skill_by_name[name] = skill_file
         docs.append(doc)
 
     payload = "---\n".join(docs).encode("utf-8")
@@ -253,7 +290,24 @@ def main() -> int:
 
     list_response: dict[str, Any] = {}
     listed_names: set[str] = set()
+    artifact_failures: list[dict[str, str]] = []
     if not args.dry_run:
+        for name, skill_file in skill_by_name.items():
+            try:
+                archive = build_skill_archive(skill_file)
+                request_binary(
+                    "PUT",
+                    endpoint(
+                        args.registry_url,
+                        f"/v0/skills/{urllib.parse.quote(name, safe='')}/{urllib.parse.quote(args.tag, safe='')}/artifact",
+                    )
+                    + f"?namespace={urllib.parse.quote(args.namespace)}",
+                    args.token,
+                    archive,
+                    "application/vnd.agentregistry.skill.v1.tar+gzip",
+                )
+            except RuntimeError as exc:
+                artifact_failures.append({"name": name, "error": str(exc)})
         list_url = endpoint(args.registry_url, "/v0/skills")
         list_response = request_json("GET", list_url, args.token)
         listed_names = {item.get("metadata", {}).get("name", "") for item in list_response.get("items", [])}
@@ -269,12 +323,13 @@ def main() -> int:
         "failed": len(failures),
         "sample_names": names[:10],
         "failures": failures,
+        "artifact_failures": artifact_failures,
         "missing_after_publish": missing_after_publish,
         "listed_count": len(list_response.get("items", [])) if list_response else None,
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
-    if failures or missing_after_publish:
+    if failures or missing_after_publish or artifact_failures:
         return 1
     return 0
 

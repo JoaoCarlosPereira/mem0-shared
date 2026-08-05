@@ -16,21 +16,21 @@ func init() {
 type SkillSpec struct {
 	Title       string       `json:"title,omitempty" yaml:"title,omitempty"`
 	Description string       `json:"description,omitempty" yaml:"description,omitempty"`
+	Language    string       `json:"language,omitempty" yaml:"language,omitempty"`
 	Source      *SkillSource `json:"source,omitempty" yaml:"source,omitempty"`
 }
 
-// SkillSource is the distribution origin of a skill. Currently just a
-// git repository where the skill content lives. Future distribution
-// channels (e.g. published artifact) would land here.
+// SkillSource is the legacy distribution origin of a Skill. Complete LAN
+// packages are associated through the artifact subresource and do not need a
+// Git repository.
 type SkillSource struct {
 	Repository *Repository `json:"repository,omitempty" yaml:"repository,omitempty"`
 }
 
 // SkillStatus is the Skill observed-state subresource, written by the Skill
 // controller out of band of the API write. It embeds the shared Status
-// (conditions + observedGeneration) and records the controller's immutable pin
-// of the skill's git source — mirroring the Plugin resolve-and-pin model so a
-// harness deploy can materialize the skill from a fixed commit.
+// (conditions + observedGeneration) and records either the package digest or
+// the legacy Git source pin.
 //
 // Readiness: absence of Ready=True (or ResolvedSource==nil) means "not yet
 // resolved". The controller sets Ready=False/Progressing on first observe,
@@ -44,10 +44,18 @@ type SkillStatus struct {
 	ResolvedSource *SkillResolvedSource `json:"resolvedSource,omitempty" yaml:"resolvedSource,omitempty"`
 }
 
-// SkillResolvedSource records the concrete commit the Skill controller pinned
-// the skill's git source to. It is the reproducibility anchor: deploys
-// materialize from this pin, not from the (possibly moving) ref the user gave.
+// SkillResolvedSource records the immutable package digest or concrete commit
+// selected by the Skill controller. It is the reproducibility anchor used by
+// install recipes and host materialization.
 type SkillResolvedSource struct {
 	// Commit is the resolved full git commit SHA.
-	Commit string `json:"commit,omitempty" yaml:"commit,omitempty"`
+	Commit   string                 `json:"commit,omitempty" yaml:"commit,omitempty"`
+	Artifact *SkillResolvedArtifact `json:"artifact,omitempty" yaml:"artifact,omitempty"`
+}
+
+// SkillResolvedArtifact records the validated package associated with a Skill.
+type SkillResolvedArtifact struct {
+	Digest    string `json:"digest,omitempty" yaml:"digest,omitempty"`
+	MediaType string `json:"mediaType,omitempty" yaml:"mediaType,omitempty"`
+	Size      int64  `json:"size,omitempty" yaml:"size,omitempty"`
 }

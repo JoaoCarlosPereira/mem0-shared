@@ -126,7 +126,7 @@ describe("registry-client", () => {
     ).toEqual([
       "Informe o nome do recurso.",
       "Informe um título curto.",
-      "Informe o conteúdo da skill (SKILL.md) ou a URL do repositório.",
+      "Informe o conteúdo completo da Skill, incluindo SKILL.md.",
     ]);
 
     const inline = buildPublishManifest({
@@ -157,7 +157,7 @@ describe("registry-client", () => {
     expect(manifest).toContain("kind: Skill");
     expect(manifest).toContain('name: "team/demo"');
     expect(manifest).toContain('tag: "v1"');
-    expect(manifest).toContain('url: "https://github.com/acme/demo"');
+    expect(manifest).not.toContain("source:");
   });
 
   it("extrai texto de busca, origem e dependências úteis", () => {

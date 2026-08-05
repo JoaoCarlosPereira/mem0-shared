@@ -61,12 +61,13 @@ docker compose -f docker-compose.scale.yml up -d --no-deps agentregistry
 
 ## Seed do catálogo Mem0
 
-O seed versionado publica as skills locais de `skills/*/SKILL.md` como recursos
-`Skill` no AgentRegistry, mantendo o corpo do `SKILL.md` nas annotations para
-receitas de instalação e testes host-side:
+O seed versionado publica as skills locais de `skills/*/` como recursos
+`Skill` no AgentRegistry e envia o diretório completo como artefato
+`tar+gzip`. O pacote inclui `SKILL.md`, referências, scripts e demais arquivos,
+sem depender de repositório Git; a UI oferece o download equivalente em ZIP.
 
 ```bash
-python integrations/agentregistry/scripts/seed-mem0-skills.py \
+python3 integrations/agentregistry/scripts/seed-mem0-skills.py \
   --registry-url http://127.0.0.1:8765/registry-api \
   --token local
 ```
@@ -74,7 +75,7 @@ python integrations/agentregistry/scripts/seed-mem0-skills.py \
 Para validar contra o registry sem mutar:
 
 ```bash
-python integrations/agentregistry/scripts/seed-mem0-skills.py \
+python3 integrations/agentregistry/scripts/seed-mem0-skills.py \
   --registry-url http://127.0.0.1:8765/registry-api \
   --token local \
   --dry-run
@@ -83,7 +84,7 @@ python integrations/agentregistry/scripts/seed-mem0-skills.py \
 Para apenas inspecionar o YAML gerado:
 
 ```bash
-python integrations/agentregistry/scripts/seed-mem0-skills.py --print-yaml
+python3 integrations/agentregistry/scripts/seed-mem0-skills.py --print-yaml
 ```
 
 E2E local opcional (publish → discover → install em tmpdir; não toca home real):

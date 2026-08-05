@@ -4,6 +4,8 @@ jest.mock("@/lib/api-client", () => ({
   apiClient: {
     get: jest.fn(),
     post: jest.fn(),
+    put: jest.fn(),
+    delete: jest.fn(),
   },
 }));
 
@@ -42,6 +44,8 @@ describe("StorePage", () => {
   beforeEach(() => {
     mockedApiClient.get.mockReset();
     mockedApiClient.post.mockReset();
+    mockedApiClient.put.mockReset();
+    mockedApiClient.delete.mockReset();
     mockedApiClient.get.mockImplementation((url) => {
       if (String(url) === "/registry-api/v0/skills") {
         return Promise.resolve({ data: { items: [skill] } });
@@ -56,6 +60,7 @@ describe("StorePage", () => {
         results: [{ kind: "Skill", name: "team/new-skill", tag: "latest", status: "created" }],
       },
     });
+    mockedApiClient.put.mockResolvedValue({ data: {} });
   });
 
   it("renderiza listagem autenticada e carrega detalhe", async () => {
@@ -107,7 +112,7 @@ describe("StorePage", () => {
     expect(await screen.findByText(/Receita cursor/i)).toBeInTheDocument();
   });
 
-  it("publica manifesto via proxy de registry", async () => {
+  it("publica uma Skill completa via API da Store", async () => {
     render(<StorePage />);
     await screen.findByText("Demo Skill");
 
@@ -117,19 +122,23 @@ describe("StorePage", () => {
     fireEvent.change(screen.getByLabelText("Título"), {
       target: { value: "New Skill" },
     });
-    fireEvent.change(screen.getByLabelText("Repositório de origem"), {
-      target: { value: "https://github.com/acme/new-skill" },
+    fireEvent.change(screen.getByLabelText("Conteúdo da skill"), {
+      target: { value: "# New Skill\n\nInstruções em português para a equipe." },
     });
 
     fireEvent.click(screen.getByRole("button", { name: /Publicar via \/v0\/apply/i }));
 
     await waitFor(() => {
-      expect(mockedApiClient.post).toHaveBeenCalledWith(
-        "/registry-api/v0/apply",
-        expect.stringContaining('name: "team/new-skill"'),
-        { headers: { "content-type": "application/yaml" } },
+      expect(mockedApiClient.put).toHaveBeenCalledWith(
+        "/api-proxy/api/v1/store/skills/team%2Fnew-skill/latest",
+        expect.objectContaining({
+          name: "team/new-skill",
+          tag: "latest",
+          language: "pt-BR",
+          files: [expect.objectContaining({ path: "SKILL.md", encoding: "utf-8" })],
+        }),
       );
     });
-    expect(await screen.findByText(/Skill team\/new-skill@latest: created/)).toBeInTheDocument();
+    expect(await screen.findByText(/Skill completa publicada com sucesso/)).toBeInTheDocument();
   });
 });
