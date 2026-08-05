@@ -950,6 +950,23 @@ class PlankaCardMoveResponse(BaseModel):
     version: Optional[int] = None
 
 
+class PlankaCardUpdateRequest(BaseModel):
+    planka_card_id: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+    due_date: Optional[datetime] = None
+    position: Optional[float] = None
+    changed_fields: list[str]
+    actor: Optional[str] = None
+
+
+class PlankaCardUpdateResponse(BaseModel):
+    applied: bool
+    reason: Optional[str] = None
+    task_id: Optional[str] = None
+    version: Optional[int] = None
+
+
 def _assert_planka_bridge_token(authorization: Optional[str]) -> None:
     import os
 
@@ -1014,6 +1031,34 @@ def planka_card_moved(
         actor=actor,
     )
     return PlankaCardMoveResponse(**result)
+
+
+@router.post("/planka/card-updated", response_model=PlankaCardUpdateResponse)
+def planka_card_updated(
+    payload: PlankaCardUpdateRequest,
+    authorization: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+) -> PlankaCardUpdateResponse:
+    """Bridge PLANKA → Spec para conteúdo editado por uma pessoa na UI."""
+    from app.utils.planka_bridge import PlankaBridgeError, apply_planka_card_update
+
+    _assert_planka_bridge_token(authorization)
+    try:
+        result = apply_planka_card_update(
+            db,
+            planka_card_id=payload.planka_card_id.strip(),
+            changed_fields=set(payload.changed_fields),
+            name=payload.name,
+            description=payload.description,
+            due_date=payload.due_date,
+            position=payload.position,
+        )
+    except PlankaBridgeError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "detail": exc.detail},
+        ) from exc
+    return PlankaCardUpdateResponse(**result)
 
 
 class PlankaProjectLifecycleRequest(BaseModel):

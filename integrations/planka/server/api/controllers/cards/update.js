@@ -319,6 +319,7 @@ module.exports = {
 
     const previousListId = list.id;
     const previousPosition = card.position;
+    const previousMetadata = _.pick(card, ['name', 'description', 'dueDate', 'position']);
 
     card = await sails.helpers.cards.updateOne
       .with({
@@ -347,21 +348,55 @@ module.exports = {
       throw Errors.CARD_NOT_FOUND;
     }
 
+    const authMethod = this.req.mem0Auth && this.req.mem0Auth.method;
+    const isMem0Mirror = authMethod === 'internal' || this.req.get('X-Mem0-Mirror') === '1';
+    const actorSubject =
+      (this.req.mem0Auth && this.req.mem0Auth.subject) ||
+      currentUser.username ||
+      currentUser.email ||
+      currentUser.id ||
+      'ui-user';
+    const metadataFields = ['name', 'description', 'dueDate', 'position'].filter(
+      (key) => !_.isUndefined(inputs[key]),
+    );
+
+    if (!isMem0Mirror && metadataFields.length > 0) {
+      try {
+        await sails.helpers.mem0.notifySpecCardUpdate.with({
+          plankaCardId: String(card.id),
+          name: card.name,
+          description: card.description,
+          dueDate: card.dueDate ? new Date(card.dueDate).toISOString() : null,
+          position: card.position,
+          changedFields: metadataFields,
+          actor: String(actorSubject),
+        });
+      } catch (bridgeErr) {
+        // Fail closed: não confirmar na UI conteúdo que o MCP ainda não consegue ler.
+        try {
+          await sails.helpers.cards.updateOne.with({
+            project,
+            board: nextBoard || board,
+            list: nextList || list,
+            record: card,
+            values: previousMetadata,
+            actorUser: currentUser,
+            request: this.req,
+          });
+        } catch (revertErr) {
+          sails.log.error('mem0: failed to revert card metadata after Spec reject', revertErr);
+        }
+        throw Errors.NOT_ENOUGH_RIGHTS;
+      }
+    }
+
     if (!_.isUndefined(inputs.listId) && String(inputs.listId) !== String(previousListId)) {
       // Spec → PLANKA mirror usa Bearer INTERNAL; não reenviar ao Spec (evita loop + 403).
-      const authMethod = this.req.mem0Auth && this.req.mem0Auth.method;
-      if (authMethod === 'internal') {
+      if (isMem0Mirror) {
         return {
           item: card,
         };
       }
-
-      const actorSubject =
-        (this.req.mem0Auth && this.req.mem0Auth.subject) ||
-        currentUser.username ||
-        currentUser.email ||
-        currentUser.id ||
-        'ui-user';
 
       try {
         await sails.helpers.mem0.notifySpecCardMove.with({

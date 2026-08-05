@@ -16,7 +16,11 @@ from app.database import Base, get_db
 from app.models import Project, SpecPlankaIdMap, SpecWorkspace, TaskCard, TaskCardStatus
 from app.routers.specs import router as specs_router
 from app.utils.planka import ENTITY_TASK, list_entity_type
-from app.utils.planka_bridge import PlankaBridgeError, apply_planka_card_move
+from app.utils.planka_bridge import (
+    PlankaBridgeError,
+    apply_planka_card_move,
+    apply_planka_card_update,
+)
 from app.utils.task_lock import UpdateTaskStatusResult
 
 
@@ -119,6 +123,41 @@ def test_unmapped_card_is_ignored(db_session):
     )
     assert result["applied"] is False
     assert result["reason"] == "not_mapped"
+
+
+def test_card_metadata_update_is_immediately_persisted_for_mcp(db_session):
+    _, task = _seed_mapped_task(db_session)
+    result = apply_planka_card_update(
+        db_session,
+        planka_card_id="pcard-1",
+        changed_fields={"name", "description", "dueDate", "position"},
+        name="Título editado na UI",
+        description="Conteúdo mais recente",
+        due_date=None,
+        position=32768,
+    )
+    db_session.refresh(task)
+    assert result == {"applied": True, "task_id": str(task.id), "version": 2}
+    assert task.title == "Título editado na UI"
+    assert task.description == "Conteúdo mais recente"
+    assert task.due_at is None
+    assert task.position == 32768
+
+
+def test_card_update_only_changes_explicit_fields(db_session):
+    _, task = _seed_mapped_task(db_session)
+    task.description = "preservar"
+    db_session.commit()
+    apply_planka_card_update(
+        db_session,
+        planka_card_id="pcard-1",
+        changed_fields={"name"},
+        name="Novo título",
+        description=None,
+    )
+    db_session.refresh(task)
+    assert task.title == "Novo título"
+    assert task.description == "preservar"
 
 
 def test_claim_from_tasks_list(db_session, monkeypatch):
@@ -246,6 +285,37 @@ def test_unknown_list_raises(db_session):
 
 
 class TestCardMovedHttpEndpoint:
+    def test_card_update_is_visible_through_spec_database(self, bridge_client):
+        client, factory = bridge_client
+        db = factory()
+        try:
+            _, task = _seed_mapped_task(db)
+            task_id = task.id
+        finally:
+            db.close()
+
+        resp = client.post(
+            "/api/v1/specs/planka/card-updated",
+            headers={"authorization": "Bearer bridge-secret"},
+            json={
+                "planka_card_id": "pcard-1",
+                "name": "Editado pelo Planka",
+                "description": "Disponível ao MCP",
+                "changed_fields": ["name", "description"],
+                "actor": "host-a",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["version"] == 2
+        db = factory()
+        try:
+            task = db.get(TaskCard, task_id)
+            assert task.title == "Editado pelo Planka"
+            assert task.description == "Disponível ao MCP"
+            assert task.version == 2
+        finally:
+            db.close()
+
     def test_accepts_planka_internal_bearer(self, bridge_client):
         client, factory = bridge_client
         db = factory()

@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Optional
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from app.models import SpecPlankaIdMap, SpecWorkspace, SpecWorkspaceStatus, TaskCard, TaskCardStatus
+from app.models import (
+    SpecPlankaIdMap,
+    SpecWorkspace,
+    SpecWorkspaceStatus,
+    TaskCard,
+    TaskCardStatus,
+    get_current_utc_time,
+)
 from app.utils.planka import ENTITY_PROJECT, ENTITY_TASK
 from app.utils.task_lock import (
     ClaimTaskResult,
@@ -28,6 +36,53 @@ class PlankaBridgeError(Exception):
         self.code = code
         self.detail = detail
         super().__init__(detail)
+
+
+def apply_planka_card_update(
+    db: Session,
+    *,
+    planka_card_id: str,
+    changed_fields: set[str],
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    due_date: Optional[datetime] = None,
+    position: Optional[float] = None,
+) -> dict:
+    """Persist human PLANKA metadata edits in the TaskCard read by MCP."""
+    task_map = (
+        db.query(SpecPlankaIdMap)
+        .filter(
+            SpecPlankaIdMap.entity_type == ENTITY_TASK,
+            SpecPlankaIdMap.planka_id == planka_card_id,
+        )
+        .first()
+    )
+    if task_map is None:
+        return {"applied": False, "reason": "not_mapped"}
+    task = db.get(TaskCard, task_map.spec_id)
+    if task is None:
+        raise PlankaBridgeError(404, "task_missing", "Task Spec ausente para card PLANKA")
+
+    allowed = {"name", "description", "dueDate", "position"}
+    fields = changed_fields & allowed
+    values: dict = {"version": TaskCard.version + 1, "updated_at": get_current_utc_time()}
+    if "name" in fields:
+        if not name or not name.strip():
+            raise PlankaBridgeError(422, "invalid_name", "Título do card não pode ser vazio")
+        values["title"] = name
+    if "description" in fields:
+        values["description"] = description
+    if "dueDate" in fields:
+        values["due_at"] = due_date
+    if "position" in fields and position is not None:
+        values["position"] = position
+    if len(values) == 2:
+        return {"applied": False, "reason": "no_supported_fields", "task_id": str(task.id)}
+
+    db.execute(sa.update(TaskCard).where(TaskCard.id == task.id).values(**values))
+    db.commit()
+    db.refresh(task)
+    return {"applied": True, "task_id": str(task.id), "version": task.version}
 
 
 def reconcile_planka_board_lifecycle(
