@@ -15,8 +15,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
-from app.models import Project, SpecWorkspace, SpecWorkspaceStatus
-from app.utils.workspace_lifecycle import apply_status_change
+from app.models import Project, SpecDocument, SpecWorkspace, SpecWorkspaceStatus, TaskCard, TaskCardStatus
+from app.utils.workspace_lifecycle import apply_status_change, reconcile_workspace_completion_from_tasks
 
 
 @pytest.fixture
@@ -132,3 +132,39 @@ class TestMirrorBestEffort:
         ):
             result = apply_status_change(db_session, ws, SpecWorkspaceStatus.concluido)
         assert result.status == SpecWorkspaceStatus.concluido
+
+
+class TestAutomaticCompletion:
+    def test_conclui_quando_todas_as_tasks_estao_concluidas(self, db_session):
+        ws = _mk_ws(db_session, status=SpecWorkspaceStatus.ativo)
+        db_session.add(TaskCard(workspace_id=ws.id, title="Done", status=TaskCardStatus.concluido))
+        db_session.commit()
+
+        reconcile_workspace_completion_from_tasks(db_session, ws.id)
+
+        assert ws.status == SpecWorkspaceStatus.concluido
+
+    def test_documento_sdd_conta_como_card_sem_impedir_conclusao(self, db_session):
+        ws = _mk_ws(db_session, status=SpecWorkspaceStatus.planejamento)
+        db_session.add(SpecDocument(workspace_id=ws.id, document_type="prd"))
+        db_session.commit()
+
+        reconcile_workspace_completion_from_tasks(db_session, ws.id)
+
+        assert ws.status == SpecWorkspaceStatus.concluido
+
+    def test_quadro_vazio_nao_e_concluido(self, db_session):
+        ws = _mk_ws(db_session, status=SpecWorkspaceStatus.planejamento)
+
+        reconcile_workspace_completion_from_tasks(db_session, ws.id)
+
+        assert ws.status == SpecWorkspaceStatus.planejamento
+
+    def test_task_aberta_nao_promove_planejamento_para_ativo(self, db_session):
+        ws = _mk_ws(db_session, status=SpecWorkspaceStatus.planejamento)
+        db_session.add(TaskCard(workspace_id=ws.id, title="Open", status=TaskCardStatus.tasks))
+        db_session.commit()
+
+        reconcile_workspace_completion_from_tasks(db_session, ws.id)
+
+        assert ws.status == SpecWorkspaceStatus.planejamento

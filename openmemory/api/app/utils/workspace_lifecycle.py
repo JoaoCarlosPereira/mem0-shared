@@ -17,13 +17,63 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.models import SpecWorkspace, SpecWorkspaceStatus, get_current_utc_time
+from app.models import (
+    SpecDocument,
+    SpecWorkspace,
+    SpecWorkspaceStatus,
+    TaskCard,
+    TaskCardStatus,
+    get_current_utc_time,
+)
 
 logger = logging.getLogger(__name__)
 
 # Status "abertos" — reabrir um workspace concluído/arquivado para qualquer um
 # destes limpa os timestamps de conclusão/arquivamento correspondentes.
 _OPEN_STATUSES = (SpecWorkspaceStatus.planejamento, SpecWorkspaceStatus.ativo)
+
+
+def reconcile_workspace_completion_from_tasks(
+    db: Session,
+    workspace_id,
+    *,
+    actor: Optional[str] = None,
+) -> SpecWorkspace | None:
+    """Deriva o lifecycle do quadro a partir de seus cards de trabalho.
+
+    Cards de documentos ficam sempre na coluna SDD e não são ``TaskCard``.
+    Portanto, quando não resta task fora de ``concluido``, todos os cards do
+    quadro estão em SDD e/ou Concluído e o workspace deve ser concluído.
+    """
+    workspace = db.get(SpecWorkspace, workspace_id)
+    if workspace is None or workspace.status == SpecWorkspaceStatus.arquivado:
+        return workspace
+
+    has_open_tasks = (
+        db.query(TaskCard.id)
+        .filter(
+            TaskCard.workspace_id == workspace_id,
+            TaskCard.status != TaskCardStatus.concluido,
+        )
+        .first()
+        is not None
+    )
+    has_any_cards = (
+        db.query(TaskCard.id).filter(TaskCard.workspace_id == workspace_id).first() is not None
+        or db.query(SpecDocument.id).filter(SpecDocument.workspace_id == workspace_id).first()
+        is not None
+    )
+    if not has_any_cards:
+        return workspace
+    if has_open_tasks:
+        if workspace.status != SpecWorkspaceStatus.concluido:
+            return workspace
+        target = SpecWorkspaceStatus.ativo
+    else:
+        target = SpecWorkspaceStatus.concluido
+    if workspace.status == target:
+        return workspace
+    return apply_status_change(db, workspace, target, actor=actor or "kanban-auto")
 
 
 def apply_status_change(

@@ -381,6 +381,13 @@ def update_task_status(
     db.commit()
 
     fresh = db.get(TaskCard, task_id)
+    from app.utils.workspace_lifecycle import reconcile_workspace_completion_from_tasks
+
+    reconcile_workspace_completion_from_tasks(
+        db,
+        fresh.workspace_id,
+        actor=actor or "kanban-auto",
+    )
     from app.utils.planka_hooks import mirror_task_status
 
     mirror_task_status(db, task_id)

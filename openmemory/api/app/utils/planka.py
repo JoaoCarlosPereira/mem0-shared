@@ -340,6 +340,9 @@ class PlankaMirrorHttpClient:
                 "PATCH",
                 f"/api/projects/{project_map.planka_id}",
                 json={"isArchived": is_archived, "isCompleted": is_completed},
+                # Spec is the source of truth. Prevent this projection from
+                # being interpreted by PLANKA as a human-originated change.
+                headers={"X-Mem0-Mirror": "1"},
             )
         except PlankaMirrorError as exc:
             if exc.status_code == 404:

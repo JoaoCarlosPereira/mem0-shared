@@ -335,7 +335,11 @@ module.exports = {
     // Mem0 Shared: kanban-archive-lifecycle — avisa o Spec (SoT) depois que um
     // humano arquiva/desarquiva ou marca o projeto como concluído aqui no
     // board. Fire-and-forget/best-effort: nunca deve travar ou falhar o PATCH.
-    if (!_.isUndefined(inputs.isArchived) || !_.isUndefined(inputs.isCompleted)) {
+    const isMem0Mirror = this.req.get('X-Mem0-Mirror') === '1';
+    if (
+      !isMem0Mirror &&
+      (!_.isUndefined(inputs.isArchived) || !_.isUndefined(inputs.isCompleted))
+    ) {
       sails.helpers.mem0.notifySpecProjectLifecycle
         .with({
           plankaProjectId: project.id,
