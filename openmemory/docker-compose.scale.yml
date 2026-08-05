@@ -312,6 +312,11 @@ services:
       - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
       # Proxy /registry-api → AgentRegistry (loja interna)
       - AGENT_REGISTRY_INTERNAL_URL=${AGENT_REGISTRY_INTERNAL_URL:-http://agentregistry:8080}
+      # Proxy /planka → sidecar Kanban (mesmo raciocínio do registry-api acima).
+      # Sem isto, o board só funcionava via Traefik na porta :8765 (profile
+      # sidecars) — quebrando o embed same-origin em :3000 direto e no domínio
+      # HTTPS de produção, onde só o router Host()-based da própria UI existe.
+      - PLANKA_INTERNAL_URL=${PLANKA_INTERNAL_URL:-http://planka:1337}
 
   # Catálogo da loja interna (AgentRegistry / mem0registry). Schema PostgreSQL
   # `agentregistry` no mesmo DB openmemory. NÃO usa Qdrant / mem0_store.
