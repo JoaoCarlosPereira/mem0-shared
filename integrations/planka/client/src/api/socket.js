@@ -10,7 +10,10 @@ import Config from '../constants/Config';
 
 const io = sailsIOClient(socketIOClient);
 
+io.sails.url = window.location.origin;
 io.sails.path = `${Config.BASE_PATH}/socket.io`;
+io.sails.query = 'nosession=1';
+io.sails.transports = ['polling'];
 io.sails.autoConnect = false;
 io.sails.reconnection = true;
 io.sails.useCORSRouteToGetCookie = false;
