@@ -43,6 +43,7 @@ from app.routers import (
     store_router,
 )
 from app.workers.spec_task_timeout_worker import spec_task_timeout_worker
+from app.workers.spec_workspace_archive_worker import spec_workspace_archive_worker
 from app.workers.write_worker import embedded_worker_enabled, write_worker
 from app.utils.logging_context import install_structured_logging
 from app.utils.tracing import configure_tracing
@@ -207,6 +208,9 @@ async def _start_write_worker():
     # Liberação automática de tasks travadas por timeout (task_05 / ADR-007),
     # iniciada no mesmo startup do write_worker (não como serviço Docker próprio).
     spec_task_timeout_worker.start()
+    # Auto-arquivamento de workspaces concluídos há mais de N dias (Tarefa
+    # kanban-archive-lifecycle) — mesmo padrão de startup do timeout worker.
+    spec_workspace_archive_worker.start()
     # Materializa falha na UI quando o write-worker morre/trava (heartbeat).
     write_queue_stall_watchdog.start()
 
@@ -216,4 +220,5 @@ async def _stop_write_worker():
     if embedded_worker_enabled():
         await write_worker.stop()
     await spec_task_timeout_worker.stop()
+    await spec_workspace_archive_worker.stop()
     await write_queue_stall_watchdog.stop()

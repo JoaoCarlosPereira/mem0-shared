@@ -145,6 +145,7 @@ class TestInventoryGate:
 
             client = MagicMock()
             client.ensure_workspace_board = AsyncMock(return_value="board-1")
+            client.set_project_lifecycle = AsyncMock()
             client.mirror_task = AsyncMock()
             client.mirror_document = AsyncMock()
 

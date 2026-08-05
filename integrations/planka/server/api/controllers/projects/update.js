@@ -164,6 +164,15 @@ module.exports = {
     isFavorite: {
       type: 'boolean',
     },
+    // Mem0 Shared: kanban-archive-lifecycle — espelho de SpecWorkspace.status.
+    // Sem checagem extra de owner/manager (mesmo modelo compartilhado de
+    // isFavorite): qualquer membro do time pode arquivar/desarquivar.
+    isArchived: {
+      type: 'boolean',
+    },
+    isCompleted: {
+      type: 'boolean',
+    },
   },
 
   exits: {
@@ -207,7 +216,7 @@ module.exports = {
       currentUser.id,
     );
 
-    const availableInputKeys = ['id', 'isFavorite'];
+    const availableInputKeys = ['id', 'isFavorite', 'isArchived', 'isCompleted'];
     if (project.ownerProjectManagerId) {
       if (projectManager) {
         if (!_.isNil(inputs.ownerProjectManagerId)) {
@@ -287,6 +296,8 @@ module.exports = {
       'backgroundGradient',
       'isHidden',
       'isFavorite',
+      'isArchived',
+      'isCompleted',
     ]);
 
     project = await sails.helpers.projects.updateOne
@@ -319,6 +330,22 @@ module.exports = {
 
     if (!project) {
       throw Errors.PROJECT_NOT_FOUND;
+    }
+
+    // Mem0 Shared: kanban-archive-lifecycle — avisa o Spec (SoT) depois que um
+    // humano arquiva/desarquiva ou marca o projeto como concluído aqui no
+    // board. Fire-and-forget/best-effort: nunca deve travar ou falhar o PATCH.
+    if (!_.isUndefined(inputs.isArchived) || !_.isUndefined(inputs.isCompleted)) {
+      sails.helpers.mem0.notifySpecProjectLifecycle
+        .with({
+          plankaProjectId: project.id,
+          isArchived: project.isArchived,
+          isCompleted: project.isCompleted,
+          actor: currentUser.email,
+        })
+        .catch((error) => {
+          sails.log.warn('mem0 notify-spec-project-lifecycle failed', error);
+        });
     }
 
     return {

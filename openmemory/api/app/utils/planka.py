@@ -77,6 +77,10 @@ class PlankaMirrorClient(Protocol):
 
     async def delete_task(self, task_id: UUID) -> None: ...
 
+    async def set_project_lifecycle(
+        self, workspace_id: UUID, *, is_archived: bool, is_completed: bool
+    ) -> None: ...
+
 
 def list_entity_type(status: str) -> str:
     """Entity type key for a Spec status list mapping."""
@@ -317,6 +321,31 @@ class PlankaMirrorHttpClient:
                 raise
         self.db.delete(existing)
         self.db.commit()
+
+    async def set_project_lifecycle(
+        self, workspace_id: UUID, *, is_archived: bool, is_completed: bool
+    ) -> None:
+        """Projeta ``SpecWorkspace.status`` como ``Project.isArchived/isCompleted``.
+
+        No-op se o workspace ainda não tem projeto PLANKA mapeado (workspace
+        criado com o mirror desligado, ou nunca aberto no Kanban) — nada a
+        atualizar, e forçar ``ensure_workspace_board`` aqui recriaria o board de
+        um workspace que talvez nunca deva aparecer no PLANKA.
+        """
+        project_map = self._get_map(ENTITY_PROJECT, workspace_id)
+        if project_map is None:
+            return
+        try:
+            await self._request(
+                "PATCH",
+                f"/api/projects/{project_map.planka_id}",
+                json={"isArchived": is_archived, "isCompleted": is_completed},
+            )
+        except PlankaMirrorError as exc:
+            if exc.status_code == 404:
+                # Projeto foi removido diretamente no PLANKA; mapa órfão, não retenta.
+                return
+            raise
 
     async def _mirror_task_assignee(self, task: TaskCard, planka_card_id: str) -> None:
         """Projeta ``TaskCard.assignee`` como card_membership PLANKA (avatar no card).

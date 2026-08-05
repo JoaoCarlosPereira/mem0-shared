@@ -115,6 +115,33 @@ Smoke:
 # PLANKA_URL=http://127.0.0.1:8765/planka-api ./integrations/planka/scripts/smoke-health.sh
 ```
 
+## Lifecycle de workspace (arquivamento)
+
+`SpecWorkspace.status` continua a única fonte de verdade; `Project.isArchived`/
+`isCompleted` no PLANKA são uma projeção espelhada, sincronizada nas duas
+direções:
+
+- **Spec → PLANKA**: `PATCH /api/v1/specs/workspaces/{id}` (manual/MCP) e o
+  worker de auto-arquivamento (`spec_workspace_archive_worker`, embutido na
+  API, sem serviço Docker próprio) chamam `apply_status_change`, que grava
+  `completed_at`/`archived_at`/`archived_by` e espelha via
+  `PATCH /api/projects/{id}` no PLANKA.
+- **PLANKA → Spec**: o botão de arquivar no card do board (home do Kanban)
+  chama `PATCH /api/projects/:id` com `isArchived`/`isCompleted`; o controller
+  dispara `sails.helpers.mem0.notifySpecProjectLifecycle`, que faz
+  `POST /api/v1/specs/planka/project-lifecycle` de volta ao Spec.
+- Workspaces arquivados **nunca** são filtrados nas leituras MCP/REST — só
+  saem da lista principal na home do Kanban, agrupados em "Concluídos"/
+  "Arquivados" (`CollapsibleProjects`, recolhidos por padrão).
+
+Env vars (default no `SpecWorkspaceArchiveWorker` se ausentes; ver
+`openmemory/api/.env.example`):
+
+| Variável | Default | Descrição |
+|----------|---------|-----------|
+| `SPEC_WORKSPACE_ARCHIVE_AFTER_DAYS` | `30` | Dias em `concluido` antes de auto-arquivar |
+| `SPEC_WORKSPACE_ARCHIVE_POLL_SECONDS` | `3600` | Intervalo de varredura do worker |
+
 ## Notas
 
 - A UI React do PLANKA é o **canvas** da aba Documentações (ADR-007); shell/trilho SDD ficam no Next.

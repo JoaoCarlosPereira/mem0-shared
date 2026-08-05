@@ -12,6 +12,7 @@ import { isUserAdminOrProjectOwner } from '../../../utils/record-helpers';
 import { ProjectGroups, ProjectTypes } from '../../../constants/Enums';
 import { ProjectGroupIcons } from '../../../constants/Icons';
 import Projects from './Projects';
+import CollapsibleProjects from './CollapsibleProjects';
 
 const TITLE_BY_GROUP = {
   [ProjectGroups.MY_OWN]: 'common.myOwn',
@@ -44,18 +45,30 @@ const GroupedProjectsView = React.memo(() => {
 
   return (
     <>
-      {[ProjectGroups.TEAM].map(
-        (group) =>
-          (projectIdsByGroup[group].length > 0 || canAdd) && (
-            <Projects
-              key={group}
-              ids={projectIdsByGroup[group]}
-              title={TITLE_BY_GROUP[group]}
-              titleIcon={ProjectGroupIcons[group]}
-              onAdd={() => handleAdd(DEFAULT_TYPE_BY_GROUP[group])}
-            />
-          ),
+      {(projectIdsByGroup.teamActiveIds.length > 0 || canAdd) && (
+        <Projects
+          ids={projectIdsByGroup.teamActiveIds}
+          title={TITLE_BY_GROUP[ProjectGroups.TEAM]}
+          titleIcon={ProjectGroupIcons[ProjectGroups.TEAM]}
+          withArchiveButton
+          onAdd={() => handleAdd(DEFAULT_TYPE_BY_GROUP[ProjectGroups.TEAM])}
+        />
       )}
+      {/* Mem0 Shared: kanban-archive-lifecycle — grupos recolhidos por padrão
+       * (CollapsibleProjects.defaultExpanded === false); não removem o quadro
+       * da equipe, só o tiram da lista principal. */}
+      <CollapsibleProjects
+        ids={projectIdsByGroup.teamCompletedIds}
+        title="common.completed"
+        titleIcon="check circle outline"
+        withArchiveButton
+      />
+      <CollapsibleProjects
+        ids={projectIdsByGroup.teamArchivedIds}
+        title="common.archived"
+        titleIcon="archive"
+        withArchiveButton
+      />
       {[ProjectGroups.SHARED_WITH_ME, ProjectGroups.OTHERS].map(
         (group) =>
           projectIdsByGroup[group].length > 0 && (

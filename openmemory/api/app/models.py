@@ -697,6 +697,14 @@ class SpecWorkspace(Base):
     updated_at = Column(DateTime,
                         default=get_current_utc_time,
                         onupdate=get_current_utc_time)
+    # Lifecycle de arquivamento (Tarefa kanban-archive-lifecycle). Nullable: um
+    # workspace nunca concluído/arquivado nunca preenche estes campos.
+    # ``completed_at`` é a referência do worker de auto-arquivamento (1 mês após
+    # concluído) — não reaproveita ``updated_at`` porque este é sobrescrito por
+    # qualquer edição, não só pela transição de status.
+    completed_at = Column(DateTime, nullable=True)
+    archived_at = Column(DateTime, nullable=True)
+    archived_by = Column(String, nullable=True)
 
     project = relationship("Project")
     documents = relationship("SpecDocument", back_populates="workspace")

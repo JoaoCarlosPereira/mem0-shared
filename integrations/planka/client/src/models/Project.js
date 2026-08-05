@@ -22,6 +22,13 @@ export default class extends BaseModel {
     isFavorite: attr({
       getDefault: () => false,
     }),
+    // Mem0 Shared: kanban-archive-lifecycle — espelho de SpecWorkspace.status.
+    isArchived: attr({
+      getDefault: () => false,
+    }),
+    isCompleted: attr({
+      getDefault: () => false,
+    }),
     ownerProjectManagerId: oneToOne({
       to: 'ProjectManager',
       as: 'ownerProjectManager',

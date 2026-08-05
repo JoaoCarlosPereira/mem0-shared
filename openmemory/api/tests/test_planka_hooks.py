@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
-from app.models import Project, SpecWorkspace, TaskCard, TaskCardStatus
+from app.models import Project, SpecWorkspace, SpecWorkspaceStatus, TaskCard, TaskCardStatus
 from app.utils import planka_hooks
 from app.utils.planka import PlankaMirrorError
 from app.utils.task_lock import claim_task, release_task, update_task_status
@@ -118,3 +118,68 @@ def test_update_task_status_triggers_mirror_status(db_session, monkeypatch):
             "host-a",
         )
     mirror.assert_called_once_with(db_session, task.id)
+
+
+class TestMirrorSetProjectLifecycle:
+    """Tarefa kanban-archive-lifecycle: espelho isArchived/isCompleted."""
+
+    def _mk_ws(self, db, *, status):
+        if not db.query(Project).filter(Project.name == "mem0-shared").first():
+            db.add(Project(name="mem0-shared"))
+            db.commit()
+        ws = SpecWorkspace(
+            project_id="mem0-shared", slug="lifecycle-hooks-ws", name="Lifecycle", status=status
+        )
+        db.add(ws)
+        db.commit()
+        db.refresh(ws)
+        return ws
+
+    def test_disabled_is_noop(self, db_session, monkeypatch):
+        monkeypatch.setenv("PLANKA_MIRROR_SYNC", "0")
+        ws = self._mk_ws(db_session, status=SpecWorkspaceStatus.concluido)
+        with patch("app.utils.planka_hooks.PlankaMirrorHttpClient") as cls:
+            planka_hooks.mirror_set_project_lifecycle(db_session, ws.id)
+            cls.assert_not_called()
+
+    def test_derives_flags_from_status_concluido(self, db_session, monkeypatch):
+        monkeypatch.setenv("PLANKA_MIRROR_SYNC", "1")
+        ws = self._mk_ws(db_session, status=SpecWorkspaceStatus.concluido)
+        client = MagicMock()
+        client.set_project_lifecycle = AsyncMock()
+        with patch("app.utils.planka_hooks.PlankaMirrorHttpClient", return_value=client):
+            planka_hooks.mirror_set_project_lifecycle(db_session, ws.id)
+        client.set_project_lifecycle.assert_awaited_once_with(
+            ws.id, is_archived=False, is_completed=True
+        )
+
+    def test_derives_flags_from_status_arquivado(self, db_session, monkeypatch):
+        monkeypatch.setenv("PLANKA_MIRROR_SYNC", "1")
+        ws = self._mk_ws(db_session, status=SpecWorkspaceStatus.arquivado)
+        client = MagicMock()
+        client.set_project_lifecycle = AsyncMock()
+        with patch("app.utils.planka_hooks.PlankaMirrorHttpClient", return_value=client):
+            planka_hooks.mirror_set_project_lifecycle(db_session, ws.id)
+        client.set_project_lifecycle.assert_awaited_once_with(
+            ws.id, is_archived=True, is_completed=True
+        )
+
+    def test_derives_flags_from_status_ativo(self, db_session, monkeypatch):
+        monkeypatch.setenv("PLANKA_MIRROR_SYNC", "1")
+        ws = self._mk_ws(db_session, status=SpecWorkspaceStatus.ativo)
+        client = MagicMock()
+        client.set_project_lifecycle = AsyncMock()
+        with patch("app.utils.planka_hooks.PlankaMirrorHttpClient", return_value=client):
+            planka_hooks.mirror_set_project_lifecycle(db_session, ws.id)
+        client.set_project_lifecycle.assert_awaited_once_with(
+            ws.id, is_archived=False, is_completed=False
+        )
+
+    def test_best_effort_swallows_failure(self, db_session, monkeypatch):
+        monkeypatch.setenv("PLANKA_MIRROR_SYNC", "1")
+        ws = self._mk_ws(db_session, status=SpecWorkspaceStatus.concluido)
+        client = MagicMock()
+        client.set_project_lifecycle = AsyncMock(side_effect=PlankaMirrorError(503, "down"))
+        with patch("app.utils.planka_hooks.PlankaMirrorHttpClient", return_value=client):
+            # não deve levantar
+            planka_hooks.mirror_set_project_lifecycle_best_effort(db_session, ws.id)

@@ -10,6 +10,7 @@ import PropTypes from 'prop-types';
 import classNames from 'classnames';
 import { useDispatch, useSelector } from 'react-redux';
 import { Link } from 'react-router';
+import { useTranslation } from 'react-i18next';
 import { Button, Icon } from 'semantic-ui-react';
 
 import selectors from '../../../selectors';
@@ -27,7 +28,18 @@ const Sizes = {
 };
 
 const ProjectCard = React.memo(
-  ({ id, size, isActive, withDescription, withTypeIndicator, withFavoriteButton, className }) => {
+  ({
+    id,
+    size,
+    isActive,
+    withDescription,
+    withTypeIndicator,
+    withFavoriteButton,
+    withArchiveButton,
+    className,
+  }) => {
+    const [t] = useTranslation();
+
     const selectProjectById = useMemo(() => selectors.makeSelectProjectById(), []);
 
     const selectFirstBoardIdByProjectId = useMemo(
@@ -76,6 +88,16 @@ const ProjectCard = React.memo(
       dispatch(
         entryActions.updateProject(project.id, {
           isFavorite: !project.isFavorite,
+        }),
+      );
+    }, [project, dispatch]);
+
+    // Mem0 Shared: kanban-archive-lifecycle — clique alterna Project.isArchived;
+    // o controller (projects/update.js) dispara o aviso ao Spec (SoT) na volta.
+    const handleToggleArchiveClick = useCallback(() => {
+      dispatch(
+        entryActions.updateProject(project.id, {
+          isArchived: !project.isArchived,
         }),
       );
     }, [project, dispatch]);
@@ -162,6 +184,22 @@ const ProjectCard = React.memo(
             />
           </Button>
         )}
+        {withArchiveButton && (
+          <Button
+            className={classNames(
+              styles.archiveButton,
+              !project.isArchived && styles.archiveButtonAppearable,
+            )}
+            title={t(project.isArchived ? 'action.unarchiveProject' : 'action.archiveProject')}
+            onClick={handleToggleArchiveClick}
+          >
+            <Icon
+              fitted
+              name={project.isArchived ? 'undo' : 'archive'}
+              className={classNames(styles.icon, styles.archiveButtonIcon)}
+            />
+          </Button>
+        )}
       </div>
     );
   },
@@ -174,6 +212,7 @@ ProjectCard.propTypes = {
   withDescription: PropTypes.bool,
   withTypeIndicator: PropTypes.bool,
   withFavoriteButton: PropTypes.bool,
+  withArchiveButton: PropTypes.bool,
   className: PropTypes.string.isRequired,
 };
 
@@ -183,6 +222,7 @@ ProjectCard.defaultProps = {
   withDescription: false,
   withTypeIndicator: false,
   withFavoriteButton: false,
+  withArchiveButton: false,
 };
 
 export default ProjectCard;
