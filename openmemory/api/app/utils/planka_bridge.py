@@ -49,7 +49,7 @@ def reconcile_planka_board_lifecycle(
                   FROM planka.card moved
                   JOIN planka.list moved_list ON moved_list.id = moved.list_id
                   JOIN planka.board b ON b.id = moved_list.board_id
-                  JOIN planka.list l ON l.board_id = b.id
+                  JOIN planka.list l ON l.board_id = b.id AND l.type = 'active'
                   JOIN planka.card c ON c.list_id = l.id
                  WHERE moved.id::text = :card_id
                  GROUP BY b.project_id
