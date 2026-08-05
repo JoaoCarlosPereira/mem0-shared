@@ -143,6 +143,28 @@ class TestBuildxHardening:
         monkeypatch.setattr(install, "run", lambda *a, **k: Result())
         assert install.have_buildx() is False
 
+    def test_install_buildx_falls_back_to_ubuntu_package(self, monkeypatch):
+        calls = []
+
+        class Result:
+            def __init__(self, returncode):
+                self.returncode = returncode
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            if command[-1] == "docker-buildx-plugin":
+                return Result(100)
+            return Result(0)
+
+        monkeypatch.setattr(install.sys, "platform", "linux")
+        monkeypatch.setattr(install.shutil, "which", lambda exe: f"/usr/bin/{exe}" if exe == "apt-get" else None)
+        monkeypatch.setattr(install, "_maybe_sudo", lambda command: command)
+        monkeypatch.setattr(install, "run", fake_run)
+
+        assert install.install_buildx_plugin() is True
+        assert ["apt-get", "install", "-y", "docker-buildx-plugin"] in calls
+        assert ["apt-get", "install", "-y", "docker-buildx"] in calls
+
     def test_ensure_buildx_installed_noop_when_present(self, monkeypatch):
         monkeypatch.setattr(install, "have_buildx", lambda: True)
         monkeypatch.setattr(

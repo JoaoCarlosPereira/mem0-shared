@@ -398,18 +398,27 @@ def install_buildx_plugin():
              "instale/atualize o Docker Desktop.")
         return False
     managers = (
-        ("apt-get", ["apt-get", "install", "-y", "docker-buildx-plugin"]),
-        ("dnf", ["dnf", "install", "-y", "docker-buildx-plugin"]),
-        ("pacman", ["pacman", "-Sy", "--noconfirm", "docker-buildx"]),
-        ("zypper", ["zypper", "install", "-y", "docker-buildx"]),
+        # Docker CE chama o pacote de docker-buildx-plugin; Ubuntu/Debian com
+        # docker.io o publicam como docker-buildx. Tente ambos sem trocar a
+        # origem do Docker nem reiniciar o daemon.
+        ("apt-get", (
+            ["apt-get", "install", "-y", "docker-buildx-plugin"],
+            ["apt-get", "install", "-y", "docker-buildx"],
+        )),
+        ("dnf", (["dnf", "install", "-y", "docker-buildx-plugin"],)),
+        ("pacman", (["pacman", "-Sy", "--noconfirm", "docker-buildx"],)),
+        ("zypper", (["zypper", "install", "-y", "docker-buildx"],)),
     )
-    for exe, step in managers:
+    for exe, steps in managers:
         if not shutil.which(exe):
             continue
         log(f"Instalando o plugin docker buildx via {exe}")
         if exe == "apt-get":
             run(_maybe_sudo(["apt-get", "update"]))
-        return run(_maybe_sudo(step)).returncode == 0
+        for step in steps:
+            if run(_maybe_sudo(step)).returncode == 0:
+                return True
+        return False
     warn("Nenhum gerenciador de pacote conhecido para instalar o plugin buildx.")
     return False
 
