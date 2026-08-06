@@ -1,18 +1,19 @@
 ---
 name: cy-create-tasks
 description: Decompõe PRD e TechSpec em tarefas detalhadas em PT-BR, com enriquecimento via exploração do código. Lê PRD/TechSpec e grava a lista mestra (document_type="tasks") e cada tarefa como TaskCard no Mem0 Shared via MCP. Sempre mantém o quadro Kanban sincronizado a cada criação/mudança. Use quando existir PRD/TechSpec e precisar de tarefas executáveis. Não use para PRD, TechSpec ou execução direta de tarefas.
-argument-hint: "[feature-name] [prd-file]"
+argument-hint: "[feature-name-or-slug] [workspace-id?]"
 ---
 
 # Criar Tarefas
 
-Decomponha requisitos em arquivos de tarefa detalhados e acionáveis, com enriquecimento informado pela codebase.
+Decomponha requisitos em TaskCards detalhados e acionáveis, com enriquecimento informado pela codebase.
 
 <HARD-GATE>
 **KANBAN:** O quadro SpecWorkspace Shared é a fonte de verdade. Toda tarefa que você criar ou alterar DEVE aparecer no Kanban via MCP (`create_task`, e depois `claim_task` / `update_task_status` durante a execução). Nunca deixe o plano apenas no chat ou em markdown local. Consulte `../cy-create-prd/references/kanban-shared-obrigatorio.md`.
 **PIPELINE:** Cards DEVEM percorrer `tasks` → `em_andamento` → `revisao_codigo` → `fase_teste` → `concluido`. Nunca pule para `concluido` sem passar por revisão de código ou fase de testes.
+**FIDELIDADE:** Decomponha fielmente o PRD/TechSpec. NÃO invente tarefas, requisitos ou comportamentos não especificados. Se faltar contexto, pare e exija atualização da especificação correspondente.
 **MCP `kanban`:** Após cada create/claim/update, leia `kanban.do_now` na resposta e execute essa coluna antes de avançar.
-**ÍNDICE DE CARDS:** Após criar os cards, regrave o documento `tasks` com o `task_id` de cada um na coluna `Card ID`. Nenhuma ferramenta MCP lista cards — esse documento é o **único índice que existe**, e sem ele a feature não é repassável a outro desenvolvedor.
+**ÍNDICE DE CARDS:** `list_tasks` é a descoberta técnica primária. Após criar os cards, mantenha a coluna `Card ID` do documento `tasks` preenchida para rastreabilidade humana, auditoria e handoff; ela não é o único índice operacional.
 NÃO escreva `_tasks.md` / `task_NN.md` locais como registro do sistema.
 </HARD-GATE>
 
@@ -46,9 +47,9 @@ Lei de ferro 2: **nunca concluir sem ter passado por revisão de código e fase 
 
 2. Carregar contexto (PRD/TechSpec via MCP — ADR-002).
    - Derivar o slug a partir do nome da feature; determinar o `project_id` (nome do projeto/repositório, "default" se nenhum).
-   - Resolver o workspace: `list_spec_workspaces(project_id=<project>)`; se ausente, `create_spec_workspace(project_id, slug, name)`. Manter o `workspace_id`.
+   - Resolver o workspace por `list_spec_workspaces(slug=<slug>)` antes de criar. Se houver exatamente um resultado, usá-lo; se houver múltiplos, pedir ao usuário para escolher; se não houver, criar com `project_id`, `slug` e `name`.
      - **Se você criou o workspace aqui** (não apenas resolveu um existente), gravar a memória-ponteiro conforme `../cy-create-prd/references/ponteiro-de-spec.md`.
-     - Se `list_spec_workspaces` voltar vazio, considere antes de criar que o workspace pode existir sob **outro `project_id`** — o `project_id` segue o nome do diretório de trabalho, e features multi-repositório costumam ter o workspace sob o diretório-mãe. Pergunte ao usuário em vez de criar um workspace duplicado que fragmentaria a spec.
+     - Não criar workspace duplicado apenas porque a busca filtrada pelo projeto atual voltou vazia.
      - Nesta skill, criar um workspace vazio normalmente indica erro de contexto: sem `prd` nem `techspec` não há o que decompor. Confirme com o usuário antes de seguir.
    - Ler o PRD via `read_spec_document(workspace_id, document_type="prd")` e a TechSpec via `read_spec_document(workspace_id, document_type="techspec")`.
    - Ler ADRs via `read_spec_document(workspace_id, document_type="adrs")` (fonte de verdade). Complementar com seções legadas embutidas no PRD/TechSpec se o doc `adrs` ainda estiver vazio. **NÃO** confiar em `.docs/tasks/<name>/adrs/*.md` local.
@@ -90,9 +91,9 @@ Lei de ferro 2: **nunca concluir sem ter passado por revisão de código e fase 
 
      ## Tarefas
 
-     | # | Título | Card ID | Status | Complexidade | Dependências |
-     |---|--------|---------|--------|--------------|--------------|
-     | 01 | [Título da tarefa] | — | pending | [low/medium/high/critical] | [task_NN, ... ou —] |
+     | # | Título | Card ID | Estado no plano | Complexidade | Dependências |
+     |---|--------|---------|-----------------|--------------|--------------|
+     | 01 | [Título da tarefa] | — | tasks | [low/medium/high/critical] | [task_NN, ... ou —] |
      ```
    - A coluna **`Card ID`** nasce com `—` porque os cards só existem após o passo 6. Ela **DEVE** ser preenchida na regravação obrigatória descrita no fim do passo 6 — é o índice que torna os cards descobríveis. Ver "Índice de Card IDs" abaixo.
    - A numeração de tarefas (`task_01`, `task_02`, ...) deve ser sequencial e consistente entre o documento mestre `tasks` e os `TaskCard`s individuais criados no passo 6.
@@ -118,25 +119,22 @@ Lei de ferro 2: **nunca concluir sem ter passado por revisão de código e fase 
      - `### Arquivos Relevantes`: caminhos descobertos com motivos breves.
      - `### Arquivos Dependentes`: arquivos afetados com motivos breves.
      - `### ADRs Relacionados`: links `[ADR-NNN: Título](adrs/adr-NNN.md)` apontando ao documento shared `adrs` — nunca `../adrs/*.md` locais. Omitir se não houver.
-     - `## Entregáveis`: saídas concretas com testes obrigatórios e meta >= 80% de cobertura.
-     - `## Testes`: casos de teste específicos em checklist (unitários e integração).
-     - `## Critérios de Sucesso`: resultados mensuráveis incluindo "Todos os testes passando" e "Cobertura >= 80%".
+     - `## Entregáveis`: saídas concretas e testes relevantes ao comportamento alterado.
+     - `## Testes`: casos de teste específicos em checklist; integração quando houver fronteira integrada relevante.
+     - `## Critérios de Sucesso`: resultados mensuráveis, testes relevantes passando e nenhuma regressão; use metas de cobertura somente quando o repositório as definir.
    - Reavaliar complexity com base nos achados da exploração antes de criar o card (metadados em `description`).
    - Se o enriquecimento falhar para uma tarefa (problema local de exploração, não erro MCP), reportar e continuar para a próxima; reportar todas essas falhas no final. Um erro MCP/de serviço, por outro lado, PARA a execução com o relatório de estado parcial acima.
    - **Guardar o `id` que cada `create_task` retorna**, associado ao número da tarefa (`task_01` → `<uuid>`). Sem isso o passo abaixo é impossível.
 
-   **Índice de Card IDs (obrigatório — não pular).**
+   **Índice de Card IDs para rastreabilidade.**
 
-   Após criar **todos** os cards, regravar o documento `tasks` com a coluna `Card ID` preenchida:
-   `write_spec_document(workspace_id, document_type="tasks", content=<tabela com os ids>, expected_version=<version do passo 5>)`.
+   Após criar todos os cards, regravar o documento `tasks` com a coluna `Card ID` preenchida. A descoberta operacional deve usar `list_tasks(workspace_id)`; o documento mestre é uma representação humana do plano e não prevalece sobre o card em caso de divergência.
 
-   *Por que isso é obrigatório:* **nenhuma ferramenta MCP lista os cards do quadro.** O `list_spec_workspaces` devolve apenas contagem por coluna (`task_counts`), não os cards; não há `list_tasks`; o servidor não expõe recursos MCP; e `claim_task` exige um `task_id`. Ou seja, quem não criou os cards não tem como descobrir o que puxar — e o passo 1 do `cy-execute-task` ("escolher um card no backlog") fica inexecutável. O documento `tasks` é legível por qualquer agente via `read_spec_document`, então **ele é o único índice de cards que existe**. Deixar a coluna com `—` quebra o repasse da feature para outro desenvolvedor.
-
-   Se a regravação retornar `conflict=true`, reler o documento, mesclar os ids na versão atual e gravar de novo — nunca abandonar o índice.
+   Se a regravação retornar `conflict=true`, reler o documento, mesclar os ids na versão atual e gravar de novo. Se falhar por indisponibilidade do MCP, parar e reportar o estado parcial; não criar fallback local.
 
 7. Validar o plano.
    - As verificações anti-ciclo e de independência rodam no passo 3, antes de qualquer card ser criado (não há arquivos locais para lint com `compozy tasks validate`, que opera em `.docs/tasks/`).
-   - Após a criação, confirmar o quadro via `list_spec_workspaces(project_id)` e/ou `read_spec_document(workspace_id, document_type="tasks")`: a contagem de cards corresponde à lista mestra e a ordem de dependência é consistente.
+   - Após a criação, confirmar o quadro via `list_tasks(workspace_id, include_description=true)`, `list_spec_workspaces(project_id)` e `read_spec_document(workspace_id, document_type="tasks")`: quantidade, títulos, descrições, ids e dependências devem corresponder ao plano.
    - **Conferir o índice:** reler o documento `tasks` e verificar que **nenhuma** linha ficou com `Card ID` = `—`. Se ficou, o índice está incompleto e a feature não é repassável — corrigir antes de reportar.
    - Chamar `update_spec_workspace_status(workspace_id, "ativo")` para que o painel do projeto mostre entrega ativa.
    - Reportar ao usuário (PT-BR) o workspace shared (project + slug), quantos `TaskCard`s foram criados, e lembrar que **toda** implementação deve seguir no quadro: `claim_task` → `em_andamento` → `revisao_codigo` → `fase_teste` → `concluido` (sem pular etapas; consulte `../cy-create-prd/references/kanban-shared-obrigatorio.md`).
@@ -164,7 +162,7 @@ NÃO produza tarefas com estes defeitos:
 Regras:
 - Apresente o breakdown de tarefas ao usuário em PT-BR antes da aprovação
 - Leia PRD, TechSpec e ADRs (já em PT-BR) sem traduzir para inglês ao citar
-- Frontmatter YAML mantém chaves em inglês (`status`, `title`, `type`, `complexity`, `dependencies`) por compatibilidade com o parser Compozy; valores de `title` e corpo do arquivo em PT-BR
+- Os metadados lógicos mantêm nomes em inglês (`title`, `type`, `complexity`, `dependencies`) por compatibilidade editorial; no Shared eles vivem na `description` do card, não em frontmatter local
 - Se criar ou alterar PRD/TechSpec/ADR durante o enriquecimento, use os modelos de `cy-create-prd` / `cy-create-techspec`
 
 ## Tratamento de Erros
