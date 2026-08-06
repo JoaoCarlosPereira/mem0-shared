@@ -38,20 +38,21 @@ Refine a abordagem escolhida com follow-ups direcionados.
 - Valide critérios de sucesso e métricas.
 - Resolva perguntas em aberto restantes.
 
-### 4b. Validação Incremental do Design
+### 4b. Consolidação antes do rascunho
 
-Apresente o design do produto seção a seção para aprovação do usuário.
-- Escale cada seção à sua complexidade.
-- Apresente uma seção por vez; pergunte se está correta antes da próxima.
-- Aplique YAGNI: questione cada funcionalidade quanto à necessidade no MVP.
-- Esteja pronto para revisar qualquer seção antes de avançar.
+Consolide a abordagem escolhida sem pedir aprovação seção por seção.
+- Aplique YAGNI e remova funcionalidades que não sejam necessárias ao MVP.
+- Resolva apenas ambiguidades bloqueantes com novas perguntas individuais.
+- Gere um rascunho completo e apresente-o uma única vez para revisão global.
+- Se o usuário pedir mudanças, revise somente as seções indicadas e reapresente o documento completo.
 
 ### 5. Criação
 
 Gere o documento PRD com o contexto reunido.
 - Leia e preencha o modelo de PRD.
 - Cada seção deve refletir decisões confirmadas.
-- Itens não resolvidos vão para Perguntas em Aberto.
+- Trabalhe de forma estrita: NÃO invente informações para fechar lacunas. Toda dúvida DEVE ter sido sanada com o usuário.
+- A seção Perguntas em Aberto deve ficar vazia, exceto se o usuário expressamente permitir adiar um tópico.
 
 ## Regras
 
