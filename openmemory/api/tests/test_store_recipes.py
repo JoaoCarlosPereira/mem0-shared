@@ -130,6 +130,25 @@ async def test_packaged_skill_recipe_prefers_complete_artifact_over_legacy_git()
 
 
 @pytest.mark.asyncio
+async def test_packaged_skill_recipe_points_at_public_artifact_passthrough():
+    """The endpoint must be reachable by hosts and must not be the ZIP route.
+
+    ``/download`` re-zips the package server-side, so its bytes hash differently
+    from the published digest and would fail ``verify_artifact_sha256``.
+    """
+    registry = FakeRegistryClient(packaged_skill_resource())
+    recipe = await InstallRecipeService(registry_client=registry).build(
+        kind="skill", name="team-skill", tag="v1", target="claude", user_id="user-1"
+    )
+
+    endpoint = recipe["source"]["endpoint"]
+    assert endpoint == "/api/v1/store/skills/team-skill/v1/artifact"
+    assert not endpoint.startswith("/v0/")
+    assert not endpoint.endswith("/download")
+    assert recipe["steps"][1]["from"]["endpoint"] == endpoint
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("target", "expected_path"),
     [

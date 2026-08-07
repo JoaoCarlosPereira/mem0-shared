@@ -9,6 +9,8 @@ import zipfile
 from typing import Literal, Optional
 
 from app.services.store_recipes import (
+    SKILL_ARTIFACT_MEDIA_TYPE,
+    STORE_API_PREFIX,
     InstallRecipeService,
     StoreRecipeError,
 )
@@ -19,7 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-router = APIRouter(prefix="/api/v1/store", tags=["store"])
+router = APIRouter(prefix=STORE_API_PREFIX, tags=["store"])
 
 
 class InstallRecipeRequest(BaseModel):
@@ -134,6 +136,46 @@ async def download_skill_package(
             "X-Content-Type-Options": "nosniff",
             "X-Skill-SHA256": hashlib.sha256(data).hexdigest(),
         },
+    )
+
+
+@router.get("/skills/{name:path}/{tag}/artifact")
+async def download_skill_artifact(
+    name: str,
+    tag: str,
+    request: Request,
+    client: AgentRegistryHttpClient = Depends(get_registry_client),
+) -> Response:
+    """Stream the immutable tar.gz artifact byte-for-byte.
+
+    This is the endpoint referenced by install recipes: their
+    ``verify_artifact_sha256`` step checks the published artifact digest, which
+    only matches these bytes. The ``/download`` route rebuilds a ZIP and hashes
+    differently, so it cannot serve that purpose.
+    """
+    try:
+        data, headers = await client.get_skill_artifact(
+            name=name,
+            tag=tag,
+            auth_headers=_registry_auth_headers(request),
+        )
+    except AgentRegistryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    passthrough = {
+        "Content-Disposition": headers.get(
+            "content-disposition", f'attachment; filename="{name}-{tag}.tar.gz"'
+        ),
+        "X-Content-Type-Options": "nosniff",
+        "X-Skill-SHA256": hashlib.sha256(data).hexdigest(),
+    }
+    for header_name in ("digest", "etag"):
+        value = headers.get(header_name)
+        if value:
+            passthrough[header_name.title()] = value
+    return Response(
+        content=data,
+        media_type=SKILL_ARTIFACT_MEDIA_TYPE,
+        headers=passthrough,
     )
 
 
