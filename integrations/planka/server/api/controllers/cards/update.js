@@ -359,6 +359,7 @@ module.exports = {
     const metadataFields = ['name', 'description', 'dueDate', 'position'].filter(
       (key) => !_.isUndefined(inputs[key]),
     );
+    let metadataSyncedToSpec = false;
 
     if (!isMem0Mirror && metadataFields.length > 0) {
       try {
@@ -371,6 +372,7 @@ module.exports = {
           changedFields: metadataFields,
           actor: String(actorSubject),
         });
+        metadataSyncedToSpec = true;
       } catch (bridgeErr) {
         // Fail closed: não confirmar na UI conteúdo que o MCP ainda não consegue ler.
         try {
@@ -426,6 +428,27 @@ module.exports = {
         } catch (revertErr) {
           sails.log.error('mem0: failed to revert card after Spec reject', revertErr);
         }
+        if (metadataSyncedToSpec) {
+          try {
+            await sails.helpers.mem0.notifySpecCardUpdate.with({
+              plankaCardId: String(card.id),
+              name: previousMetadata.name,
+              description: previousMetadata.description,
+              dueDate: previousMetadata.dueDate
+                ? new Date(previousMetadata.dueDate).toISOString()
+                : null,
+              position: previousMetadata.position,
+              changedFields: metadataFields,
+              actor: String(actorSubject),
+            });
+          } catch (rollbackBridgeErr) {
+            sails.log.error(
+              'mem0: failed to rollback Spec metadata after card move rejection',
+              rollbackBridgeErr,
+            );
+          }
+        }
+        sails.log.warn('mem0: card move rejected; PLANKA and Spec rollback attempted', bridgeErr);
         throw Errors.NOT_ENOUGH_RIGHTS;
       }
     }

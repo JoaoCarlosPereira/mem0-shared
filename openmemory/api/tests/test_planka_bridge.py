@@ -111,6 +111,7 @@ def _seed_mapped_task(db, *, status=TaskCardStatus.tasks, assignee=None):
     _map(db, list_entity_type("tasks"), ws.id, "plist-tasks")
     _map(db, list_entity_type("em_andamento"), ws.id, "plist-em")
     _map(db, list_entity_type("revisao_codigo"), ws.id, "plist-rev")
+    _map(db, "list:documentos", ws.id, "plist-documentos")
     return ws, task
 
 
@@ -217,6 +218,28 @@ def test_status_advance_maps_list_to_spec(db_session, monkeypatch):
     assert task.status == TaskCardStatus.revisao_codigo
 
 
+def test_planka_bridge_can_move_assigned_card_for_ui_actor(db_session, monkeypatch):
+    monkeypatch.setenv("PLANKA_MIRROR_SYNC", "0")
+    _, task = _seed_mapped_task(
+        db_session,
+        status=TaskCardStatus.em_andamento,
+        assignee="S0293",
+    )
+
+    result = apply_planka_card_move(
+        db_session,
+        planka_card_id="pcard-1",
+        planka_list_id="plist-rev",
+        actor="planka-ui-user",
+    )
+
+    assert result["applied"] is True
+    assert result["status"] == TaskCardStatus.revisao_codigo.value
+    db_session.refresh(task)
+    assert task.status == TaskCardStatus.revisao_codigo
+    assert task.assignee == "S0293"
+
+
 def test_noop_when_already_on_target_list(db_session, monkeypatch):
     monkeypatch.setenv("PLANKA_MIRROR_SYNC", "0")
     _, task = _seed_mapped_task(
@@ -282,6 +305,23 @@ def test_unknown_list_raises(db_session):
             actor="host-a",
         )
     assert exc.value.code == "unknown_list"
+
+
+def test_document_list_move_is_ignored_without_reverting(db_session):
+    _, task = _seed_mapped_task(db_session)
+
+    result = apply_planka_card_move(
+        db_session,
+        planka_card_id="pcard-1",
+        planka_list_id="plist-documentos",
+        actor="host-a",
+    )
+
+    assert result == {
+        "applied": False,
+        "reason": "document_list",
+        "task_id": str(task.id),
+    }
 
 
 class TestCardMovedHttpEndpoint:

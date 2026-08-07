@@ -308,6 +308,7 @@ def update_task_status(
     actor: str | None,
     is_blocked: bool | None = None,
     block_reason: str | None = None,
+    enforce_policy: bool = True,
 ) -> UpdateTaskStatusResult:
     """Muda o status (coluna) de uma task com concorrência otimista.
 
@@ -322,7 +323,8 @@ def update_task_status(
     if task is None:
         raise ValueError(f"TaskCard {task_id} não encontrada")
 
-    _assert_status_policy(task, new_status, actor)
+    if enforce_policy:
+        _assert_status_policy(task, new_status, actor)
 
     old_status = task.status
     now = get_current_utc_time()

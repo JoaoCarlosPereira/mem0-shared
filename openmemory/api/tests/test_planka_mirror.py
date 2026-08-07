@@ -81,6 +81,7 @@ class _PlankaRouter:
 
     def __init__(self):
         self.calls: list[tuple[str, str]] = []
+        self.card_patch_calls: list[tuple[str, str, dict]] = []
         self.list_names: list[str] = []
         self.assignee_calls: list[tuple[str, dict]] = []
         self.comment_calls: list[tuple[str, dict]] = []
@@ -151,6 +152,11 @@ class _PlankaRouter:
 
         if method == "PATCH" and path.startswith("/api/cards/"):
             card_id = path.rsplit("/", 1)[-1]
+            try:
+                body = json.loads(request.content.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                body = {}
+            self.card_patch_calls.append((method, path, body))
             return _json_response(200, {"item": {"id": card_id, "name": "c"}})
 
         if method == "PATCH" and path.startswith("/api/projects/"):
@@ -424,6 +430,7 @@ class TestMirrorTask:
             workspace_id=ws.id,
             title="Mover status",
             status=TaskCardStatus.tasks,
+            position=32768,
         )
         db_session.add(task)
         db_session.commit()
@@ -438,6 +445,12 @@ class TestMirrorTask:
             (m, p) for m, p in planka_router.calls if m == "PATCH" and p.startswith("/api/cards/")
         ]
         assert patch_calls
+        status_patch = next(
+            body
+            for method, path, body in planka_router.card_patch_calls
+            if method == "PATCH" and path.startswith("/api/cards/")
+        )
+        assert status_patch["position"] == 32768
 
 
 class TestNormalizeAssigneeEmail:

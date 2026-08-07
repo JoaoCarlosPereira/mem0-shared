@@ -215,7 +215,11 @@ class PlankaMirrorHttpClient:
         await self._request(
             "PATCH",
             f"/api/cards/{existing.planka_id}",
-            json={"listId": list_id, "position": _LIST_POSITION_STEP},
+            json={
+                "listId": list_id,
+                # Status changes must not erase a position chosen in the UI.
+                "position": float(task.position) if task.position is not None else _LIST_POSITION_STEP,
+            },
         )
         await self._mirror_task_assignee(task, existing.planka_id)
         self.db.commit()

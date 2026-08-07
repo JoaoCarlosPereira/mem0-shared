@@ -86,7 +86,10 @@ module.exports = {
       return exits.success(result.body || { ok: true });
     }
 
-    sails.log.warn('mem0 notify-spec-card-move rejected', result.status, result.body);
+    sails.log.warn(
+      'mem0 notify-spec-card-move rejected',
+      JSON.stringify({ status: result.status, body: result.body }),
+    );
     return exits.rejected(result.body || { status: result.status });
   },
 };

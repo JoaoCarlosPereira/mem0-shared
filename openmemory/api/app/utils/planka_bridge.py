@@ -167,6 +167,18 @@ def _status_for_list_id(db: Session, planka_list_id: str) -> Optional[str]:
     return status
 
 
+def _is_document_list(db: Session, planka_list_id: str) -> bool:
+    row = (
+        db.query(SpecPlankaIdMap)
+        .filter(
+            SpecPlankaIdMap.entity_type == "list:documentos",
+            SpecPlankaIdMap.planka_id == planka_list_id,
+        )
+        .first()
+    )
+    return row is not None
+
+
 def apply_planka_card_move(
     db: Session,
     *,
@@ -186,6 +198,10 @@ def apply_planka_card_move(
     if task_map is None:
         # Non-Spec card (or not yet mapped) — ignore.
         return {"applied": False, "reason": "not_mapped"}
+
+    if _is_document_list(db, planka_list_id):
+        # SDD is a documentation view, not a TaskCard status column.
+        return {"applied": False, "reason": "document_list", "task_id": str(task_map.spec_id)}
 
     target_status = _status_for_list_id(db, planka_list_id)
     if target_status is None:
@@ -246,6 +262,9 @@ def apply_planka_card_move(
             TaskCardStatus(target_status),
             task.version,
             actor_id,
+            # The internal Planka bridge is the trusted UI path. Its actor is
+            # the logged-in Planka user, which may differ from the Spec assignee.
+            enforce_policy=False,
         )
         if upd.conflict or not upd.updated:
             raise PlankaBridgeError(
