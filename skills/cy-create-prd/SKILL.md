@@ -1,7 +1,7 @@
 ---
 name: cy-create-prd
 description: Cria Documento de Requisitos de Produto (PRD) em PT-BR com brainstorming interativo, pesquisa de código e mercado. Persiste o PRD no Mem0 Shared via MCP (write_spec_document), não em arquivos locais. Sempre atualiza o quadro/workspace Shared a cada etapa. Use ao iniciar feature ou produto, criar PRD ou levantar requisitos. Não use para TechSpec, decomposição de tarefas ou implementação.
-argument-hint: "[feature-name-or-idea] [idea-file]"
+argument-hint: "[feature-name-or-idea] [idea-file?]"
 ---
 
 # Criar PRD
@@ -76,16 +76,17 @@ Você DEVE criar uma tarefa para cada fase e completá-las em ordem:
 1. Resolver o spec workspace shared (Mem0 Shared, via MCP — ADR-002).
    - Derivar o slug a partir do nome da feature fornecido pelo usuário.
    - Determinar o `project_id` (nome do projeto/repositório atual; use "default" se nenhum estiver claramente definido).
-   - Chamar `list_spec_workspaces(project_id=<project>)` para verificar se um workspace com este slug já existe.
-     - Se existir, operar em **modo de atualização**: chamar `read_spec_document(workspace_id, document_type="prd")` e `read_spec_document(workspace_id, document_type="adrs")` para carregar conteúdo e versões atuais.
-     - Se não existir, chamar `create_spec_workspace(project_id=<project>, slug=<slug>, name=<feature name>)` (idempotente por project_id+slug) e manter o `workspace_id` retornado.
+   - Chamar `list_spec_workspaces(slug=<slug>)` para procurar o workspace globalmente antes de filtrar por projeto ou criar.
+     - Se houver exatamente um resultado, usá-lo e operar em **modo de atualização**: chamar `read_spec_document(workspace_id, document_type="prd")` e `read_spec_document(workspace_id, document_type="adrs")`.
+     - Se houver múltiplos resultados, pedir ao usuário para escolher o workspace correto.
+     - Se não houver resultado, chamar `create_spec_workspace(project_id=<project>, slug=<slug>, name=<feature name>)` e manter o `workspace_id` retornado.
    - Se um `_idea.md` foi fornecido como entrada, lê-lo como contexto principal (somente entrada — o PRD em si é persistido via MCP, não em disco).
    - **NÃO criar nenhum diretório `.docs/tasks/<slug>/` nem arquivos locais.** O workspace shared é a única fonte de verdade (ADR-002).
    - Se qualquer ferramenta MCP retornar erro (serviço indisponível, falha de conexão), PARAR e reportar a falha claramente ao usuário — NÃO recorrer a escrever arquivos locais (ADR-002/ADR-007).
    - **Gravar a memória-ponteiro (obrigatório quando o workspace é criado).** Ver `references/ponteiro-de-spec.md`. Em resumo: `add_memories` com as coordenadas do workspace (`project_id`, `slug`, `workspace_id`) em **cada** projeto mem0 onde alguém vai trabalhar — sobretudo quando a feature toca repositórios cujo nome de diretório é **diferente** do `project_id` do workspace. Sem isso a spec fica indescobrível para quem não a criou, porque `search_memory` e `search_specs` não alcançam workspaces em andamento de outro projeto.
    - Se a feature for **multi-repositório**, perguntar ao usuário quais repositórios serão tocados antes de gravar os ponteiros (uma pergunta, múltipla escolha com `multiSelect`), e gravar um ponteiro por repositório.
 
-2. Descobrir contexto por meio de pesquisa paralela. Você DEVE executar AMBAS as trilhas antes de fazer qualquer pergunta.
+2. Descobrir contexto por meio de pesquisa paralela. Você DEVE executar TODAS as três trilhas antes de fazer qualquer pergunta.
 
    **Trilha A — Exploração da codebase** (OBRIGATÓRIA):
    - Buscar na codebase arquivos, padrões e features relacionados ao pedido do usuário.
@@ -97,7 +98,12 @@ Você DEVE criar uma tarefa para cada fase e completá-las em ordem:
    - Procurar como produtos similares resolvem este problema e o que os usuários esperam.
    - Resumir o que encontrou em 3-5 bullet points.
 
-   Executar ambas as trilhas em paralelo (ex.: duas chamadas Agent tool, dois lotes de busca, etc.). Apresentar um breve resumo mesclado dos achados de AMBAS as trilhas ao usuário antes de seguir para as perguntas. Se ferramentas de busca web estiverem indisponíveis, anotar a limitação explicitamente e prosseguir apenas com os achados da codebase.
+   **Trilha C — Histórico de Especificações** (OBRIGATÓRIA):
+   - Chamar `search_specs(query="<termos chave da feature>", statuses=["*"])` para buscar PRDs, TechSpecs e ADRs já existentes no servidor MCP que tenham relação com o requisito atual.
+   - Ler e identificar possíveis sobreposições, dependências ou lições aprendidas a partir das especificações anteriores.
+   - Resumir as descobertas relevantes.
+
+   Executar as trilhas em paralelo (ex.: múltiplas chamadas de ferramentas). Apresentar um breve resumo mesclado dos achados ao usuário antes de seguir para as perguntas. Se ferramentas de busca web estiverem indisponíveis, anotar a limitação explicitamente e prosseguir com as demais.
 
 3. Fazer perguntas esclarecedoras seguindo `references/question-protocol.md` **em PT-BR**.
    - Focar exclusivamente em QUAIS features os usuários precisam, POR QUE isso gera valor de negócio e QUEM são os usuários-alvo.
@@ -135,6 +141,7 @@ Você DEVE criar uma tarefa para cada fase e completá-las em ordem:
    - O PRD deve descrever apenas capacidades do usuário e resultados de negócio.
    - Sem bancos de dados, APIs, estrutura de código, frameworks, estratégias de teste ou decisões de arquitetura.
    - Seções obrigatórias (SEMPRE incluir): Visão Geral, Objetivos, Histórias de Usuário, Funcionalidades Principais, Experiência do Usuário, Fora de Escopo, Plano de Entrega por Fases, Métricas de Sucesso, Riscos e Mitigações, Registros de Decisão de Arquitetura, Perguntas em Aberto.
+   - **Tolerância Zero a Lacunas:** NENHUMA pergunta/dúvida levantada na especificação pode ficar em aberto sem passar pelo usuário. Você não deve inventar respostas ou completar informações por conta própria. A seção "Perguntas em Aberto" só pode conter itens que o usuário explicitamente pediu para adiar.
    - Seções opcionais (incluir quando relevante): Restrições Técnicas de Alto Nível.
    - Preferir voz ativa, omitir palavras desnecessárias, usar linguagem definida e específica em vez de generalidades vagas. Cada frase deve merecer seu lugar.
    - Idioma: **PT-BR** (português brasileiro). Tom: claro, técnico, consistente com os artefatos do projeto.
@@ -190,7 +197,7 @@ digraph create_prd {
 
 ## Tratamento de Erros
 
-- Se o usuário fornecer contexto insuficiente para completar uma seção, anotar em Perguntas em Aberto em vez de adivinhar.
+- Se o usuário fornecer contexto insuficiente para completar uma seção, pergunte a ele. NÃO complete informações por conta própria e não deixe dúvidas não resolvidas na seção "Perguntas em Aberto" sem o aval do usuário.
 - Se ferramentas de pesquisa web estiverem indisponíveis, prosseguir apenas com a exploração da codebase e anotar a limitação.
 - Se as ferramentas MCP (Mem0 Shared) estiverem indisponíveis, parar e reportar a falha claramente — NÃO escrever um fallback local `_prd.md` (ADR-002/ADR-007).
 - Se `write_spec_document` retornar `conflict=true`, não sobrescrever: reler a versão atual, reconciliar e tentar novamente com a versão atual.

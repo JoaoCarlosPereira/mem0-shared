@@ -34,7 +34,7 @@ concluido
 | `fase_teste` | após review ok (ou correções da review aplicadas) | Suite/comandos de teste executados **nesta** fase; evidência (comando + exit code) no comentário ou na resposta |
 | `concluido` | **somente** vindo de `fase_teste` | Evidência de teste APROVADA; nunca concluir a partir de `em_andamento` ou `revisao_codigo` |
 
-**Voltar coluna:** se a review ou o teste reprovarem, volte com `update_task_status` para `em_andamento` (corrigir) ou mantenha `revisao_codigo` / `fase_teste` com `is_blocked=true` + motivo — **não** salte para `concluido`.
+**Voltar coluna:** se a review ou o teste exigirem correção, use `claim_task` para entrar/reentrar em `em_andamento`, ou mantenha `revisao_codigo` / `fase_teste` com `is_blocked=true` + motivo. Use `release_task` somente para devolver ao backlog. Nunca use `update_task_status` para entrar em `em_andamento` e nunca salte para `concluido`.
 
 **Release:** `release_task` só para devolver ao backlog (`tasks`). Não use release para “concluir”.
 

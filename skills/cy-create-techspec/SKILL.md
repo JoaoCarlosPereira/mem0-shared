@@ -1,7 +1,7 @@
 ---
 name: cy-create-techspec
 description: Cria Especificação Técnica (TechSpec) em PT-BR a partir do PRD, com esclarecimentos técnicos interativos. Lê o PRD e grava a TechSpec e o documento de ADRs (document_type=adrs) no Mem0 Shared via MCP. Sempre atualiza o quadro/workspace Shared a cada etapa. Use quando existir PRD e precisar de plano técnico. Não use para PRD, tarefas ou implementação direta.
-argument-hint: "[feature-name] [prd-file]"
+argument-hint: "[feature-name-or-slug] [workspace-id?]"
 ---
 
 # Criar TechSpec
@@ -62,9 +62,9 @@ Você DEVE criar uma tarefa para cada fase e completá-las em ordem:
 
 1. Coletar contexto (PRD/TechSpec via MCP — ADR-002).
    - Derivar o slug a partir do nome da feature; determinar o `project_id` (nome do projeto/repositório, "default" se nenhum).
-   - Chamar `list_spec_workspaces(project_id=<project>)` para resolver o workspace deste slug. Se não existir, chamar `create_spec_workspace(project_id, slug, name)` e manter o `workspace_id`.
-     - **Se você criou o workspace aqui** (não apenas resolveu um existente), gravar a memória-ponteiro conforme `../cy-create-prd/references/ponteiro-de-spec.md`. Um workspace criado sem ponteiro é indescobrível para quem trabalha em outro repositório da mesma feature.
-     - Se `list_spec_workspaces` voltar vazio, considere antes de criar que o workspace pode existir sob **outro `project_id`** — o `project_id` segue o nome do diretório de trabalho, e features multi-repositório costumam ter o workspace sob o diretório-mãe. Pergunte ao usuário em vez de criar um workspace duplicado que fragmentaria a spec.
+   - Chamar `list_spec_workspaces(slug=<slug>)` para resolver o workspace globalmente. Se houver exatamente um resultado, usá-lo; se houver múltiplos, pedir ao usuário para escolher; se não houver, chamar `create_spec_workspace(project_id, slug, name)`.
+     - **Se você criou o workspace aqui**, gravar a memória-ponteiro conforme `../cy-create-prd/references/ponteiro-de-spec.md`.
+     - Não criar workspace duplicado apenas porque a busca filtrada pelo projeto atual voltou vazia.
    - Ler o PRD via `read_spec_document(workspace_id, document_type="prd")`.
      - Se um PRD for encontrado, usá-lo como entrada principal.
      - **Modo standalone:** se nenhum PRD for encontrado (`found=false`), perguntar ao usuário uma descrição do que precisa de especificação técnica — NÃO falhar.
@@ -99,6 +99,7 @@ Você DEVE criar uma tarefa para cada fase e completá-las em ordem:
    - Referenciar seções do PRD pelo nome, mas não duplicar contexto de negócio.
    - Incluir exemplos de código apenas para interfaces principais, limitados a 20 linhas cada. A seção Core Interfaces deve conter pelo menos uma definição de interface ou struct Go como bloco de código, mesmo para features simples — mostrar o tipo principal do qual outros componentes dependerão.
    - A seção Development Sequencing DEVE incluir um Build Order numerado onde cada passo após o primeiro declara explicitamente de quais passos anteriores depende.
+   - **Fidelidade Absoluta:** O agente DEVE trabalhar estritamente dentro das especificações. NÃO complete informações técnicas por conta própria ou tome decisões silenciosas se a TechSpec for omissa. Pergunte ao usuário. Toda dúvida técnica deve ser resolvida antes do rascunho final.
    - Preferir voz ativa, omitir palavras desnecessárias, usar linguagem definida e específica em vez de generalidades vagas. Cada frase deve merecer seu lugar.
    - Idioma: **PT-BR** (português brasileiro). Tom: claro, técnico, consistente com os artefatos do projeto.
    - Apresentar o rascunho completo ao usuário para revisão.

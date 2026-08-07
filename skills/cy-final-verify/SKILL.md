@@ -26,8 +26,8 @@ Se o comando de verificação não foi executado na mensagem atual, o resultado 
 Esta skill é o gate da coluna **`fase_teste`**. Integração com o quadro Mem0 Shared:
 
 1. O card **deve** já estar em `fase_teste` (`update_task_status`) antes de rodar a verificação de "tarefa concluída".
-2. Com veredito **APROVADO**: chamar `update_task_status(task_id, "concluido", expected_version=...)` na **mesma** interação (ou imediatamente após o relatório).
-3. Com veredito **REPROVADO**: **não** mover para `concluido`; manter `fase_teste` com `is_blocked=true` + motivo **ou** voltar a `em_andamento` / `revisao_codigo` conforme o tipo de falha; comentar no card via `add_spec_comment`.
+2. Com veredito **APROVADO**: chamar `update_task_status(task_id, "concluido", expected_version=...)` na mesma interação, usando a versão atual do card.
+3. Com veredito **REPROVADO**: **não** mover para `concluido`; manter `fase_teste` com `is_blocked=true` + motivo, ou usar `claim_task` para retornar a `em_andamento` quando houver correção de código. Comente no card via `add_spec_comment`.
 4. **Proibido** usar esta skill para justificar `concluido` vindo de `em_andamento` sem ter passado por `revisao_codigo` e `fase_teste` (ver `../cy-create-prd/references/kanban-shared-obrigatorio.md`).
 
 Se não houver `task_id` (verificação avulsa de commit/PR), ainda assim produza o Relatório de Verificação; ao existir card Shared, o Kanban prevalece como status oficial.

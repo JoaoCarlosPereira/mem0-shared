@@ -10,7 +10,7 @@ Memórias e specs são **dois armazéns separados** no Mem0:
 - `search_memory` / `list_memories` → memórias. **Nunca** devolvem specs.
 - `search_specs` → specs, mas **somente de workspaces com status `concluido`** (a indexação semântica
   acontece na transição para `concluido`). Durante todo o desenvolvimento a spec é invisível aqui.
-- `list_spec_workspaces(project_id)` → devolve os workspaces **daquele `project_id`**, e só.
+- `list_spec_workspaces(slug=<slug>)` → procura o workspace globalmente pelo slug; `project_id` pode ser usado como filtro adicional.
 
 O `project_id` do mem0 segue o **nome do diretório de trabalho**. Consequência prática: um agente
 rodando dentro de `<repo-do-microsserviço>` chama `list_spec_workspaces("<repo-do-microsserviço>")`,

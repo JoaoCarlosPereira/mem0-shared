@@ -8,7 +8,7 @@ description: Corrige issues de review (reviews-NNN/ e/ou comentários do Kanban 
 Execute remediação de review com o Kanban Shared como fonte de verdade do status.
 
 <HARD-GATE>
-**KANBAN:** Antes de editar código para um card, garanta que está em `em_andamento` (`claim_task` ou `update_task_status` a partir de `revisao_codigo`). Após os fixes, reentre no pipeline obrigatório: `revisao_codigo` → `fase_teste` → `concluido` (sem pular). Veja `../cy-create-prd/references/kanban-shared-obrigatorio.md`.
+**KANBAN:** Antes de editar código para um card, garanta que está em `em_andamento` usando `claim_task` (inclusive para reentrada a partir de `revisao_codigo` ou `fase_teste`). `update_task_status` não entra em `em_andamento`. Após os fixes, reentre no pipeline obrigatório: `revisao_codigo` → `fase_teste` → `concluido` (sem pular). Veja `../cy-create-prd/references/kanban-shared-obrigatorio.md`.
 **VERIFY:** `cy-final-verify` em `fase_teste` antes de `concluido`.
 </HARD-GATE>
 
@@ -26,12 +26,12 @@ Execute remediação de review com o Kanban Shared como fonte de verdade do stat
    - Ler `<batch_scope>` para nome PRD/feature, caminhos, flags de auto-commit.
 
 2. Triagem.
-   - Ler todo issue / comentário Kanban no escopo antes de editar.
+   - Ler todo issue local e os comentários do card com `list_spec_comments(target_type="task", target_id=<task_id>)` antes de editar. Use `get_task(task_id)` para confirmar descrição e versão atuais e `list_task_history(task_id)` quando precisar auditar transições.
    - Arquivos locais: definir `status` no frontmatter como `valid` ou `invalid`; escrever `## Triagem` em PT-BR.
    - Nos cards Shared: `add_spec_comment` com decisão de triagem quando útil.
 
 3. Mover cards para implementação.
-   - Para cada card com fixes válidos: se em `revisao_codigo` / `fase_teste`, `update_task_status(..., "em_andamento", ...)` (ou `claim_task` se no backlog). Limpe bloqueio ao iniciar trabalho.
+   - Para cada card com fixes válidos: use `claim_task(task_id)` para entrar ou reentrar em `em_andamento`; isso também renova a lease quando o agente já é o assignee. Se outro assignee estiver ativo, pare e reporte. Limpe bloqueio ao iniciar trabalho.
    - Não edite código enquanto a coluna oficial ainda disser `concluido`.
 
 4. Corrigir issues válidos por completo.

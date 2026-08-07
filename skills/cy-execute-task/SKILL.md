@@ -10,6 +10,7 @@ Execute uma `TaskCard` Shared do claim até `concluido`, respeitando o pipeline 
 <HARD-GATE>
 **KANBAN:** Antes de qualquer edição de código, chame `claim_task`. Atualize o quadro Shared em **cada** mudança de fase na mesma interação. Nunca rastreie conclusão apenas no chat ou em `.docs/tasks/*.md` local.
 **PIPELINE (sem pular):** `tasks` → `em_andamento` → `revisao_codigo` → `fase_teste` → `concluido`. Nunca pule direto para `concluido`. Veja `../cy-create-prd/references/kanban-shared-obrigatorio.md`.
+**FIDELIDADE ABSOLUTA:** Trabalhe estritamente dentro da especificação. NÃO complete informações por conta própria. Se o usuário alterar requisitos durante a execução, **você DEVE atualizar a spec (PRD/TechSpec/TaskCard)** no MCP antes de mexer no código.
 **MCP `kanban`:** Após cada `claim_task` / `update_task_status`, leia `kanban.means` e **`kanban.do_now`** na resposta e execute essa instrução antes de avançar de coluna. Ignore isso = execução incompleta.
 **VERIFY:** Use `cy-final-verify` enquanto o card estiver em `fase_teste` antes de mover para `concluido`.
 </HARD-GATE>
@@ -25,10 +26,11 @@ Execute uma `TaskCard` Shared do claim até `concluido`, respeitando o pipeline 
 1. Resolver contexto Shared (MCP).
    - Resolver workspace: `list_spec_workspaces(project_id)` / quadro; manter `workspace_id`.
    - Identificar a `TaskCard` (`task_id`, `version`, `status`, `description`). Prefira um `task_id` explícito.
-   - **Como descobrir o `task_id` quando ele não foi informado:** leia `read_spec_document(workspace_id, document_type="tasks")` e use a coluna **`Card ID`** da lista mestra — esse documento é o **único índice de cards que existe**. Escolha uma linha desbloqueada cujas dependências estejam concluídas.
-     - Atenção: **não** existe ferramenta MCP que liste os cards. `list_spec_workspaces` devolve apenas contagem por coluna (`task_counts`), nunca ids; não há `list_tasks`; o servidor não expõe recursos MCP.
-     - Se a lista mestra não tiver a coluna `Card ID` preenchida (tarefas criadas por uma versão antiga do `cy-create-tasks`), **pare e peça o `task_id` ao usuário**, que pode obtê-lo na UI web do Kanban Shared. Não tente adivinhar id, não invente card e não implemente sem claim.
+   - **Como descobrir o `task_id` quando ele não foi informado:** chame `list_tasks(workspace_id, status="tasks", include_description=true)`, filtre cards desbloqueados e confirme dependências. Use `get_task(task_id)` antes do claim para ler a descrição e a versão atuais.
+     - O documento mestre `tasks` e sua coluna `Card ID` servem para rastreabilidade e validação cruzada, não são o único índice técnico.
+     - Se não houver cards no backlog, consulte as demais colunas antes de concluir que não há trabalho. Não invente ids e não implemente sem claim.
    - Ler PRD / TechSpec / tasks master / **adrs** via `read_spec_document` (`prd`, `techspec`, `tasks`, `adrs`). **Não** confie em `adrs/*.md` local.
+   - Exigir `get_task(task_id)` antes do claim para obter a descrição e a versão atuais; após conflitos ou alterações externas, reler o card antes de prosseguir.
    - Após a leitura, verifique conflitos entre a descrição do card, TechSpec e ADRs. Se os requisitos se contradizerem, pare e reporte — não adivinhe.
    - Se mem0 / workflow-memory estiver disponível, carregue contexto durável antes de editar (veja `cy-workflow-memory`).
 
@@ -45,7 +47,8 @@ Execute uma `TaskCard` Shared do claim até `concluido`, respeitando o pipeline 
    - Não entre em `revisao_codigo` até que cada item do checklist tenha sido tratado no código (ou explicitamente adiado com `add_spec_comment`).
 
 4. Implementar a tarefa (coluna: `em_andamento`).
-   - Mantenha o escopo restrito ao card.
+   - **Fidelidade estrita:** Mantenha o escopo restrito ao card. Se o card for ambíguo, PARE e pergunte ao usuário. Não invente requisitos ou tome decisões funcionais por conta própria.
+   - **Manter Specs Atualizadas:** Se o usuário pedir uma mudança de escopo, regras de negócio ou requisitos durante a execução, você DEVE atualizar o documento fonte via MCP (`write_spec_document` para PRD/TechSpec ou `update_task` para a TaskCard) **ANTES** de aplicar a alteração no código. As specs são a única fonte da verdade e não podem ficar defasadas.
    - Siga os padrões do repositório e APIs reais de dependências.
    - Em bloqueio: `update_task_status` com o mesmo status + `is_blocked=true` + `block_reason` **e** `add_spec_comment` — não narre apenas no chat.
    - Registre descobertas fora de escopo como notas/comentários de follow-up, não como expansão silenciosa de escopo.

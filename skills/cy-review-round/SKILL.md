@@ -22,8 +22,8 @@ Execute uma revisão de código estruturada e mantenha o Kanban Shared sincroniz
 
 1. Resolver workspace Shared.
    - `list_spec_workspaces(project_id)` / quadro; manter `workspace_id`.
-   - Ler PRD / TechSpec / tasks / **adrs** via `read_spec_document`. `.docs/tasks/` local é fallback legado só se Shared estiver vazio.
-   - Listar cards em `em_andamento` (prontos para review) ou já em `revisao_codigo`.
+   - Ler PRD / TechSpec / tasks / **adrs** via `read_spec_document`. Não usar `.docs/tasks/` como fallback para specs ou status.
+   - Listar cards com `list_tasks(workspace_id, status="em_andamento", include_description=true)` e `list_tasks(workspace_id, status="revisao_codigo", include_description=true)`. Usar `get_task` para confirmar descrição e versão.
 
 2. Identificar escopo do review.
    - Prefira `git diff` / caminhos das descrições dos cards claimed.
@@ -41,7 +41,7 @@ Execute uma revisão de código estruturada e mantenha o Kanban Shared sincroniz
 
 4. Persistir achados (Kanban primeiro).
    - Para cada achado material: `add_spec_comment` no `task_id` relevante (severidade + arquivo + fix sugerido, PT-BR).
-   - Se o review encontrar problemas bloqueantes: mantenha o card em `revisao_codigo` com `is_blocked=true` + `block_reason`, ou anote que a implementação deve voltar a `em_andamento` (quem corrige moverá).
+   - Se o review encontrar problemas bloqueantes: mantenha o card em `revisao_codigo` com `is_blocked=true` + `block_reason` e registre comentário; a correção posterior usa `claim_task` para reentrar em `em_andamento`.
    - Se o review estiver limpo para um card: deixe em `revisao_codigo` (ou permita ao executor mover para `fase_teste`) — **esta skill não** move para `fase_teste`/`concluido` a menos que o usuário peça explicitamente para avançar um card limpo para `fase_teste` após review limpo.
 
 5. Opcional: Gerar arquivos de issue locais para `cy-fix-reviews`.
