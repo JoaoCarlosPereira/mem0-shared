@@ -24,6 +24,13 @@ InstallTarget = Literal["cursor", "claude", "codex"]
 
 RECIPE_VERSION = "1"
 
+SKILL_ARTIFACT_MEDIA_TYPE = "application/vnd.agentregistry.skill.v1.tar+gzip"
+
+# Recipes are applied by hosts that only reach the public API, never the
+# AgentRegistry backend directly, so the artifact endpoint must be the public
+# passthrough in app/routers/store.py.
+STORE_API_PREFIX = "/api/v1/store"
+
 TARGET_DESTINATIONS: dict[str, dict[str, str]] = {
     "cursor": {
         "agent": ".cursor/agents/{name}.json",
@@ -237,11 +244,10 @@ def _resolve_source(kind: str, resource: dict[str, Any], spec: dict[str, Any]) -
         if isinstance(resolved_artifact, dict) and resolved_artifact.get("digest"):
             return {
                 "type": "registry_artifact",
-                "media_type": resolved_artifact.get("mediaType")
-                or "application/vnd.agentregistry.skill.v1.tar+gzip",
+                "media_type": resolved_artifact.get("mediaType") or SKILL_ARTIFACT_MEDIA_TYPE,
                 "artifact_digest": resolved_artifact.get("digest"),
                 "size": resolved_artifact.get("size"),
-                "endpoint": f"/v0/skills/{quote(str(metadata.get('name') or 'skill'), safe='')}/{quote(str(metadata.get('tag') or 'latest'), safe='')}/artifact",
+                "endpoint": f"{STORE_API_PREFIX}/skills/{quote(str(metadata.get('name') or 'skill'), safe='')}/{quote(str(metadata.get('tag') or 'latest'), safe='')}/artifact",
             }
 
     repository = _first_dict(

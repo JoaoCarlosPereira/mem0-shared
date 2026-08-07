@@ -181,6 +181,30 @@ class AgentRegistryHttpClient:
             auth_headers=auth_headers,
         )
 
+    async def get_skill_artifact(
+        self,
+        *,
+        name: str,
+        tag: str,
+        namespace: str = "default",
+        auth_headers: Optional[dict[str, str]] = None,
+    ) -> tuple[bytes, dict[str, str]]:
+        """Fetch the immutable tar.gz artifact exactly as stored.
+
+        Unlike ``get_skill_download``, which re-zips the extracted files and
+        therefore changes the bytes, this returns the payload whose sha256 is
+        the digest published in ``status.resolvedSource.artifact``. Install
+        recipes verify against that digest, so the bytes must not be rebuilt.
+        """
+        safe_name = validate_path_segment(name, "name")
+        safe_tag = validate_path_segment(tag, "tag")
+        return await self._request_bytes(
+            "GET",
+            f"/v0/skills/{quote(safe_name, safe='')}/{quote(safe_tag, safe='')}/artifact",
+            params={"namespace": namespace or "default"},
+            auth_headers=auth_headers,
+        )
+
     async def delete_resource(
         self,
         *,
