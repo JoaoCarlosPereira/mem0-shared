@@ -11,6 +11,17 @@ from typing import Any
 
 from app.models import TaskCardStatus
 
+_kanban_prompts_cache: dict | None = None
+
+
+def _get_kanban_prompts_cache() -> dict:
+    """Lazy-import cache from mcp_server to avoid circular imports."""
+    global _kanban_prompts_cache
+    if _kanban_prompts_cache is None:
+        from app.mcp_server import _kanban_prompts_cache as cache
+        _kanban_prompts_cache = cache
+    return _kanban_prompts_cache
+
 # Ordem avançada (sem ``tasks`` — entrada via claim_task).
 FORWARD_PIPELINE: tuple[TaskCardStatus, ...] = (
     TaskCardStatus.em_andamento,
@@ -134,7 +145,17 @@ def guide_for(status: str | TaskCardStatus) -> dict[str, Any]:
 def enrich_status_payload(payload: dict[str, Any], status: str) -> dict[str, Any]:
     """Anexa ``kanban`` (orientação da coluna atual) ao JSON de resposta MCP."""
     out = dict(payload)
-    out["kanban"] = guide_for(status)
+    kanban_info = guide_for(status)
+
+    # Injeta column_prompt do cache (se disponível e habilitado)
+    cache = _get_kanban_prompts_cache()
+    prompt_data = cache.get(status) if cache else None
+    if prompt_data and prompt_data.get("is_enabled") and prompt_data.get("prompt"):
+        kanban_info["column_prompt"] = prompt_data["prompt"]
+    else:
+        kanban_info["column_prompt"] = None
+
+    out["kanban"] = kanban_info
     return out
 
 

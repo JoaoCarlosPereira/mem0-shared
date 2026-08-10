@@ -16,6 +16,8 @@ describe("tipos admin", () => {
       project: "proj",
       hostname: "host",
       client_name: null, // null permitido
+      user_display_name: "User",
+      user_avatar_url: null,
       text_preview: "abc",
       status: "queued",
       error: null,

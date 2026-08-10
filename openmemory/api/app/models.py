@@ -933,6 +933,27 @@ class TaskMember(Base):
     )
 
 
+class KanbanColumnPrompt(Base):
+    """Prompts de especificação por coluna do pipeline Kanban."""
+    __tablename__ = "kanban_column_prompts"
+    column_status = Column(String(100), primary_key=True, nullable=False)
+    prompt = Column(Text, nullable=False)
+    is_enabled = Column(Boolean, nullable=False, default=True, server_default=sa.true())
+    updated_at = Column(
+        DateTime,
+        default=get_current_utc_time,
+        onupdate=get_current_utc_time,
+        nullable=False,
+        server_default=sa.func.now(),
+    )
+    updated_by = Column(String(255), nullable=True)
+
+    __table_args__ = (
+        sa.CheckConstraint("LENGTH(prompt) <= 5000", name="chk_kanban_column_prompt_length"),
+        {"comment": "Prompts de especificação por coluna do pipeline Kanban"},
+    )
+
+
 class SpecPlankaIdMap(Base):
     """Correlação UUID Spec ↔ snowflake PLANKA (ADR-005 / kanban-planka).
 

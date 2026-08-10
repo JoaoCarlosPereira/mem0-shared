@@ -18,6 +18,9 @@ function targetPath(pathSegments: string[]): string {
   const suffix = pathSegments
     .map((segment) => encodeURIComponent(segment))
     .join("/");
+  if (suffix === "socket.io") {
+    return "/socket.io/";
+  }
   return suffix ? `/${suffix}` : "/";
 }
 

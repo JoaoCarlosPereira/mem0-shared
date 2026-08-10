@@ -3,20 +3,10 @@
  * Licensed under the Fair Use License: https://github.com/plankanban/planka/blob/master/LICENSE.md
  */
 
-module.exports.up = async (knex) => {
-  await knex.schema.alterTable('project', (table) => {
-    table.boolean('is_archived').notNullable().defaultTo(false);
-    table.boolean('is_completed').notNullable().defaultTo(false);
-  });
+// The lifecycle columns are created by the preceding migration
+// `20260804000000_add_project_archive_and_completed.js`.
+// This migration is kept as a no-op because older deployments may already
+// have recorded it under this filename before the duplicate was removed.
+module.exports.up = async () => {};
 
-  return knex.schema.alterTable('project', (table) => {
-    table.boolean('is_archived').notNullable().alter();
-    table.boolean('is_completed').notNullable().alter();
-  });
-};
-
-module.exports.down = (knex) =>
-  knex.schema.alterTable('project', (table) => {
-    table.dropColumn('is_archived');
-    table.dropColumn('is_completed');
-  });
+module.exports.down = async () => {};

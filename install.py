@@ -1493,6 +1493,35 @@ def run_update(args):
              "'docker compose -f docker-compose.scale.yml ps openmemory-backup-worker'.")
 
     log("Atualização concluída 🎉 — versão nova no ar, memórias intactas.")
+
+    # Verifica se a nova tabela kanban_column_prompts existe (migration o0d1e2f3g4h5).
+    try:
+        conn = subprocess.run(
+            ["docker", "compose", "-f", SCALE_COMPOSE, "exec", "-T", "postgres",
+             "pg_isready", "-h", "127.0.0.1", "-p", "5432"],
+            cwd=str(COMPOSE_DIR),
+            capture_output=True, text=True, timeout=10,
+        )
+        if conn.returncode == 0:
+            check = subprocess.run(
+                ["docker", "compose", "-f", SCALE_COMPOSE, "exec", "-T", "postgres",
+                 "psql", "-U", "mem0", "-d", "openmemory", "-t", "-A",
+                 "SELECT 1 FROM information_schema.tables "
+                 "WHERE table_name='kanban_column_prompts'"],
+                cwd=str(COMPOSE_DIR),
+                capture_output=True, text=True, timeout=10,
+            )
+            if "1" in (check.stdout or ""):
+                log("Nova funcionalidade — Prompts de Coluna:")
+                print("  • Uma nova aba 'Prompts de Coluna' está disponível no Admin "
+                      "(http://localhost:3000/admin).\n"
+                      "  • Ela permite personalizar os prompts de especificação que o\n"
+                      "    agente recebe ao mover um card para uma coluna do pipeline.\n"
+                      "  • A tabela começa vazia: crie os prompts diretamente na aba.")
+
+    except Exception:
+        pass  # não bloqueia a atualização
+
     print(f"""
   UI/Admin:   http://localhost:3000   (painel em /admin → Backup)
   Proxy MCP:  http://localhost:{port}

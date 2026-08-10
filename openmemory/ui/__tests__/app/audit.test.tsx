@@ -26,6 +26,8 @@ const auditItem: WriteAuditLog = {
   project: "proj-a",
   hostname: "host-1",
   client_name: "cli-x",
+  user_display_name: "User X",
+  user_avatar_url: null,
   action: "enqueue",
   created_at: "2026-01-02T08:30:00Z",
 };
@@ -78,7 +80,7 @@ describe("AuditPage", () => {
     expect(
       screen.getByRole("columnheader", { name: "Data/Hora" }),
     ).toBeInTheDocument();
-    expect(await screen.findByText("host-1")).toBeInTheDocument();
+    expect(await screen.findByText("User X")).toBeInTheDocument();
   });
 
   it("não inicia polling (useAdminApi chamado com poll:false)", () => {
@@ -94,7 +96,7 @@ describe("AuditPage", () => {
   it("exporta CSV com header Accept text/csv e responseType blob", async () => {
     mockedAxios.get.mockResolvedValue({ data: new Blob(["csv"]) });
     render(<AuditPage />);
-    await screen.findByText("host-1");
+    await screen.findByText("User X");
     await userEvent.click(screen.getByRole("button", { name: /Exportar CSV/i }));
     await waitFor(() =>
       expect(mockedAxios.get).toHaveBeenCalledWith(
@@ -110,7 +112,7 @@ describe("AuditPage", () => {
   it("exibe mensagem de erro quando o backend retorna 400", async () => {
     mockedAxios.get.mockRejectedValue({ response: { status: 400 } });
     render(<AuditPage />);
-    await screen.findByText("host-1");
+    await screen.findByText("User X");
     await userEvent.click(screen.getByRole("button", { name: /Exportar CSV/i }));
     expect(
       await screen.findByText(
@@ -121,7 +123,7 @@ describe("AuditPage", () => {
 
   it("filtro de hostname dispara novo fetchWriteAudit", async () => {
     render(<AuditPage />);
-    await screen.findByText("host-1");
+    await screen.findByText("User X");
     fetchWriteAudit.mockClear();
     const input = screen.getByLabelText("Filtrar por hostname");
     await userEvent.type(input, "host-9");

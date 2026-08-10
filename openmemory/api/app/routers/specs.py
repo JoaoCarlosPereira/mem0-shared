@@ -11,7 +11,7 @@ tools MCP (Tarefa 7), sem duplicação.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -29,7 +29,9 @@ from app.models import (
     TaskCard,
     TaskCardStatus,
     TaskStatusHistory,
+    KanbanColumnPrompt,
 )
+from app.utils.kanban_pipeline import COLUMN_GUIDE
 from app.utils.creator_identity import (
     CreatorIdentity,
     identity_for_actor,
@@ -265,6 +267,193 @@ class SpecSearchResult(BaseModel):
     owner: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+# --------------------------------------------------------------------------- #
+# Kanban Column Prompts Schemas (Tarefa 02)
+# --------------------------------------------------------------------------- #
+class KanbanPromptUpdate(BaseModel):
+    """Atualização parcial de um prompt de coluna Kanban."""
+
+    prompt: Optional[str] = None
+    is_enabled: Optional[bool] = None
+
+
+class KanbanPromptRead(BaseModel):
+    """Resposta com o estado completo de um prompt de coluna Kanban."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    column_status: str
+    label: str
+    prompt: Optional[str] = None
+    is_enabled: bool
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
+
+
+# --------------------------------------------------------------------------- #
+# Kanban Column Prompts
+# --------------------------------------------------------------------------- #
+def _kanban_pipeline_statuses() -> list[str]:
+    """Ordem de todos os status do pipeline Kanban (COLUMN_GUIDE keys)."""
+    from app.models import TaskCardStatus
+
+    return [
+        TaskCardStatus.tasks.value,
+        *[s.value for s in (TaskCardStatus.em_andamento, TaskCardStatus.revisao_codigo,
+                            TaskCardStatus.fase_teste, TaskCardStatus.concluido)],
+    ]
+
+
+@router.get("/kanban-prompts", response_model=list[KanbanPromptRead])
+def list_kanban_prompts(db: Session = Depends(get_db)) -> list[KanbanPromptRead]:
+    """Lista prompts de coluna ordenados pelo status do pipeline.
+
+    Retorna **todos** os status do pipeline (``COLUMN_GUIDE``). Quando não há
+    registro personalizado no banco, retorna o guia padrão ``COLUMN_GUIDE.do_now``
+    como ``prompt`` sugerido — o usuário pode editar ou manter.
+    """
+    rows_map: dict[str, KanbanColumnPrompt] = {
+        r.column_status: r
+        for r in db.query(KanbanColumnPrompt).order_by(KanbanColumnPrompt.column_status).all()
+    }
+    statuses = _kanban_pipeline_statuses()
+    results: list[KanbanPromptRead] = []
+    for status in statuses:
+        row = rows_map.get(status)
+        if row is not None:
+            results.append(
+                KanbanPromptRead(
+                    column_status=row.column_status,
+                    label=COLUMN_GUIDE.get(row.column_status, {}).get("label", row.column_status),
+                    prompt=row.prompt,
+                    is_enabled=row.is_enabled,
+                    updated_at=row.updated_at,
+                    updated_by=row.updated_by,
+                )
+            )
+        else:
+            guide = COLUMN_GUIDE.get(status, {})
+            results.append(
+                KanbanPromptRead(
+                    column_status=status,
+                    label=guide.get("label", status),
+                    prompt=guide.get("do_now"),
+                    is_enabled=True,
+                    updated_at=None,
+                    updated_by=None,
+                )
+            )
+    return results
+
+
+# --------------------------------------------------------------------------- #
+# Kanban Column Prompts Endpoints (Tarefa 04)
+# --------------------------------------------------------------------------- #
+@router.get("/kanban-prompts/{status}", response_model=KanbanPromptRead)
+def get_kanban_prompt_by_status(
+    status: str,
+    db: Session = Depends(get_db),
+) -> KanbanPromptRead:
+    """Retorna o prompt de uma coluna específica pelo ``column_status``.
+
+    Retorna ``KanbanPromptRead`` com label derivado de ``COLUMN_GUIDE``.
+    Se não houver registro, devolve um registro "vazio" com ``prompt=null``,
+    ``is_enabled=True`` — **não** 404.
+    """
+    row = (
+        db.query(KanbanColumnPrompt)
+        .filter(KanbanColumnPrompt.column_status == status)
+        .first()
+    )
+    # Deriva o label de COLUMN_GUIDE quando a coluna é conhecida
+    guide = COLUMN_GUIDE.get(status)
+    label = guide["label"] if guide else status
+
+    if row is not None:
+        return KanbanPromptRead(
+            column_status=row.column_status,
+            label=label,
+            prompt=row.prompt,
+            is_enabled=row.is_enabled,
+            updated_at=row.updated_at,
+            updated_by=row.updated_by,
+        )
+
+    # Nenhum registro — retorna o guia padrão como sugestão (a UI permite criar)
+    return KanbanPromptRead(
+        column_status=status,
+        label=label,
+        prompt=guide.get("do_now"),
+        is_enabled=True,
+        updated_at=None,
+        updated_by=None,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Kanban Column Prompts Endpoints (Tarefa 05)
+# --------------------------------------------------------------------------- #
+@router.put("/kanban-prompts/{status}", response_model=KanbanPromptRead)
+def update_kanban_prompt_by_status(
+    status: str,
+    payload: KanbanPromptUpdate,
+    db: Session = Depends(get_db),
+) -> KanbanPromptRead:
+    """Atualiza parcialmente um prompt de coluna Kanban pelo ``column_status``.
+
+    **Upsert**: se o registro não existir, cria um novo com os valores do
+    ``payload``, registra ``updated_at`` e ``updated_by``, e invalida o cache.
+    """
+    row = (
+        db.query(KanbanColumnPrompt)
+        .filter(KanbanColumnPrompt.column_status == status)
+        .first()
+    )
+
+    guide = COLUMN_GUIDE.get(status)
+    label = guide["label"] if guide else status
+
+    if row is None:
+        # Upsert: cria novo registro
+        row = KanbanColumnPrompt(column_status=status)
+        db.add(row)
+
+    updated_fields: list[str] = []
+    if payload.prompt is not None:
+        row.prompt = payload.prompt
+        updated_fields.append("prompt")
+    if payload.is_enabled is not None:
+        row.is_enabled = payload.is_enabled
+        updated_fields.append("is_enabled")
+
+    if updated_fields:
+        row.updated_at = datetime.now(timezone.utc)
+        actor = resolve_spec_actor()
+        if actor:
+            row.updated_by = actor
+        db.commit()
+    else:
+        # Nenhum campo mudou — apenas refresh para garantir timestamp atual
+        db.refresh(row)
+
+    # Invalidate cache after successful update
+    try:
+        from app.mcp_server import _invalidate_kanban_prompts_cache
+
+        _invalidate_kanban_prompts_cache()
+    except Exception:  # noqa: BLE001 — cache invalidation should not break the API
+        pass
+
+    return KanbanPromptRead(
+        column_status=row.column_status,
+        label=label,
+        prompt=row.prompt,
+        is_enabled=row.is_enabled,
+        updated_at=row.updated_at,
+        updated_by=row.updated_by,
+    )
 
 
 # --------------------------------------------------------------------------- #

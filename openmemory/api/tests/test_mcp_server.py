@@ -14,7 +14,14 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from app.mcp_server import client_name_var, mcp, mcp_router, user_id_var
+from app.mcp_server import (
+    SEARCH_EMBED_TIMEOUT_SECONDS,
+    _run_search_operation,
+    client_name_var,
+    mcp,
+    mcp_router,
+    user_id_var,
+)
 
 # MCP Streamable HTTP requires the Accept header to include application/json.
 # Including text/event-stream as well satisfies GET (SSE) requests.
@@ -68,6 +75,26 @@ def _initialize_payload(req_id: int = 1) -> dict:
         },
         req_id=req_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Search operation bounds
+# ---------------------------------------------------------------------------
+
+class TestSearchOperationBounds:
+    @pytest.mark.asyncio
+    async def test_blocking_operation_is_cancelled_after_timeout(self):
+        async def never_finishes():
+            return await _run_search_operation(
+                lambda: __import__("time").sleep(1),
+                timeout=0.01,
+            )
+
+        with pytest.raises(TimeoutError):
+            await never_finishes()
+
+    def test_search_embedding_budget_is_finite(self):
+        assert 0 < SEARCH_EMBED_TIMEOUT_SECONDS < 60
 
 
 # ---------------------------------------------------------------------------
@@ -395,3 +422,15 @@ class TestRouteRegistration:
     def test_streamable_http_route_is_registered(self):
         routes = [r.path for r in mcp_router.routes if hasattr(r, "path")]
         assert "/mcp/{client_name}/http/{user_id}" in routes
+
+
+class TestSSEMessageErrors:
+    @pytest.mark.asyncio
+    async def test_missing_session_is_returned_to_client(self, client):
+        response = await client.post(
+            "/mcp/messages/?session_id=00000000000000000000000000000000",
+            content=b"{}",
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 404

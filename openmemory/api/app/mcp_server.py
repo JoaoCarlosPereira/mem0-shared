@@ -29,6 +29,7 @@ import anyio
 
 from app.database import SessionLocal
 from app.models import (
+    KanbanColumnPrompt,
     Memory,
     MemoryAccessLog,
     MemoryState,
@@ -87,6 +88,42 @@ DEFAULT_SEARCH_TOP_K = 20
 DEFAULT_LIST_TOP_K = 200
 DEFAULT_LIST_PAGE_SIZE = 256
 
+# Kanban column prompts cache (task_06)
+_kanban_prompts_cache: dict[str, dict] = {}
+_kanban_prompts_cache_loaded: datetime.datetime | None = None
+_KANBAN_PROMPTS_TTL_SECONDS = 600  # 10 minutes
+
+def _kanban_prompts_cache_expired() -> bool:
+    """Returns True if the cache is empty or has exceeded its TTL."""
+    if _kanban_prompts_cache_loaded is None:
+        return True
+    return (datetime.datetime.now(datetime.UTC) - _kanban_prompts_cache_loaded).total_seconds() > _KANBAN_PROMPTS_TTL_SECONDS
+
+def _load_kanban_prompts_cache(db: Any) -> None:
+    """Loads all prompts from the database into the in-memory cache."""
+    try:
+        from app.models import KanbanColumnPrompt
+        rows = db.query(KanbanColumnPrompt).all()
+        _kanban_prompts_cache.clear()
+        for r in rows:
+            _kanban_prompts_cache[r.column_status] = {
+                "prompt": r.prompt,
+                "is_enabled": r.is_enabled,
+            }
+        global _kanban_prompts_cache_loaded
+        _kanban_prompts_cache_loaded = datetime.datetime.now(datetime.UTC)
+        logging.info("Kanban column prompts cache loaded: %d entries", len(_kanban_prompts_cache))
+    except Exception as e:
+        logging.warning("Failed to load kanban column prompts cache: %s", e)
+
+def _invalidate_kanban_prompts_cache() -> None:
+    """Clears the cache and resets the load timestamp."""
+    global _kanban_prompts_cache_loaded
+    _kanban_prompts_cache.clear()
+    _kanban_prompts_cache_loaded = None
+    logging.info("Kanban column prompts cache invalidated")
+
+
 # Over-fetch factor for the semantic read path. ``rank_search_results`` blends the
 # raw score with recency, project and group boosts, so it can only promote what the
 # vector store already returned: fetching exactly DEFAULT_SEARCH_TOP_K candidates
@@ -114,6 +151,19 @@ DEFAULT_SEARCH_CANDIDATE_K = max(
     DEFAULT_SEARCH_TOP_K,
     int(os.getenv("MEM0_SEARCH_CANDIDATE_K", "150")),
 )
+
+# Bound external/vector operations so a slow Ollama or Qdrant cannot consume the
+# MCP request until the client gives up. The list fallback keeps reads useful when
+# semantic search exceeds its budget.
+SEARCH_EMBED_TIMEOUT_SECONDS = float(os.getenv("MEM0_SEARCH_EMBED_TIMEOUT_SEC", "12"))
+SEARCH_VECTOR_TIMEOUT_SECONDS = float(os.getenv("MEM0_SEARCH_VECTOR_TIMEOUT_SEC", "8"))
+SEARCH_SCROLL_TIMEOUT_SECONDS = float(os.getenv("MEM0_SEARCH_SCROLL_TIMEOUT_SEC", "8"))
+
+async def _run_search_operation(operation, *, timeout: float):
+    """Run a blocking memory operation with a bounded MCP-facing wait."""
+    with anyio.fail_after(timeout):
+        return await anyio.to_thread.run_sync(operation, abandon_on_cancel=True)
+
 
 # Write-path default (task_07): the MCP route always provides a client_name, but
 # a direct tool call may not — fall back to an explicit sentinel for attribution.
@@ -460,8 +510,9 @@ async def search_memory(
                         user_id=_usage_user_id(),
                         operation_type="search",
                     ):
-                        embeddings = await anyio.to_thread.run_sync(
-                            lambda: memory_client.embedding_model.embed(query, "search")
+                        embeddings = await _run_search_operation(
+                            lambda: memory_client.embedding_model.embed(query, "search"),
+                            timeout=SEARCH_EMBED_TIMEOUT_SECONDS,
                         )
                     read_cache.set_embedding(embed_model, query, embeddings)
                 except Exception as embed_err:  # noqa: BLE001
@@ -471,13 +522,14 @@ async def search_memory(
                         "project" if strict_project else "global",
                     )
                     scope = project if strict_project else None
-                    points = await anyio.to_thread.run_sync(
+                    points = await _run_search_operation(
                         lambda: _scroll_project_points(
                             memory_client,
                             scope,
                             limit=DEFAULT_SEARCH_CANDIDATE_K,
                             include_obsolete=include_obsolete,
-                        )
+                        ),
+                        timeout=SEARCH_SCROLL_TIMEOUT_SECONDS,
                     )
                     results = [_point_to_memory_result(p) for p in points]
                     rank_search_results(
@@ -494,7 +546,7 @@ async def search_memory(
                         indent=2,
                     )
 
-            hits = await anyio.to_thread.run_sync(
+            hits = await _run_search_operation(
                 lambda: memory_client.vector_store.search(
                     query=query,
                     vectors=embeddings,
@@ -502,7 +554,8 @@ async def search_memory(
                     filters=search_filters,
                     shard_key_selector=None,
                     include_obsolete=include_obsolete,
-                )
+                ),
+                timeout=SEARCH_VECTOR_TIMEOUT_SECONDS,
             )
 
             results = []
@@ -574,13 +627,14 @@ async def list_memories(
         return "Error: Memory system is currently unavailable. Please try again later."
 
     try:
-        points = await anyio.to_thread.run_sync(
+        points = await _run_search_operation(
             lambda: _scroll_project_points(
                 memory_client,
                 project,
                 limit=limit,
                 include_obsolete=include_obsolete,
-            )
+            ),
+            timeout=SEARCH_SCROLL_TIMEOUT_SECONDS,
         )
         results = [_point_to_memory_result(p) for p in points]
 
@@ -1856,6 +1910,8 @@ async def handle_post_message(request: Request):
 
 async def _handle_post_message_impl(request: Request):
     """Handle POST messages for SSE"""
+    response_status = 202
+
     try:
         body = await request.body()
 
@@ -1863,15 +1919,18 @@ async def _handle_post_message_impl(request: Request):
         async def receive():
             return {"type": "http.request", "body": body, "more_body": False}
 
-        # Create a simple send function that does nothing
         async def send(message):
-            return {}
+            nonlocal response_status
+            if message["type"] == "http.response.start":
+                response_status = message["status"]
 
+        # The SSE transport owns the response status. Preserve errors such as
+        # 404 for an expired/missing session so clients reconnect immediately
+        # instead of treating the request as accepted and retrying for minutes.
         # Call handle_post_message with the correct arguments
         await sse.handle_post_message(request.scope, receive, send)
 
-        # Accepted — do not emit a second JSON body that races the SSE writer.
-        return Response(status_code=202)
+        return Response(status_code=response_status)
     finally:
         pass
 

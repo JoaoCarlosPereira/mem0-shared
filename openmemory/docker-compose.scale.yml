@@ -55,6 +55,11 @@ x-api-common: &api-common
     WRITE_WORKER_MAX_CONCURRENCY: ${WRITE_WORKER_MAX_CONCURRENCY:-1}
     WRITE_QUEUE_STALL_WATCHDOG_INTERVAL_SEC: ${WRITE_QUEUE_STALL_WATCHDOG_INTERVAL_SEC:-60}
     WRITE_WORKER_HEARTBEAT_STALE_SEC: ${WRITE_WORKER_HEARTBEAT_STALE_SEC:-90}
+    # Limites do caminho de leitura MCP: uma busca lenta não deve prender a
+    # sessão até o timeout do cliente; valores podem ser ajustados sem rebuild.
+    MEM0_SEARCH_EMBED_TIMEOUT_SEC: ${MEM0_SEARCH_EMBED_TIMEOUT_SEC:-12}
+    MEM0_SEARCH_VECTOR_TIMEOUT_SEC: ${MEM0_SEARCH_VECTOR_TIMEOUT_SEC:-8}
+    MEM0_SEARCH_SCROLL_TIMEOUT_SEC: ${MEM0_SEARCH_SCROLL_TIMEOUT_SEC:-8}
     # Autenticação por equipe (task_11 / ADR-006): warn (default) -> enforce.
     AUTH_MODE: ${AUTH_MODE:-warn}
     # Token dedicado para mutações destrutivas /admin/* (restore, purge, requeue-done).
@@ -180,8 +185,13 @@ services:
     # string, o que vazaria o ?token= dos agentes (ADR-003). A observabilidade
     # de requisições vem do logging estruturado (request_id/auth_method) e das
     # trilhas write/read_audit_logs — que nunca contêm o token.
+    # The legacy SSE transport keeps its session registry in the Python
+    # process. Multiple Uvicorn workers therefore make /mcp/messages lose the
+    # session created by /mcp/*/sse/* and clients retry until their timeout.
+    # Streamable HTTP is stateless, but the shared API process also serves SSE
+    # for existing agent installations, so keep this service single-process.
     command: >
-      sh -c "uvicorn main:app --host 0.0.0.0 --port 8765 --workers 2 --no-access-log"
+      sh -c "uvicorn main:app --host 0.0.0.0 --port 8765 --workers 1 --no-access-log"
 
   openmemory-write-worker:
     <<: *api-common
@@ -385,6 +395,9 @@ services:
       INTERNAL_ACCESS_TOKEN: ${PLANKA_INTERNAL_ACCESS_TOKEN:-${INTERNAL_ACCESS_TOKEN:-}}
       OPENMEMORY_INTERNAL_URL: ${OPENMEMORY_INTERNAL_URL:-http://openmemory-mcp:8765}
       OPENMEMORY_BRIDGE_TOKEN: ${PLANKA_INTERNAL_ACCESS_TOKEN:-${INTERNAL_ACCESS_TOKEN:-}}
+      # Socket.IO is reached directly through Traefik from the UI origin.
+      # Allow the browser origins used by direct LAN and HTTPS access.
+      SOCKET_ALLOWED_ORIGINS: ${SOCKET_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://192.168.2.184:3000,https://${UI_HOSTNAME:-memorias.sysmo.com.br}}
       TRUST_PROXY: "true"
       DEFAULT_ADMIN_EMAIL: ${PLANKA_DEFAULT_ADMIN_EMAIL:-admin@mem0.local}
       DEFAULT_ADMIN_PASSWORD: ${PLANKA_DEFAULT_ADMIN_PASSWORD:-${PLANKA_INTERNAL_ACCESS_TOKEN:-mem0-planka-admin}}

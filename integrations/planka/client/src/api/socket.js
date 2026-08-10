@@ -10,8 +10,19 @@ import Config from '../constants/Config';
 
 const io = sailsIOClient(socketIOClient);
 
-io.sails.url = window.location.origin;
-io.sails.path = `${Config.BASE_PATH}/socket.io`;
+function socketOrigin() {
+  const { hostname, origin, port, protocol } = window.location;
+  if (port !== '3000') {
+    return origin;
+  }
+
+  const socketProtocol = protocol === 'https:' ? 'https:' : 'http:';
+  const socketPort = protocol === 'https:' ? '8443' : '8765';
+  return `${socketProtocol}//${hostname}:${socketPort}`;
+}
+
+io.sails.url = socketOrigin();
+io.sails.path = `${Config.BASE_PATH}/socket.io/`;
 io.sails.query = 'nosession=1';
 io.sails.transports = ['polling'];
 io.sails.autoConnect = false;

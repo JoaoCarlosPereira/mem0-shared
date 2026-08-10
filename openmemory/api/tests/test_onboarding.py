@@ -29,6 +29,12 @@ from app.models import (
 )
 from app.routers import auth as auth_module
 from app.utils import identity_links
+from app.utils.logging_context import (
+    auth_email_var,
+    auth_method_var,
+    auth_user_var,
+    machine_var,
+)
 from app.utils.session_jwt import issue_session_jwt
 
 SECRET = "segredo-de-teste-com-32-bytes-ok!"
@@ -48,6 +54,16 @@ def env(monkeypatch):
     Session = sessionmaker(bind=engine)
     monkeypatch.setattr(database_module, "SessionLocal", Session)
     identity_links.invalidate_identity_link_cache()
+
+    # ``AuthMiddleware`` (app.middleware.team_auth) sets these contextvars per
+    # request and resets them in a ``finally``, but other test modules poke
+    # them directly (e.g. via ``mcp_server.auth_method_var.set(...)``) without
+    # going through the middleware's reset path. Since no middleware is
+    # mounted on this bare ``FastAPI()`` app, a leftover non-"session" value
+    # from an earlier test makes ``require_session_person`` 403 every request
+    # in this file when the suite runs as a whole. Force a clean slate here.
+    for var in (auth_method_var, auth_user_var, auth_email_var, machine_var):
+        var.set("")
 
     app = FastAPI()
     app.include_router(auth_module.router)

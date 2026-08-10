@@ -15,7 +15,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
-from app.models import AccessControl, TaskCard, TaskCardStatus, SpecWorkspace
+from app.models import AccessControl, KanbanColumnPrompt, TaskCard, TaskCardStatus, SpecWorkspace
 from app.routers.specs import router
 
 
@@ -52,6 +52,54 @@ def _create_ws(client, project_id="mem0-shared", slug="ws-1", name="WS 1"):
         "/api/v1/specs/workspaces",
         json={"project_id": project_id, "slug": slug, "name": name},
     )
+
+
+def test_list_kanban_prompts_returns_empty_list(client):
+    response = client.get("/api/v1/specs/kanban-prompts")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_list_kanban_prompts_orders_rows_and_derives_labels(client, factory):
+    db = factory()
+    try:
+        db.add_all(
+            [
+                KanbanColumnPrompt(
+                    column_status="revisao_codigo",
+                    prompt="Revise o diff.",
+                    is_enabled=True,
+                    updated_by="reviewer",
+                ),
+                KanbanColumnPrompt(
+                    column_status="em_andamento",
+                    prompt="Implemente a task.",
+                    is_enabled=False,
+                ),
+                KanbanColumnPrompt(
+                    column_status="status_customizado",
+                    prompt="Prompt customizado.",
+                    is_enabled=True,
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get("/api/v1/specs/kanban-prompts")
+
+    assert response.status_code == 200
+    assert [item["column_status"] for item in response.json()] == [
+        "em_andamento",
+        "revisao_codigo",
+        "status_customizado",
+    ]
+    assert response.json()[0]["label"] == "Em andamento"
+    assert response.json()[1]["label"] == "Revisão de código"
+    assert response.json()[2]["label"] == "status_customizado"
+    assert response.json()[1]["updated_by"] == "reviewer"
 
 
 class TestWorkspaceCrud:

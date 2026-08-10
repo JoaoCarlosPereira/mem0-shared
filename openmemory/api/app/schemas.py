@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from app.utils.datetime_format import format_utc_iso
 
@@ -56,7 +56,8 @@ class MemoryResponse(BaseModel):
     # (task_09 / ADR-003). None quando o autor/grupo não é resolvível.
     group: Optional[str] = None
 
-    @validator('created_at', pre=True)
+    @field_validator('created_at', mode='before')
+    @classmethod
     def convert_to_epoch(cls, v):
         if isinstance(v, datetime):
             return int(v.timestamp())

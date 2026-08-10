@@ -59,7 +59,7 @@ function makeStore(
           : null,
         totalMemories: 0,
         totalApps: 0,
-        status: "idle",
+        status: "idle" as const,
         error: null,
         apps: [],
       },

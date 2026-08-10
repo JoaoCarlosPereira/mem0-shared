@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import axios from "axios";
 
 jest.mock("axios");
@@ -29,17 +29,19 @@ describe("KanbanBoardPage deep-link", () => {
       },
     });
 
-    render(
-      <KanbanBoardPage
-        params={Promise.resolve({ boardId: "1833672064557385241" })}
-      />,
-    );
+    await act(async () => {
+      render(
+        <KanbanBoardPage
+          params={Promise.resolve({ boardId: "1833672064557385241" })}
+        />,
+      );
+    });
 
     await waitFor(() => {
       expect(mockedAxios.get).toHaveBeenCalledWith(
         "/api-proxy/api/v1/specs/kanban-boards/1833672064557385241",
       );
-    });
+    }, { timeout: 2000 });
 
     const iframe = (await screen.findByTestId(
       "kanban-board-canvas",

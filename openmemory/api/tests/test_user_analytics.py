@@ -1,7 +1,7 @@
 """Tests for /admin/analytics endpoints."""
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -65,7 +65,7 @@ def _seed_audit(factory, hostname="alice-pc"):
 
     s = factory()
     try:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         job_id = _uuid.uuid4()
         s.add(
             WriteQueueJob(
@@ -280,7 +280,7 @@ def test_user_analytics_ui_hostname_reads(factory, client):
     _, hostname = _seed_group_and_user(factory, hostname="alice-pc")
     s = factory()
     try:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         s.add(
             ReadAuditLog(
                 project="proj-a",

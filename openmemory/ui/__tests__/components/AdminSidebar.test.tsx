@@ -43,7 +43,7 @@ beforeEach(() => {
 });
 
 describe("AdminSidebar", () => {
-  it("renderiza os itens de menu, incluindo Grupos, Métricas e Configurações", () => {
+  it("renderiza os itens de menu, incluindo Grupos, Prompts de Coluna, Métricas e Configurações", () => {
     renderSidebar();
     [
       "Visão Geral",
@@ -51,6 +51,7 @@ describe("AdminSidebar", () => {
       "Projetos",
       "Grupos",
       "Governança",
+      "Prompts de Coluna",
       "Métricas",
       "Log de Auditoria",
       "Configurações",
@@ -59,6 +60,14 @@ describe("AdminSidebar", () => {
     });
     expect(screen.queryByText("Specs")).not.toBeInTheDocument();
     expect(screen.queryByText("Documentações")).not.toBeInTheDocument();
+  });
+
+  it("link de Prompts de Coluna aponta para /admin/kanban-prompts e ativa pelo pathname", () => {
+    mockUsePathname.mockReturnValue("/admin/kanban-prompts");
+    renderSidebar();
+    const link = screen.getByText("Prompts de Coluna").closest("a");
+    expect(link).toHaveAttribute("href", "/admin/kanban-prompts");
+    expect(link).toHaveAttribute("aria-current", "page");
   });
 
   it("link de Configurações aponta para /admin/settings", () => {

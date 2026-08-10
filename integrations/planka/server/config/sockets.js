@@ -9,7 +9,19 @@
  * https://sailsjs.com/config/sockets
  */
 
+const socketAllowedOrigins = (process.env.SOCKET_ALLOWED_ORIGINS || process.env.BASE_URL || '')
+  .split(',')
+  .filter(Boolean)
+  .map((value) => {
+    try {
+      return new URL(value).origin;
+    } catch (_error) {
+      return value.trim();
+    }
+  });
+
 module.exports.sockets = {
+  onlyAllowOrigins: socketAllowedOrigins,
   /**
    *
    * `transports`

@@ -97,6 +97,16 @@ describe("planka route proxy", () => {
     expect(target).toBe("http://planka:1337/");
   });
 
+  it("preserva a barra final exigida pelo endpoint Socket.IO", async () => {
+    await GET(
+      makeRequest("http://openmemory.local/planka/socket.io?EIO=4&transport=polling"),
+      routeContext(["socket.io"]),
+    );
+
+    const [target] = (global.fetch as jest.Mock).mock.calls[0] as [string, RequestInit];
+    expect(target).toBe("http://planka:1337/socket.io/?EIO=4&transport=polling");
+  });
+
   it("encaminha GET com sub-caminho e query string, sem headers hop-by-hop", async () => {
     const response = await GET(
       makeRequest("http://openmemory.local/planka/js/main.js?v=2", {

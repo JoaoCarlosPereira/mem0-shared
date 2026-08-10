@@ -40,6 +40,8 @@ const job: WriteQueueJob = {
   project: "proj-a",
   hostname: "host1",
   client_name: "cli",
+  user_display_name: "User Name",
+  user_avatar_url: null,
   text_preview: "olá mundo",
   status: "failed",
   error: "boom error",
@@ -72,7 +74,7 @@ describe("QueuesPage", () => {
   it("aba Write Queue ativa por padrão exibe o job", () => {
     renderPage();
     expect(screen.getByText("olá mundo")).toBeInTheDocument();
-    expect(screen.getByText("host1")).toBeInTheDocument();
+    expect(screen.getByText("User Name")).toBeInTheDocument();
   });
 
   it("erro da write queue é exibido em vermelho", () => {

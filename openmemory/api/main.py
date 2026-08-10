@@ -163,6 +163,14 @@ def create_default_app():
 create_default_user()
 create_default_app()
 
+# Load Kanban column prompts cache on startup (task_06)
+db_boot = SessionLocal()
+try:
+    from app.mcp_server import _load_kanban_prompts_cache
+    _load_kanban_prompts_cache(db_boot)
+finally:
+    db_boot.close()
+
 # Setup MCP server
 setup_mcp_server(app)
 

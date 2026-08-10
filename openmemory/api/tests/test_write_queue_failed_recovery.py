@@ -1,7 +1,7 @@
 """Tests for failed-job cooldown recovery."""
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
@@ -44,7 +44,7 @@ class TestRecoverFailedJobs:
             row = db.query(WriteQueueModel).filter(
                 WriteQueueModel.id == uuid.UUID(job_id)
             ).first()
-            row.updated_at = datetime.utcnow() - timedelta(minutes=20)
+            row.updated_at = datetime.now(timezone.utc) - timedelta(minutes=20)
             db.commit()
         finally:
             db.close()

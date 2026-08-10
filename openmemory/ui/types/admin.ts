@@ -123,22 +123,6 @@ export type GovernanceFilter = {
   page: number;
 };
 
-// Item de /admin/projects/sizes (endpoint existente reutilizado pelo admin)
-export type ProjectSize = {
-  name: string;
-  memory_count: number;
-  partition_tier: "shared" | "dedicated";
-  shard_key: string | null;
-  over_threshold: boolean;
-  last_activity_at?: string | null;
-};
-
-export type ProjectSizesResponse = {
-  threshold: number;
-  over_threshold_count: number;
-  projects: ProjectSize[];
-};
-
 // Memória de um projeto lida do store vetorial (Qdrant) via
 // GET /admin/projects/{project}/memories — fonte do MCP, indexada por projeto.
 export type ProjectMemory = {
@@ -164,7 +148,34 @@ export type WriteAuditFilter = {
   page: number;
 };
 
-// Analytics dashboard — espelha /admin/analytics/*
+// Prompts de coluna do pipeline Kanban
+export type KanbanPrompt = {
+  status: string;
+  label: string;
+  prompt: string | null;
+  is_enabled: boolean;
+  updated_at: string | null;
+  updated_by: string | null;
+};
+
+export type KanbanPromptsResponse = KanbanPrompt[];
+
+// Espelha resposta de GET /admin/projects/sizes items
+export type ProjectSize = {
+  name: string;
+  memory_count: number;
+  partition_tier: string;
+  shard_key: string | null;
+  over_threshold: boolean;
+  last_activity_at?: string | null;
+};
+
+export type ProjectSizesResponse = {
+  threshold: number;
+  over_threshold_count: number;
+  projects: ProjectSize[];
+};
+
 export type UsageLevel = "online" | "offline";
 
 export type GroupAnalytics = {

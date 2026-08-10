@@ -116,7 +116,7 @@ describe("AuthBridge", () => {
       isAxiosError: true,
       response: { status: 401 },
     });
-    mockedAxios.isAxiosError = jest.fn().mockReturnValue(true);
+    mockedAxios.isAxiosError = jest.requireActual("axios").isAxiosError;
 
     render(
       <Provider store={store}>

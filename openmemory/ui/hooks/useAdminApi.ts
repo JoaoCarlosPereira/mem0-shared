@@ -9,6 +9,7 @@ import {
 } from "@/store/adminSlice";
 import { usePolling } from "@/hooks/usePolling";
 import {
+  KanbanPrompt,
   PaginatedWriteAudit,
   ProjectMemoriesResponse,
   ProjectSizesResponse,
@@ -83,6 +84,24 @@ export const useAdminApi = (options?: UseAdminApiOptions) => {
     [],
   );
 
+  const fetchKanbanPrompts = useCallback(async (): Promise<KanbanPrompt[]> => {
+    const res = await axios.get<KanbanPrompt[]>(
+      `${getApiUrl()}/api/v1/specs/kanban-prompts`,
+    );
+    return res.data;
+  }, []);
+
+  const updateKanbanPrompt = useCallback(
+    async (status: string, data: Partial<KanbanPrompt>): Promise<KanbanPrompt> => {
+      const res = await axios.put<KanbanPrompt>(
+        `${getApiUrl()}/api/v1/specs/kanban-prompts/${status}`,
+        data,
+      );
+      return res.data;
+    },
+    [],
+  );
+
   usePolling(fetchAdminOverview, intervalMs, poll);
 
   return {
@@ -90,6 +109,8 @@ export const useAdminApi = (options?: UseAdminApiOptions) => {
     fetchWriteAudit,
     fetchProjectSizes,
     fetchProjectMemories,
+    fetchKanbanPrompts,
+    updateKanbanPrompt,
   };
 };
 

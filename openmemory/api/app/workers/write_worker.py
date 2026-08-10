@@ -25,6 +25,7 @@ loop. :meth:`WriteWorker.run` is the long-running loop used at app startup.
 """
 
 import asyncio
+import inspect
 import logging
 import os
 from typing import Callable, Optional
@@ -380,7 +381,7 @@ class WriteWorker:
             operation_type="add",
         )
         with attribution:
-            if asyncio.iscoroutinefunction(add):
+            if inspect.iscoroutinefunction(add):
                 return await add(job.text, **kwargs)
 
             # Call it; if the client returned a coroutine/awaitable (e.g. an
