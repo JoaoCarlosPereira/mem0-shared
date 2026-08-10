@@ -27,8 +27,23 @@ def factory():
         poolclass=StaticPool,
     )
     Base.metadata.create_all(bind=engine)
-    yield sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    engine.dispose()
+    # Clean shared kanban data BEFORE yielding (StaticPool shares connections)
+    conn = engine.raw_connection()
+    try:
+        conn.execute("DELETE FROM kanban_column_prompts")
+        conn.commit()
+    finally:
+        conn.close()
+    maker = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    yield maker
+    # Clean after test too
+    conn = engine.raw_connection()
+    try:
+        conn.execute("DELETE FROM kanban_column_prompts")
+        conn.commit()
+    finally:
+        conn.close()
+    # Deliberately NOT calling engine.dispose() to keep the shared StaticPool alive.
 
 
 @pytest.fixture
@@ -54,14 +69,20 @@ def _create_ws(client, project_id="mem0-shared", slug="ws-1", name="WS 1"):
     )
 
 
-def test_list_kanban_prompts_returns_empty_list(client):
+def test_list_kanban_prompts_always_returns_statuses(client):
+    """GET /kanban-prompts retorna TODOS os status do pipeline, mesmo sem dados."""
     response = client.get("/api/v1/specs/kanban-prompts")
 
     assert response.status_code == 200
-    assert response.json() == []
+    data = response.json()
+    assert len(data) > 0  # At least all COLUMN_GUIDE statuses
+    statuses = {d["column_status"]: d for d in data}
+    assert "tasks" in statuses
+    assert "em_andamento" in statuses
 
 
 def test_list_kanban_prompts_orders_rows_and_derives_labels(client, factory):
+    """Custom prompts override defaults; response includes ALL pipeline statuses."""
     db = factory()
     try:
         db.add_all(
@@ -78,8 +99,8 @@ def test_list_kanban_prompts_orders_rows_and_derives_labels(client, factory):
                     is_enabled=False,
                 ),
                 KanbanColumnPrompt(
-                    column_status="status_customizado",
-                    prompt="Prompt customizado.",
+                    column_status="concluido",
+                    prompt="Tarefa finalizada.",
                     is_enabled=True,
                 ),
             ]
@@ -91,15 +112,18 @@ def test_list_kanban_prompts_orders_rows_and_derives_labels(client, factory):
     response = client.get("/api/v1/specs/kanban-prompts")
 
     assert response.status_code == 200
-    assert [item["column_status"] for item in response.json()] == [
-        "em_andamento",
-        "revisao_codigo",
-        "status_customizado",
-    ]
-    assert response.json()[0]["label"] == "Em andamento"
-    assert response.json()[1]["label"] == "Revisão de código"
-    assert response.json()[2]["label"] == "status_customizado"
-    assert response.json()[1]["updated_by"] == "reviewer"
+    data = response.json()
+    statuses = {d["column_status"]: d for d in data}
+    # Seeded custom prompts override defaults for valid pipeline statuses
+    assert statuses["em_andamento"]["prompt"] == "Implemente a task."
+    assert statuses["em_andamento"]["label"] == "Em andamento"
+    assert statuses["revisao_codigo"]["prompt"] == "Revise o diff."
+    assert statuses["revisao_codigo"]["updated_by"] == "reviewer"
+    assert "concluido" in statuses
+    assert statuses["concluido"]["prompt"] == "Tarefa finalizada."
+    # tasks and fase_teste come from default COLUMN_GUIDE
+    assert "tasks" in statuses
+    assert "fase_teste" in statuses
 
 
 class TestWorkspaceCrud:

@@ -1,7 +1,6 @@
 """Testes da injeção de column_prompt em enrich_status_payload."""
 
-import pytest
-from app.utils.kanban_pipeline import enrich_status_payload, _get_kanban_prompts_cache
+from app.utils.kanban_pipeline import enrich_status_payload
 
 def test_enrich_status_payload_with_enabled_prompt(monkeypatch):
     # Mock do cache global do mcp_server

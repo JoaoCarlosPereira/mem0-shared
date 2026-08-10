@@ -29,7 +29,6 @@ import anyio
 
 from app.database import SessionLocal
 from app.models import (
-    KanbanColumnPrompt,
     Memory,
     MemoryAccessLog,
     MemoryState,
