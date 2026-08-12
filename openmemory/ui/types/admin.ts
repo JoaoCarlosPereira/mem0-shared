@@ -150,13 +150,15 @@ export type WriteAuditFilter = {
 
 // Prompts de coluna do pipeline Kanban
 export type KanbanPrompt = {
-  status: string;
+  column_status: string;
   label: string;
   prompt: string | null;
   is_enabled: boolean;
   updated_at: string | null;
   updated_by: string | null;
 };
+
+export type KanbanPromptUpdate = Partial<Pick<KanbanPrompt, "prompt" | "is_enabled">>;
 
 export type KanbanPromptsResponse = KanbanPrompt[];
 

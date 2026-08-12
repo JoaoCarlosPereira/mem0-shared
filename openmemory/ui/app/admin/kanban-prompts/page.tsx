@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useAdminApi } from "@/hooks/useAdminApi";
-import { KanbanPrompt } from "@/types/admin";
+import { KanbanPrompt, KanbanPromptUpdate } from "@/types/admin";
 import { Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -32,11 +32,15 @@ export default function KanbanPromptsPage() {
     };
   }, []);
 
-  async function handleUpdate(status: string, updates: Partial<KanbanPrompt>) {
+  function handleLocalUpdate(status: string, updates: KanbanPromptUpdate) {
+    setPrompts(prev => prev.map(p => p.column_status === status ? { ...p, ...updates } : p));
+  }
+
+  async function handleUpdate(status: string, updates: KanbanPromptUpdate) {
     setSavingStatus(prev => ({ ...prev, [status]: "saving" }));
     try {
-      await updateKanbanPrompt(status, updates);
-      setPrompts(prev => prev.map(p => p.status === status ? { ...p, ...updates } : p));
+      const savedPrompt = await updateKanbanPrompt(status, updates);
+      setPrompts(prev => prev.map(p => p.column_status === status ? savedPrompt : p));
       setSavingStatus(prev => ({ ...prev, [status]: "saved" }));
       setTimeout(() => {
         setSavingStatus(prev => {
@@ -89,9 +93,9 @@ export default function KanbanPromptsPage() {
               </TableRow>
             ) : (
               prompts.map((prompt) => (
-                <TableRow key={prompt.status} className="group">
+                <TableRow key={prompt.column_status} className="group">
                   <TableCell className="font-mono text-xs text-violet-400">
-                    {prompt.status}
+                    {prompt.column_status}
                   </TableCell>
                   <TableCell className="text-slate-300">
                     {prompt.label}
@@ -100,7 +104,8 @@ export default function KanbanPromptsPage() {
                     <div className="relative">
                       <Textarea
                         value={prompt.prompt || ""}
-                        onChange={(e) => handleUpdate(prompt.status, { prompt: e.target.value })}
+                        onChange={(e) => handleLocalUpdate(prompt.column_status, { prompt: e.target.value })}
+                        onBlur={(e) => handleUpdate(prompt.column_status, { prompt: e.target.value })}
                         placeholder="Use o padrão COLUMN_GUIDE.do_now"
                         className={cn(
                           "min-h-[80px] bg-slate-900/50 border-slate-700 text-slate-200 placeholder:text-slate-600 focus:border-violet-500 transition-colors",
@@ -121,7 +126,7 @@ export default function KanbanPromptsPage() {
                     <div className="flex justify-center">
                       <Switch
                         checked={prompt.is_enabled}
-                        onCheckedChange={(checked) => handleUpdate(prompt.status, { is_enabled: checked })}
+                        onCheckedChange={(checked) => handleUpdate(prompt.column_status, { is_enabled: checked })}
                       />
                     </div>
                   </TableCell>
@@ -133,13 +138,13 @@ export default function KanbanPromptsPage() {
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-center">
-                      {savingStatus[prompt.status] === "saving" && (
+                      {savingStatus[prompt.column_status] === "saving" && (
                         <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
                       )}
-                      {savingStatus[prompt.status] === "saved" && (
+                      {savingStatus[prompt.column_status] === "saved" && (
                         <CheckCircle2 className="h-4 w-4 text-emerald-500" />
                       )}
-                      {savingStatus[prompt.status] === "error" && (
+                      {savingStatus[prompt.column_status] === "error" && (
                         <AlertCircle className="h-4 w-4 text-rose-500" />
                       )}
                     </div>

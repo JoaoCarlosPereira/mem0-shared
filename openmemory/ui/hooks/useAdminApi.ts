@@ -10,6 +10,7 @@ import {
 import { usePolling } from "@/hooks/usePolling";
 import {
   KanbanPrompt,
+  KanbanPromptUpdate,
   PaginatedWriteAudit,
   ProjectMemoriesResponse,
   ProjectSizesResponse,
@@ -92,9 +93,9 @@ export const useAdminApi = (options?: UseAdminApiOptions) => {
   }, []);
 
   const updateKanbanPrompt = useCallback(
-    async (status: string, data: Partial<KanbanPrompt>): Promise<KanbanPrompt> => {
+    async (status: string, data: KanbanPromptUpdate): Promise<KanbanPrompt> => {
       const res = await axios.put<KanbanPrompt>(
-        `${getApiUrl()}/api/v1/specs/kanban-prompts/${status}`,
+        `${getApiUrl()}/api/v1/specs/kanban-prompts/${encodeURIComponent(status)}`,
         data,
       );
       return res.data;
