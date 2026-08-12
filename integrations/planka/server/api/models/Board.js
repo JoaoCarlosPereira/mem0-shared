@@ -92,16 +92,16 @@
  *           example: 2024-01-01T00:00:00.000Z
  */
 
-const Card = require('./Card');
+const Card = require("./Card");
 
 const Views = {
-  KANBAN: 'kanban',
-  GRID: 'grid',
-  LIST: 'list',
+  KANBAN: "kanban",
+  GRID: "grid",
+  LIST: "list",
 };
 
 const ImportTypes = {
-  TRELLO: 'trello',
+  TRELLO: "trello",
 };
 
 module.exports = {
@@ -114,44 +114,44 @@ module.exports = {
     //  ╩  ╩╚═╩╩ ╩╩ ╩ ╩ ╚╝ ╚═╝╚═╝
 
     position: {
-      type: 'number',
+      type: "number",
       required: true,
     },
     name: {
-      type: 'string',
+      type: "string",
       required: true,
     },
     defaultView: {
-      type: 'string',
+      type: "string",
       isIn: Object.values(Views),
       defaultsTo: Views.KANBAN,
-      columnName: 'default_view',
+      columnName: "default_view",
     },
     defaultCardType: {
-      type: 'string',
+      type: "string",
       isIn: Object.values(Card.Types),
       defaultsTo: Card.Types.PROJECT,
-      columnName: 'default_card_type',
+      columnName: "default_card_type",
     },
     limitCardTypesToDefaultOne: {
-      type: 'boolean',
+      type: "boolean",
       defaultsTo: false,
-      columnName: 'limit_card_types_to_default_one',
+      columnName: "limit_card_types_to_default_one",
     },
     alwaysDisplayCardCreator: {
-      type: 'boolean',
+      type: "boolean",
       defaultsTo: false,
-      columnName: 'always_display_card_creator',
+      columnName: "always_display_card_creator",
     },
     displayCardAges: {
-      type: 'boolean',
+      type: "boolean",
       defaultsTo: false,
-      columnName: 'display_card_ages',
+      columnName: "display_card_ages",
     },
     expandTaskListsByDefault: {
-      type: 'boolean',
+      type: "boolean",
       defaultsTo: false,
-      columnName: 'expand_task_lists_by_default',
+      columnName: "expand_task_lists_by_default",
     },
 
     //  ╔═╗╔╦╗╔╗ ╔═╗╔╦╗╔═╗
@@ -163,22 +163,26 @@ module.exports = {
     //  ╩ ╩╚═╝╚═╝╚═╝╚═╝╩╩ ╩ ╩ ╩╚═╝╝╚╝╚═╝
 
     projectId: {
-      model: 'Project',
+      model: "Project",
       required: true,
-      columnName: 'project_id',
+      columnName: "project_id",
+    },
+    creatorUserId: {
+      model: "User",
+      columnName: "creator_user_id",
     },
     memberUsers: {
-      collection: 'User',
-      via: 'boardId',
-      through: 'BoardMembership',
+      collection: "User",
+      via: "boardId",
+      through: "BoardMembership",
     },
     lists: {
-      collection: 'List',
-      via: 'boardId',
+      collection: "List",
+      via: "boardId",
     },
     labels: {
-      collection: 'Label',
-      via: 'boardId',
+      collection: "Label",
+      via: "boardId",
     },
   },
 };

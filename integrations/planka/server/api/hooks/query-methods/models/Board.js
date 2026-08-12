@@ -3,13 +3,17 @@
  * Licensed under the Fair Use License: https://github.com/plankanban/planka/blob/master/LICENSE.md
  */
 
-const defaultFind = (criteria, { sort = 'id' } = {}) => Board.find(criteria).sort(sort);
+const defaultFind = (criteria, { sort = "id" } = {}) =>
+  Board.find(criteria).sort(sort);
 
 /* Query methods */
 
 const createOne = (values, { user } = {}) =>
   sails.getDatastore().transaction(async (db) => {
-    const board = await Board.create({ ...values })
+    const board = await Board.create({
+      ...values,
+      creatorUserId: user.id,
+    })
       .fetch()
       .usingConnection(db);
 
@@ -41,28 +45,31 @@ const getByIds = (ids, { exceptProjectIdOrIds } = {}) => {
 
   if (exceptProjectIdOrIds) {
     criteria.projectId = {
-      '!=': exceptProjectIdOrIds,
+      "!=": exceptProjectIdOrIds,
     };
   }
 
   return defaultFind(criteria);
 };
 
-const getByProjectId = (projectId, { exceptIdOrIds, sort = ['position', 'id'] } = {}) => {
+const getByProjectId = (
+  projectId,
+  { exceptIdOrIds, sort = ["position", "id"] } = {},
+) => {
   const criteria = {
     projectId,
   };
 
   if (exceptIdOrIds) {
     criteria.id = {
-      '!=': exceptIdOrIds,
+      "!=": exceptIdOrIds,
     };
   }
 
   return defaultFind(criteria, { sort });
 };
 
-const getByProjectIds = (projectIds, { sort = ['position', 'id'] } = {}) =>
+const getByProjectIds = (projectIds, { sort = ["position", "id"] } = {}) =>
   defaultFind(
     {
       projectId: projectIds,
@@ -70,9 +77,23 @@ const getByProjectIds = (projectIds, { sort = ['position', 'id'] } = {}) =>
     { sort },
   );
 
+const getByProjectIdsAndCreatorUserIds = (
+  projectIds,
+  creatorUserIds,
+  { sort = ["position", "id"] } = {},
+) =>
+  defaultFind(
+    {
+      projectId: projectIds,
+      creatorUserId: creatorUserIds,
+    },
+    { sort },
+  );
+
 const getOneById = (id) => Board.findOne(id);
 
-const updateOne = (criteria, values) => Board.updateOne(criteria).set({ ...values });
+const updateOne = (criteria, values) =>
+  Board.updateOne(criteria).set({ ...values });
 
 // eslint-disable-next-line no-underscore-dangle
 const delete_ = (criteria) => Board.destroy(criteria).fetch();
@@ -84,6 +105,7 @@ module.exports = {
   getByIds,
   getByProjectId,
   getByProjectIds,
+  getByProjectIdsAndCreatorUserIds,
   getOneById,
   updateOne,
   deleteOne,

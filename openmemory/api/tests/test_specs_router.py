@@ -54,11 +54,19 @@ def _create_ws(client, project_id="mem0-shared", slug="ws-1", name="WS 1"):
     )
 
 
-def test_list_kanban_prompts_returns_empty_list(client):
+def test_list_kanban_prompts_returns_pipeline_defaults(client):
     response = client.get("/api/v1/specs/kanban-prompts")
 
     assert response.status_code == 200
-    assert response.json() == []
+    data = response.json()
+    assert [item["column_status"] for item in data] == [
+        "tasks",
+        "em_andamento",
+        "revisao_codigo",
+        "fase_teste",
+        "concluido",
+    ]
+    assert all(item["is_enabled"] is True for item in data)
 
 
 def test_list_kanban_prompts_orders_rows_and_derives_labels(client, factory):
@@ -77,11 +85,6 @@ def test_list_kanban_prompts_orders_rows_and_derives_labels(client, factory):
                     prompt="Implemente a task.",
                     is_enabled=False,
                 ),
-                KanbanColumnPrompt(
-                    column_status="status_customizado",
-                    prompt="Prompt customizado.",
-                    is_enabled=True,
-                ),
             ]
         )
         db.commit()
@@ -91,15 +94,30 @@ def test_list_kanban_prompts_orders_rows_and_derives_labels(client, factory):
     response = client.get("/api/v1/specs/kanban-prompts")
 
     assert response.status_code == 200
-    assert [item["column_status"] for item in response.json()] == [
+    data = response.json()
+    assert [item["column_status"] for item in data] == [
+        "tasks",
         "em_andamento",
         "revisao_codigo",
-        "status_customizado",
+        "fase_teste",
+        "concluido",
     ]
-    assert response.json()[0]["label"] == "Em andamento"
-    assert response.json()[1]["label"] == "Revisão de código"
-    assert response.json()[2]["label"] == "status_customizado"
-    assert response.json()[1]["updated_by"] == "reviewer"
+    # em_andamento is loaded from db with is_enabled=False
+    em_andamento = next(item for item in data if item["column_status"] == "em_andamento")
+    assert em_andamento["is_enabled"] is False
+    assert em_andamento["prompt"] == "Implemente a task."
+
+    # revisao_codigo is loaded from db with is_enabled=True
+    revisao_codigo = next(item for item in data if item["column_status"] == "revisao_codigo")
+    assert revisao_codigo["is_enabled"] is True
+    assert revisao_codigo["prompt"] == "Revise o diff."
+    assert revisao_codigo["updated_by"] == "reviewer"
+
+    # tasks has default do_now prompt and is_enabled=True
+    tasks = next(item for item in data if item["column_status"] == "tasks")
+    assert tasks["is_enabled"] is True
+    assert "claim_task" in tasks["prompt"]
+
 
 
 class TestWorkspaceCrud:

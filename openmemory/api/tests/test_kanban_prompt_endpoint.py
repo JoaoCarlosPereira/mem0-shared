@@ -72,12 +72,18 @@ class TestListKanbanPrompts:
         response = client.get("/api/v1/specs/kanban-prompts")
         assert response.status_code == 200
         data = response.json()
-        assert len(data) == 2
-        assert data[0]["column_status"] == "em_andamento" # Order by status
-        assert data[1]["column_status"] == "tasks"
+        assert [item["column_status"] for item in data] == [
+            "tasks",
+            "em_andamento",
+            "revisao_codigo",
+            "fase_teste",
+            "concluido",
+        ]
+        assert data[0]["prompt"] == "P1"
+        assert data[1]["prompt"] == "P2"
 
     def test_list_empty_prompts(self, factory):
-        """GET /kanban-prompts retorna lista vazia se não houver dados."""
+        """GET /kanban-prompts retorna lista com defaults se não houver dados."""
         app = FastAPI()
         app.include_router(specs_router)
         app.dependency_overrides[get_db] = _make_app(factory)
@@ -85,14 +91,22 @@ class TestListKanbanPrompts:
         client = TestClient(app)
         response = client.get("/api/v1/specs/kanban-prompts")
         assert response.status_code == 200
-        assert response.json() == []
+        data = response.json()
+        assert [item["column_status"] for item in data] == [
+            "tasks",
+            "em_andamento",
+            "revisao_codigo",
+            "fase_teste",
+            "concluido",
+        ]
+
 
 
 class TestListKanbanPrompts:
     """Validate GET /kanban-prompts list contract."""
 
-    def test_list_empty(self, factory):
-        """GET /kanban-prompts retorna lista vazia quando não há prompts."""
+    def test_list_uses_pipeline_defaults_when_no_custom_prompts(self, factory):
+        """GET /kanban-prompts retorna os status padrão quando não há overrides."""
         app = FastAPI()
         app.include_router(specs_router)
         app.dependency_overrides[get_db] = _make_app(factory)
@@ -100,7 +114,15 @@ class TestListKanbanPrompts:
         client = TestClient(app)
         response = client.get("/api/v1/specs/kanban-prompts")
         assert response.status_code == 200
-        assert response.json() == []
+        data = response.json()
+        assert [item["column_status"] for item in data] == [
+            "tasks",
+            "em_andamento",
+            "revisao_codigo",
+            "fase_teste",
+            "concluido",
+        ]
+        assert all(item["is_enabled"] is True for item in data)
 
     def test_list_multiple_prompts_sorted(self, factory):
         """GET /kanban-prompts retorna múltiplos prompts ordenados por status."""
@@ -109,24 +131,36 @@ class TestListKanbanPrompts:
         app.dependency_overrides[get_db] = _make_app(factory)
 
         db = factory()
-        db.add(KanbanColumnPrompt(column_status="z_status", prompt="Z", is_enabled=True))
-        db.add(KanbanColumnPrompt(column_status="a_status", prompt="A", is_enabled=True))
+        db.add(KanbanColumnPrompt(column_status="tasks", prompt="Tasks override", is_enabled=True))
+        db.add(
+            KanbanColumnPrompt(
+                column_status="em_andamento",
+                prompt="In progress override",
+                is_enabled=True,
+            )
+        )
         db.commit()
 
         client = TestClient(app)
         response = client.get("/api/v1/specs/kanban-prompts")
         assert response.status_code == 200
         data = response.json()
-        assert len(data) == 2
-        assert data[0]["column_status"] == "a_status"
-        assert data[1]["column_status"] == "z_status"
+        assert [item["column_status"] for item in data] == [
+            "tasks",
+            "em_andamento",
+            "revisao_codigo",
+            "fase_teste",
+            "concluido",
+        ]
+        assert data[0]["prompt"] == "Tasks override"
+        assert data[1]["prompt"] == "In progress override"
 
 
 class TestListKanbanPrompts:
     """Validate GET /kanban-prompts list contract."""
 
-    def test_list_empty(self, factory):
-        """GET /kanban-prompts retorna lista vazia quando não há prompts."""
+    def test_list_uses_pipeline_defaults_when_no_custom_prompts(self, factory):
+        """GET /kanban-prompts retorna os status padrão quando não há overrides."""
         app = FastAPI()
         app.include_router(specs_router)
         app.dependency_overrides[get_db] = _make_app(factory)
@@ -134,7 +168,15 @@ class TestListKanbanPrompts:
         client = TestClient(app)
         response = client.get("/api/v1/specs/kanban-prompts")
         assert response.status_code == 200
-        assert response.json() == []
+        data = response.json()
+        assert [item["column_status"] for item in data] == [
+            "tasks",
+            "em_andamento",
+            "revisao_codigo",
+            "fase_teste",
+            "concluido",
+        ]
+        assert all(item["is_enabled"] is True for item in data)
 
     def test_list_multiple_prompts_sorted(self, factory):
         """GET /kanban-prompts retorna múltiplos prompts ordenados por status."""
@@ -143,17 +185,29 @@ class TestListKanbanPrompts:
         app.dependency_overrides[get_db] = _make_app(factory)
 
         db = factory()
-        db.add(KanbanColumnPrompt(column_status="z_status", prompt="Z", is_enabled=True))
-        db.add(KanbanColumnPrompt(column_status="a_status", prompt="A", is_enabled=True))
+        db.add(KanbanColumnPrompt(column_status="tasks", prompt="Tasks override", is_enabled=True))
+        db.add(
+            KanbanColumnPrompt(
+                column_status="em_andamento",
+                prompt="In progress override",
+                is_enabled=True,
+            )
+        )
         db.commit()
 
         client = TestClient(app)
         response = client.get("/api/v1/specs/kanban-prompts")
         assert response.status_code == 200
         data = response.json()
-        assert len(data) == 2
-        assert data[0]["column_status"] == "a_status"
-        assert data[1]["column_status"] == "z_status"
+        assert [item["column_status"] for item in data] == [
+            "tasks",
+            "em_andamento",
+            "revisao_codigo",
+            "fase_teste",
+            "concluido",
+        ]
+        assert data[0]["prompt"] == "Tasks override"
+        assert data[1]["prompt"] == "In progress override"
 
 
 class TestGetKanbanPromptByStatus:
@@ -190,18 +244,23 @@ class TestGetKanbanPromptByStatus:
         assert data["updated_by"] == "admin"
         assert data["label"] == "Backlog (Tasks)"
 
-    def test_returns_404_when_not_found(self, factory):
-        """GET /kanban-prompts/inexistente retorna 404."""
+    def test_returns_default_for_unknown_status(self, factory):
+        """GET /kanban-prompts/inexistente retorna um fallback editável."""
         app = FastAPI()
         app.include_router(specs_router)
         app.dependency_overrides[get_db] = _make_app(factory)
 
         client = TestClient(app)
         response = client.get("/api/v1/specs/kanban-prompts/inexistente")
-        assert response.status_code == 404
-        data = response.json()
-        assert "detail" in data
-        assert "Prompt não encontrado" in data["detail"]
+        assert response.status_code == 200
+        assert response.json() == {
+            "column_status": "inexistente",
+            "label": "inexistente",
+            "prompt": None,
+            "is_enabled": True,
+            "updated_at": None,
+            "updated_by": None,
+        }
 
     def test_label_derived_from_column_guide(self, factory):
         """Label vem de COLUMN_GUIDE para colunas conhecidas."""

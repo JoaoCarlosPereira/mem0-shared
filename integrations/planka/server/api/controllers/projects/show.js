@@ -100,11 +100,11 @@
  *         $ref: '#/components/responses/NotFound'
  */
 
-const { idInput } = require('../../../utils/inputs');
+const { idInput } = require("../../../utils/inputs");
 
 const Errors = {
   PROJECT_NOT_FOUND: {
-    projectNotFound: 'Project not found',
+    projectNotFound: "Project not found",
   },
 };
 
@@ -118,7 +118,7 @@ module.exports = {
 
   exits: {
     projectNotFound: {
-      responseType: 'notFound',
+      responseType: "notFound",
     },
   },
 
@@ -131,7 +131,10 @@ module.exports = {
       throw Errors.PROJECT_NOT_FOUND;
     }
 
-    const isProjectManager = await sails.helpers.users.isProjectManager(currentUser.id, project.id);
+    const isProjectManager = await sails.helpers.users.isProjectManager(
+      currentUser.id,
+      project.id,
+    );
 
     const boardMemberships = await BoardMembership.qm.getByProjectIdAndUserId(
       project.id,
@@ -139,13 +142,19 @@ module.exports = {
     );
 
     let boards;
-    if (currentUser.role !== User.Roles.ADMIN || project.ownerProjectManagerId) {
+    if (
+      currentUser.role !== User.Roles.ADMIN ||
+      project.ownerProjectManagerId
+    ) {
       if (!isProjectManager) {
         if (boardMemberships.length === 0) {
           throw Errors.PROJECT_NOT_FOUND; // Forbidden
         }
 
-        const boardIds = sails.helpers.utils.mapRecords(boardMemberships, 'boardId');
+        const boardIds = sails.helpers.utils.mapRecords(
+          boardMemberships,
+          "boardId",
+        );
         boards = await Board.qm.getByIds(boardIds);
       }
     }
@@ -154,25 +163,71 @@ module.exports = {
       boards = await Board.qm.getByProjectId(project.id);
     }
 
-    project.isFavorite = await sails.helpers.users.isProjectFavorite(currentUser.id, project.id);
+    if (boards.length > 0 && currentUser.email) {
+      try {
+        const groupResult = await sails.sendNativeQuery(
+          `SELECT group_id FROM public.users WHERE lower(email) = lower($1) AND group_id IS NOT NULL LIMIT 1`,
+          [currentUser.email],
+        );
+        if (groupResult.rows.length > 0) {
+          const groupId = groupResult.rows[0].group_id;
+          const result = await sails.sendNativeQuery(
+            `SELECT ua.id
+               FROM planka.user_account AS ua
+               JOIN public.users AS grouped_user
+                 ON lower(grouped_user.email) = lower(ua.email)
+              WHERE grouped_user.group_id = $1`,
+            [groupId],
+          );
+          const sameGroupUserIds = new Set(
+            result.rows.map(({ id }) => String(id)),
+          );
+          sameGroupUserIds.add(String(currentUser.id));
+          boards = boards.filter(
+            (board) =>
+              board.creatorUserId &&
+              sameGroupUserIds.has(String(board.creatorUserId)),
+          );
+        }
+      } catch (error) {
+        sails.log.warn(
+          "projects/show: failed to resolve current user group:",
+          error.message,
+        );
+        boards = [];
+      }
+    }
+
+    project.isFavorite = await sails.helpers.users.isProjectFavorite(
+      currentUser.id,
+      project.id,
+    );
 
     const projectManagers = await ProjectManager.qm.getByProjectId(project.id);
 
-    const userIds = sails.helpers.utils.mapRecords(projectManagers, 'userId');
+    const userIds = sails.helpers.utils.mapRecords(projectManagers, "userId");
     const users = await User.qm.getByIds(userIds);
 
-    const backgroundImages = await BackgroundImage.qm.getByProjectId(project.id);
+    const backgroundImages = await BackgroundImage.qm.getByProjectId(
+      project.id,
+    );
 
-    const baseCustomFieldGroups = await BaseCustomFieldGroup.qm.getByProjectId(project.id);
-    const baseCustomFieldGroupsIds = sails.helpers.utils.mapRecords(baseCustomFieldGroups);
+    const baseCustomFieldGroups = await BaseCustomFieldGroup.qm.getByProjectId(
+      project.id,
+    );
+    const baseCustomFieldGroupsIds = sails.helpers.utils.mapRecords(
+      baseCustomFieldGroups,
+    );
 
-    const customFields =
-      await CustomField.qm.getByBaseCustomFieldGroupIds(baseCustomFieldGroupsIds);
+    const customFields = await CustomField.qm.getByBaseCustomFieldGroupIds(
+      baseCustomFieldGroupsIds,
+    );
 
     let notificationServices = [];
     if (isProjectManager) {
       boardIds = sails.helpers.utils.mapRecords(boards);
-      notificationServices = await NotificationService.qm.getByBoardIds(boardIds);
+      notificationServices =
+        await NotificationService.qm.getByBoardIds(boardIds);
     }
 
     return {
@@ -185,7 +240,8 @@ module.exports = {
         customFields,
         notificationServices,
         users: sails.helpers.users.presentMany(users, currentUser),
-        backgroundImages: sails.helpers.backgroundImages.presentMany(backgroundImages),
+        backgroundImages:
+          sails.helpers.backgroundImages.presentMany(backgroundImages),
       },
     };
   },

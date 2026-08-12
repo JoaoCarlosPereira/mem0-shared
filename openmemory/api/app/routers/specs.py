@@ -385,7 +385,7 @@ def get_kanban_prompt_by_status(
     return KanbanPromptRead(
         column_status=status,
         label=label,
-        prompt=guide.get("do_now"),
+        prompt=guide.get("do_now") if guide else None,
         is_enabled=True,
         updated_at=None,
         updated_by=None,
@@ -1018,6 +1018,7 @@ def _issue_kanban_access_token(db: Session) -> str:
             "email": email or f"{sub}@mem0.local",
             "name": name,
             "picture": picture,
+            "group": user.group.name if user is not None and user.group is not None else None,
             # Marca embed Mem0: current-user do PLANKA não trata como sessão nativa.
             "mem0": True,
             "iat": now,
