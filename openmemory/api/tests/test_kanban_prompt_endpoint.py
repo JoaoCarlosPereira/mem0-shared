@@ -237,7 +237,10 @@ class TestPutKanbanPromptByStatus:
         app.dependency_overrides[get_db] = _make_app(factory)
 
         # Mock resolve_spec_actor
-        monkeypatch.setattr("app.routers.specs.resolve_spec_actor", lambda: "test-actor")
+        monkeypatch.setattr(
+            "app.routers.specs.resolve_spec_actor",
+            lambda **_kwargs: "test-actor",
+        )
 
         db = factory()
         db.add(KanbanColumnPrompt(

@@ -433,7 +433,7 @@ def update_kanban_prompt_by_status(
 
     if updated_fields:
         row.updated_at = datetime.now(timezone.utc)
-        actor = resolve_spec_actor()
+        actor = resolve_spec_actor(db=db)
         if actor:
             row.updated_by = actor
         db.commit()
