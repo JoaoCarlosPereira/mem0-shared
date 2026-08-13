@@ -18,6 +18,7 @@ import UserAvatar from '../../users/UserAvatar';
 import UserActionsStep from '../../users/UserActionsStep';
 import NotificationsStep from '../../notifications/NotificationsStep';
 import isMem0Embed from '../../../utils/is-mem0-embed';
+import formatKanbanTitle from '../../../utils/format-kanban-title';
 
 import styles from './Header.module.scss';
 
@@ -98,7 +99,7 @@ const Header = React.memo(() => {
     <div className={styles.wrapper}>
       {!project && (
         <Link to={Paths.ROOT} className={classNames(styles.logo, styles.title)}>
-          Kanban
+          {formatKanbanTitle(user.groupName)}
         </Link>
       )}
       <Menu inverted size="large" className={styles.menu}>

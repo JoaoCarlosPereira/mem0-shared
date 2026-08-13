@@ -92,9 +92,11 @@
  *         $ref: '#/components/responses/Unauthorized'
  */
 
-const getSameGroupUserIds = async (user) => {
+const filterBoardsByGroup = require('../../../utils/filter-boards-by-group');
+
+const getGroupVisibilityUserIds = async (user) => {
   if (!user || !user.email) {
-    return [];
+    return null;
   }
 
   const groupResult = await sails.sendNativeQuery(
@@ -106,42 +108,42 @@ const getSameGroupUserIds = async (user) => {
     [user.email],
   );
   if (groupResult.rows.length === 0) {
-    return [];
+    return null;
   }
 
   const result = await sails.sendNativeQuery(
-    `SELECT ua.id
+    `SELECT ua.id, grouped_user.group_id = $1 AS same_group
        FROM planka.user_account AS ua
        JOIN public.users AS grouped_user
          ON lower(grouped_user.email) = lower(ua.email)
-      WHERE grouped_user.group_id = $1`,
+      WHERE grouped_user.group_id IS NOT NULL`,
     [groupResult.rows[0].group_id],
   );
 
-  return result.rows.map(({ id }) => String(id));
+  return {
+    groupedUserIds: result.rows.map(({ id }) => String(id)),
+    sameGroupUserIds: result.rows
+      .filter(({ same_group: sameGroup }) => sameGroup)
+      .map(({ id }) => String(id)),
+  };
 };
 
 module.exports = {
   async fn() {
     const { currentUser } = this.req;
 
-    let sameGroupUserIds;
+    let groupVisibilityUserIds;
     try {
-      sameGroupUserIds = await getSameGroupUserIds(currentUser);
+      groupVisibilityUserIds = await getGroupVisibilityUserIds(currentUser);
     } catch (error) {
-      sails.log.warn(
-        "projects/index: failed to resolve current user group:",
-        error.message,
-      );
-      sameGroupUserIds = [];
+      sails.log.warn('projects/index: failed to resolve current user group:', error.message);
+      groupVisibilityUserIds = null;
     }
 
     let sharedProjects;
     let sharedProjectIds;
 
-    const managerProjectIds = await sails.helpers.users.getManagerProjectIds(
-      currentUser.id,
-    );
+    const managerProjectIds = await sails.helpers.users.getManagerProjectIds(currentUser.id);
     const fullyVisibleProjectIds = [...managerProjectIds];
 
     if (currentUser.role === User.Roles.ADMIN) {
@@ -153,13 +155,8 @@ module.exports = {
       fullyVisibleProjectIds.push(...sharedProjectIds);
     }
 
-    const boardMemberships = await BoardMembership.qm.getByUserId(
-      currentUser.id,
-    );
-    const membershipBoardIds = sails.helpers.utils.mapRecords(
-      boardMemberships,
-      "boardId",
-    );
+    const boardMemberships = await BoardMembership.qm.getByUserId(currentUser.id);
+    const membershipBoardIds = sails.helpers.utils.mapRecords(boardMemberships, 'boardId');
 
     const membershipBoards = await Board.qm.getByIds(membershipBoardIds, {
       exceptProjectIdOrIds: fullyVisibleProjectIds,
@@ -167,7 +164,7 @@ module.exports = {
 
     const membershipProjectIds = sails.helpers.utils.mapRecords(
       membershipBoards,
-      "projectId",
+      'projectId',
       true,
     );
 
@@ -179,17 +176,14 @@ module.exports = {
       projects.push(...sharedProjects);
     }
 
-    const fullyVisibleBoards = await Board.qm.getByProjectIds(
-      fullyVisibleProjectIds,
-    );
+    const fullyVisibleBoards = await Board.qm.getByProjectIds(fullyVisibleProjectIds);
     let boards = [...fullyVisibleBoards, ...membershipBoards];
 
-    if (sameGroupUserIds.length > 0) {
-      const sameGroupSet = new Set(sameGroupUserIds);
-      sameGroupSet.add(String(currentUser.id));
-      boards = boards.filter(
-        (board) =>
-          board.creatorUserId && sameGroupSet.has(String(board.creatorUserId)),
+    if (groupVisibilityUserIds) {
+      boards = filterBoardsByGroup(
+        boards,
+        [...groupVisibilityUserIds.sameGroupUserIds, currentUser.id],
+        groupVisibilityUserIds.groupedUserIds,
       );
     }
 
@@ -200,25 +194,16 @@ module.exports = {
 
     const projectManagers = await ProjectManager.qm.getByProjectIds(projectIds);
 
-    const userIds = sails.helpers.utils.mapRecords(
-      projectManagers,
-      "userId",
-      true,
-    );
+    const userIds = sails.helpers.utils.mapRecords(projectManagers, 'userId', true);
     const users = await User.qm.getByIds(userIds);
 
-    const backgroundImages =
-      await BackgroundImage.qm.getByProjectIds(projectIds);
+    const backgroundImages = await BackgroundImage.qm.getByProjectIds(projectIds);
 
-    const baseCustomFieldGroups =
-      await BaseCustomFieldGroup.qm.getByProjectIds(projectIds);
-    const baseCustomFieldGroupsIds = sails.helpers.utils.mapRecords(
-      baseCustomFieldGroups,
-    );
+    const baseCustomFieldGroups = await BaseCustomFieldGroup.qm.getByProjectIds(projectIds);
+    const baseCustomFieldGroupsIds = sails.helpers.utils.mapRecords(baseCustomFieldGroups);
 
-    const customFields = await CustomField.qm.getByBaseCustomFieldGroupIds(
-      baseCustomFieldGroupsIds,
-    );
+    const customFields =
+      await CustomField.qm.getByBaseCustomFieldGroupIds(baseCustomFieldGroupsIds);
 
     let notificationServices = [];
     if (managerProjectIds.length > 0) {
@@ -228,8 +213,7 @@ module.exports = {
         managerProjectIdsSet.has(board.projectId) ? board.id : [],
       );
 
-      notificationServices =
-        await NotificationService.qm.getByBoardIds(managerBoardIds);
+      notificationServices = await NotificationService.qm.getByBoardIds(managerBoardIds);
     }
 
     const isFavoriteByProjectId = projectFavorites.reduce(
@@ -255,8 +239,7 @@ module.exports = {
         customFields,
         notificationServices,
         users: sails.helpers.users.presentMany(users, currentUser),
-        backgroundImages:
-          sails.helpers.backgroundImages.presentMany(backgroundImages),
+        backgroundImages: sails.helpers.backgroundImages.presentMany(backgroundImages),
       },
     };
   },

@@ -3,6 +3,8 @@
  * Licensed under the Fair Use License: https://github.com/plankanban/planka/blob/master/LICENSE.md
  */
 
+const getUserGroupName = require('../../../utils/get-user-group-name');
+
 /**
  * @swagger
  * /users/{id}:
@@ -100,6 +102,11 @@ module.exports = {
 
     if (inputs.id === CURRENT_USER_ID || inputs.id === currentUser.id) {
       user = currentUser;
+      const groupName = await getUserGroupName(
+        (...args) => sails.sendNativeQuery(...args),
+        currentUser.email,
+      );
+      user = { ...user, groupName };
       notificationServices = await NotificationService.qm.getByUserId(currentUser.id);
 
       if (inputs.subscribe && this.req.isSocket) {
