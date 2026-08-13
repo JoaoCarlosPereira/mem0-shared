@@ -119,6 +119,10 @@ describe("OnboardingPage", () => {
 
     await waitFor(() => {
       expect(mockedAxios.get).toHaveBeenCalledWith(expect.stringContaining("/admin/groups"), expect.anything());
+      expect(mockedAxios.get).toHaveBeenCalledWith(
+        expect.stringContaining("/api/v1/auth/machine-suggestions"),
+        expect.anything(),
+      );
     });
   });
 
