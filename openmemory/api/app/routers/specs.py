@@ -382,10 +382,13 @@ def get_kanban_prompt_by_status(
         )
 
     # Nenhum registro — retorna o guia padrão como sugestão (a UI permite criar)
+    guide_do_now: str | None = None
+    if guide is not None:
+        guide_do_now = guide.get("do_now")
     return KanbanPromptRead(
         column_status=status,
         label=label,
-        prompt=guide.get("do_now") if guide else None,
+        prompt=guide_do_now,
         is_enabled=True,
         updated_at=None,
         updated_by=None,

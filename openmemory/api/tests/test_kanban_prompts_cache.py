@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, patch
 
 from app.mcp_server import (
     _kanban_prompts_cache,
-    _kanban_prompts_cache_loaded,
     _kanban_prompts_cache_expired,
     _load_kanban_prompts_cache,
     _invalidate_kanban_prompts_cache,

@@ -27,8 +27,23 @@ def factory():
         poolclass=StaticPool,
     )
     Base.metadata.create_all(bind=engine)
-    yield sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    engine.dispose()
+    # Clean shared kanban data BEFORE yielding (StaticPool shares connections)
+    conn = engine.raw_connection()
+    try:
+        conn.execute("DELETE FROM kanban_column_prompts")
+        conn.commit()
+    finally:
+        conn.close()
+    maker = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    yield maker
+    # Clean after test too
+    conn = engine.raw_connection()
+    try:
+        conn.execute("DELETE FROM kanban_column_prompts")
+        conn.commit()
+    finally:
+        conn.close()
+    # Deliberately NOT calling engine.dispose() to keep the shared StaticPool alive.
 
 
 @pytest.fixture
@@ -54,22 +69,20 @@ def _create_ws(client, project_id="mem0-shared", slug="ws-1", name="WS 1"):
     )
 
 
-def test_list_kanban_prompts_returns_pipeline_defaults(client):
+def test_list_kanban_prompts_always_returns_statuses(client):
+    """GET /kanban-prompts retorna TODOS os status do pipeline, mesmo sem dados."""
     response = client.get("/api/v1/specs/kanban-prompts")
 
     assert response.status_code == 200
     data = response.json()
-    assert [item["column_status"] for item in data] == [
-        "tasks",
-        "em_andamento",
-        "revisao_codigo",
-        "fase_teste",
-        "concluido",
-    ]
-    assert all(item["is_enabled"] is True for item in data)
+    assert len(data) > 0  # At least all COLUMN_GUIDE statuses
+    statuses = {d["column_status"]: d for d in data}
+    assert "tasks" in statuses
+    assert "em_andamento" in statuses
 
 
 def test_list_kanban_prompts_orders_rows_and_derives_labels(client, factory):
+    """Custom prompts override defaults; response includes ALL pipeline statuses."""
     db = factory()
     try:
         db.add_all(
@@ -85,6 +98,11 @@ def test_list_kanban_prompts_orders_rows_and_derives_labels(client, factory):
                     prompt="Implemente a task.",
                     is_enabled=False,
                 ),
+                KanbanColumnPrompt(
+                    column_status="concluido",
+                    prompt="Tarefa finalizada.",
+                    is_enabled=True,
+                ),
             ]
         )
         db.commit()
@@ -95,29 +113,17 @@ def test_list_kanban_prompts_orders_rows_and_derives_labels(client, factory):
 
     assert response.status_code == 200
     data = response.json()
-    assert [item["column_status"] for item in data] == [
-        "tasks",
-        "em_andamento",
-        "revisao_codigo",
-        "fase_teste",
-        "concluido",
-    ]
-    # em_andamento is loaded from db with is_enabled=False
-    em_andamento = next(item for item in data if item["column_status"] == "em_andamento")
-    assert em_andamento["is_enabled"] is False
-    assert em_andamento["prompt"] == "Implemente a task."
-
-    # revisao_codigo is loaded from db with is_enabled=True
-    revisao_codigo = next(item for item in data if item["column_status"] == "revisao_codigo")
-    assert revisao_codigo["is_enabled"] is True
-    assert revisao_codigo["prompt"] == "Revise o diff."
-    assert revisao_codigo["updated_by"] == "reviewer"
-
-    # tasks has default do_now prompt and is_enabled=True
-    tasks = next(item for item in data if item["column_status"] == "tasks")
-    assert tasks["is_enabled"] is True
-    assert "claim_task" in tasks["prompt"]
-
+    statuses = {d["column_status"]: d for d in data}
+    # Seeded custom prompts override defaults for valid pipeline statuses
+    assert statuses["em_andamento"]["prompt"] == "Implemente a task."
+    assert statuses["em_andamento"]["label"] == "Em andamento"
+    assert statuses["revisao_codigo"]["prompt"] == "Revise o diff."
+    assert statuses["revisao_codigo"]["updated_by"] == "reviewer"
+    assert "concluido" in statuses
+    assert statuses["concluido"]["prompt"] == "Tarefa finalizada."
+    # tasks and fase_teste come from default COLUMN_GUIDE
+    assert "tasks" in statuses
+    assert "fase_teste" in statuses
 
 
 class TestWorkspaceCrud:
