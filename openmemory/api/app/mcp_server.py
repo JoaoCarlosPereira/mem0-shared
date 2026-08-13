@@ -1392,7 +1392,7 @@ async def create_task(
             task = _create_task_endpoint(payload, db=db)
             data = TaskResponse.model_validate(task).model_dump(mode="json")
             return json.dumps(
-                enrich_status_payload(data, data.get("status") or "tasks"),
+                enrich_status_payload(data, data.get("status") or "tasks", db=db),
                 default=str,
             )
         finally:
@@ -1437,6 +1437,7 @@ async def claim_task(task_id: str) -> str:
                             "claim_expires_at": result.expires_at,
                         },
                         "em_andamento",
+                        db=db,
                     ),
                     default=str,
                 )
@@ -1484,6 +1485,7 @@ async def release_task(task_id: str) -> str:
                 enrich_status_payload(
                     {"released": True, "version": result.version, "status": "tasks"},
                     "tasks",
+                    db=db,
                 )
             )
         finally:
@@ -1560,6 +1562,7 @@ async def update_task_status(
                         "version": result.version,
                     },
                     result.status,
+                    db=db,
                 )
             )
         finally:
@@ -1662,7 +1665,7 @@ async def get_task(task_id: str) -> str:
                 return f"Error: {he.detail}"
             data = TaskResponse.model_validate(task).model_dump(mode="json")
             return json.dumps(
-                enrich_status_payload(data, data.get("status") or "tasks"),
+                enrich_status_payload(data, data.get("status") or "tasks", db=db),
                 default=str,
             )
         finally:

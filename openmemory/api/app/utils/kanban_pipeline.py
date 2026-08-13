@@ -142,10 +142,23 @@ def guide_for(status: str | TaskCardStatus) -> dict[str, Any]:
     }
 
 
-def enrich_status_payload(payload: dict[str, Any], status: str) -> dict[str, Any]:
+def enrich_status_payload(
+    payload: dict[str, Any],
+    status: str,
+    db: Any | None = None,
+) -> dict[str, Any]:
     """Anexa ``kanban`` (orientação da coluna atual) ao JSON de resposta MCP."""
     out = dict(payload)
     kanban_info = guide_for(status)
+
+    if db is not None:
+        from app.mcp_server import (
+            _kanban_prompts_cache_expired,
+            _load_kanban_prompts_cache,
+        )
+
+        if _kanban_prompts_cache_expired():
+            _load_kanban_prompts_cache(db)
 
     # Injeta column_prompt do cache (se disponível e habilitado)
     cache = _get_kanban_prompts_cache()

@@ -2,6 +2,42 @@
 
 from app.utils.kanban_pipeline import enrich_status_payload
 
+
+def test_enrich_status_payload_loads_expired_cache(monkeypatch):
+    cache_mock = {}
+    db = object()
+
+    monkeypatch.setattr("app.utils.kanban_pipeline._get_kanban_prompts_cache", lambda: cache_mock)
+    monkeypatch.setattr("app.mcp_server._kanban_prompts_cache_expired", lambda: True)
+
+    def load_cache(received_db):
+        assert received_db is db
+        cache_mock["em_andamento"] = {
+            "prompt": "Prompt configurado em produção",
+            "is_enabled": True,
+        }
+
+    monkeypatch.setattr("app.mcp_server._load_kanban_prompts_cache", load_cache)
+
+    result = enrich_status_payload({}, "em_andamento", db=db)
+
+    assert result["kanban"]["column_prompt"] == "Prompt configurado em produção"
+
+
+def test_enrich_status_payload_reuses_valid_cache(monkeypatch):
+    cache_mock = {"tasks": {"prompt": "Prompt em cache", "is_enabled": True}}
+    monkeypatch.setattr("app.utils.kanban_pipeline._get_kanban_prompts_cache", lambda: cache_mock)
+    monkeypatch.setattr("app.mcp_server._kanban_prompts_cache_expired", lambda: False)
+
+    def unexpected_load(_db):
+        raise AssertionError("cache válido não deve ser recarregado")
+
+    monkeypatch.setattr("app.mcp_server._load_kanban_prompts_cache", unexpected_load)
+
+    result = enrich_status_payload({}, "tasks", db=object())
+
+    assert result["kanban"]["column_prompt"] == "Prompt em cache"
+
 def test_enrich_status_payload_with_enabled_prompt(monkeypatch):
     # Mock do cache global do mcp_server
     cache_mock = {
