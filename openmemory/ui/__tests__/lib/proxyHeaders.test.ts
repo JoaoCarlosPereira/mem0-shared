@@ -69,7 +69,7 @@ describe("applyLegacyAdminToken", () => {
     expect(out.has("x-admin-token")).toBe(false);
   });
 
-  it("não sobrescreve Authorization existente", () => {
+  it("não sobrescreve Authorization existente (sessão JWT real)", () => {
     const input = new Headers({ authorization: "Bearer jwt-session" });
     const out = applyLegacyAdminToken(input, {
       method: "POST",
@@ -78,6 +78,29 @@ describe("applyLegacyAdminToken", () => {
     });
     expect(out.has("x-admin-token")).toBe(false);
     expect(out.get("authorization")).toBe("Bearer jwt-session");
+  });
+
+  it("injeta X-Admin-Token quando chega só o shim legado Bearer local (fix 401 backup/restore)", () => {
+    const input = new Headers({ authorization: "Bearer local" });
+    const out = applyLegacyAdminToken(input, {
+      method: "POST",
+      pathSegments: ["admin", "backup", "restore"],
+      adminToken: token,
+    });
+    expect(out.get("x-admin-token")).toBe(token);
+    // o shim não é credencial: é removido, não vira Bearer no upstream
+    expect(out.has("authorization")).toBe(false);
+  });
+
+  it("não injeta Bearer local em rotas fora de /admin", () => {
+    const input = new Headers({ authorization: "Bearer local" });
+    const out = applyLegacyAdminToken(input, {
+      method: "POST",
+      pathSegments: ["api", "v1", "memories"],
+      adminToken: token,
+    });
+    expect(out.has("x-admin-token")).toBe(false);
+    expect(out.get("authorization")).toBe("Bearer local");
   });
 
   it("não sobrescreve X-Admin-Token existente", () => {

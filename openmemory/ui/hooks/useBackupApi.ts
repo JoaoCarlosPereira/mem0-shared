@@ -9,6 +9,8 @@ import {
   setBackupPolicy,
   setBackupLoading,
   setBackupError,
+  setRestoring,
+  setRestoreMessage,
 } from "@/store/backupSlice";
 import { usePolling } from "@/hooks/usePolling";
 import { isValidRetention } from "@/lib/backup";
@@ -132,18 +134,52 @@ export const useBackupApi = (options?: UseBackupApiOptions) => {
   }, [dispatch, fetchStatus, fetchList]);
 
   const restore = useCallback(
-    async (archive: string, confirm: string): Promise<void> => {
+    async (archive: string, confirm: string): Promise<boolean> => {
+      dispatch(setRestoring(true));
       try {
+        const before = (
+          await axios.get(`${getApiUrl()}/admin/backup/status`)
+        ).data;
+        const beforeCount = Number(before?.archives ?? 0);
         await axios.post(`${getApiUrl()}/admin/backup/restore`, {
           archive,
           confirm,
         });
+        // Restore roda em background (202). A conclusão é assinalada pela
+        // criação do snapshot de segurança pre-restore-*.zip (aumenta a
+        // contagem de cópias) — até lá a UI mostra "em andamento".
+        const deadline = Date.now() + 180_000;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 3000));
+          const st = (await axios.get(`${getApiUrl()}/admin/backup/status`)).data;
+          dispatch(setBackupStatus(st));
+          if (st?.last_error) {
+            dispatch(setBackupError(String(st.last_error)));
+            dispatch(setRestoring(false));
+            await fetchList();
+            return false;
+          }
+          if (Number(st?.archives ?? 0) > beforeCount) {
+            await fetchList();
+            dispatch(setRestoreMessage(`Restore de ${archive} concluído.`));
+            return true;
+          }
+        }
+        await fetchStatus();
+        await fetchList();
+        dispatch(
+          setRestoreMessage(
+            "Restore aceito, mas ainda não concluiu em 3 min. Atualize o status em breve.",
+          ),
+        );
+        return false;
       } catch (err: unknown) {
         dispatch(setBackupError(backupApiError(err, "Falha ao restaurar backup")));
-        throw err;
+        dispatch(setRestoring(false));
+        return false;
       }
     },
-    [dispatch],
+    [dispatch, fetchStatus, fetchList],
   );
 
   usePolling(fetchStatus, intervalMs, poll);

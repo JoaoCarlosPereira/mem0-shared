@@ -124,18 +124,45 @@ describe("useBackupApi", () => {
     jest.useRealTimers();
   });
 
-  it("restore faz POST /admin/backup/restore com archive e confirm", async () => {
+  it("restore faz POST /admin/backup/restore com archive e confirm e conclui quando o snapshot aparece", async () => {
+    jest.useFakeTimers();
+    mockedAxios.get
+      .mockResolvedValueOnce({ data: { ...status, archives: 3, last_error: null } }) // before
+      .mockResolvedValue({ data: { ...status, archives: 4, last_error: null } }); // poll: +1 (pre-restore)
     mockedAxios.post.mockResolvedValue({ data: { status: "accepted" } });
     const store = makeStore();
     const { result } = renderHook(() => useBackupApi({ poll: false }), {
       wrapper: wrapperFor(store),
     });
+    let ok: boolean | undefined;
     await act(async () => {
-      await result.current.restore("20260618-030000.zip", "20260618-030000.zip");
+      const pending = result.current.restore("20260618-030000.zip", "20260618-030000.zip");
+      await jest.advanceTimersByTimeAsync(3000);
+      ok = await pending;
     });
+    expect(ok).toBe(true);
     expect(mockedAxios.post).toHaveBeenCalledWith(
       expect.stringContaining("/admin/backup/restore"),
       { archive: "20260618-030000.zip", confirm: "20260618-030000.zip" },
     );
+    expect(store.getState().backup.restoring).toBe(false);
+    expect(store.getState().backup.restoreMessage).toMatch(/concluído/);
+    jest.useRealTimers();
+  });
+
+  it("restore em erro (4xx/5xx) registra erro e limpa o estado de restauração", async () => {
+    mockedAxios.get.mockResolvedValue({ data: { ...status, archives: 3, last_error: null } });
+    mockedAxios.post.mockRejectedValue(new Error("Falha ao restaurar backup"));
+    const store = makeStore();
+    const { result } = renderHook(() => useBackupApi({ poll: false }), {
+      wrapper: wrapperFor(store),
+    });
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.restore("20260618-030000.zip", "errado.zip");
+    });
+    expect(ok).toBe(false);
+    expect(store.getState().backup.restoring).toBe(false);
+    expect(store.getState().backup.error).toMatch(/Falha ao restaurar backup/);
   });
 });

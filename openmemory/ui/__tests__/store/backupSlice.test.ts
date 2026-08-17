@@ -3,6 +3,8 @@ import backupReducer, {
   setBackupPolicy,
   setBackupList,
   setBackupError,
+  setRestoring,
+  setRestoreMessage,
 } from "@/store/backupSlice";
 import type {
   BackupStatus,
@@ -59,5 +61,18 @@ describe("backupSlice", () => {
     const state = backupReducer(undefined, setBackupError("boom"));
     expect(state.error).toBe("boom");
     expect(state.loading).toBe(false);
+  });
+
+  it("setRestoring(true) ativa o estado de restauração e limpa mensagens", () => {
+    const state = backupReducer(undefined, setRestoring(true));
+    expect(state.restoring).toBe(true);
+    expect(state.restoreMessage).toBeNull();
+    expect(state.error).toBeNull();
+  });
+
+  it("setRestoreMessage finaliza a restauração e guarda a mensagem", () => {
+    const state = backupReducer(undefined, setRestoreMessage("Restore concluído."));
+    expect(state.restoring).toBe(false);
+    expect(state.restoreMessage).toBe("Restore concluído.");
   });
 });

@@ -27,6 +27,8 @@ export default function BackupPage() {
   const policy = useSelector((s: RootState) => s.backup.policy);
   const error = useSelector((s: RootState) => s.backup.error);
   const loading = useSelector((s: RootState) => s.backup.loading);
+  const restoring = useSelector((s: RootState) => s.backup.restoring);
+  const restoreMessage = useSelector((s: RootState) => s.backup.restoreMessage);
 
   const [form, setForm] = useState<BackupPolicy>(DEFAULT_POLICY);
   const [selected, setSelected] = useState<string>("");
@@ -53,6 +55,15 @@ export default function BackupPage() {
       {error && (
         <div role="alert" className="rounded-md bg-red-950 px-3 py-2 text-sm text-red-300">
           {error}
+        </div>
+      )}
+
+      {restoreMessage && (
+        <div
+          role="status"
+          className="rounded-md bg-emerald-950 px-3 py-2 text-sm text-emerald-300"
+        >
+          {restoreMessage}
         </div>
       )}
 
@@ -219,10 +230,11 @@ export default function BackupPage() {
         <Button
           variant="destructive"
           className="mt-3"
-          disabled={!canRestore(confirmText, selected)}
+          disabled={!canRestore(confirmText, selected) || restoring}
           onClick={() => restore(selected, confirmText)}
         >
-          <RotateCcw className="mr-1 h-4 w-4" /> Restaurar
+          <RotateCcw className={`mr-1 h-4 w-4 ${restoring ? "animate-spin" : ""}`} />
+          {restoring ? "Restaurando…" : "Restaurar"}
         </Button>
       </section>
     </div>

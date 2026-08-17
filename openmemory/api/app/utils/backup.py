@@ -40,6 +40,12 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_BUCKET = os.getenv("S3_BUCKET", "mem0-backups")
 
+# Timeout (segundos) para os subprocessos bloqueantes pg_dump/psql do
+# backup/restore. Sem limite, um dump/restore travado em lock segurou 34min
+# (2026-08-17) e, por rodar no worker único do uvicorn, derrubou toda a API.
+# Ajustável por env para bancos maiores.
+BACKUP_PG_TIMEOUT = int(os.getenv("BACKUP_PG_TIMEOUT", "600"))
+
 
 def make_s3_client():
     """Cliente boto3 S3 a partir do ambiente (MinIO ou S3 externo)."""
@@ -57,7 +63,10 @@ def make_s3_client():
 def _default_pg_dump(db_url: str) -> bytes:
     """Roda ``pg_dump`` e retorna o dump comprimido (gzip)."""
     out = subprocess.run(
-        ["pg_dump", "--dbname", db_url], check=True, capture_output=True
+        ["pg_dump", "--dbname", db_url],
+        check=True,
+        capture_output=True,
+        timeout=BACKUP_PG_TIMEOUT,
     ).stdout
     return gzip.compress(out)
 
@@ -167,7 +176,12 @@ class BackupService:
     def apply_pg_dump(self, dump: bytes) -> None:
         """Aplica um dump gzip do PostgreSQL via ``psql`` (a partir de bytes)."""
         sql = gzip.decompress(dump)
-        subprocess.run(["psql", "--dbname", self._db_url], input=sql, check=True)
+        subprocess.run(
+            ["psql", "--dbname", self._db_url],
+            input=sql,
+            check=True,
+            timeout=BACKUP_PG_TIMEOUT,
+        )
 
     def recover_qdrant_snapshot(self, name: str, data: bytes, qc=None) -> None:
         """Recupera uma coleção do Qdrant a partir dos bytes do snapshot."""
@@ -260,7 +274,10 @@ class BackupService:
         obj = s3.get_object(Bucket=self._bucket, Key=key)
         sql = gzip.decompress(obj["Body"].read())
         subprocess.run(
-            ["psql", "--dbname", self._db_url], input=sql, check=True
+            ["psql", "--dbname", self._db_url],
+            input=sql,
+            check=True,
+            timeout=BACKUP_PG_TIMEOUT,
         )
 
 

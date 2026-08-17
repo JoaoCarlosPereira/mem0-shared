@@ -220,6 +220,50 @@ def test_round_trip_with_postgres_applies_dump(tmp_path, monkeypatch):
     assert qc.store["c1"] == 3
 
 
+# -- timeout dos subprocessos bloqueantes (regressão do deadlock 2026-08-17) --
+def test_apply_pg_dump_passes_timeout_to_psql(monkeypatch):
+    import app.utils.backup as bmod
+
+    calls = {}
+    monkeypatch.setattr(
+        bmod.subprocess,
+        "run",
+        lambda *a, **k: calls.setdefault("kwargs", k),
+    )
+    svc = BackupService(s3_client=FakeS3(), bucket="b", db_url=_PG_URL)
+    svc.apply_pg_dump(__import__("gzip").compress(b"SELECT 1;"))
+    timeout = calls["kwargs"].get("timeout")
+    assert timeout == bmod.BACKUP_PG_TIMEOUT
+    assert timeout is not None and timeout > 0
+
+
+def test_default_pg_dump_passes_timeout_to_subprocess(monkeypatch):
+    import app.utils.backup as bmod
+
+    calls = {}
+    monkeypatch.setattr(
+        bmod.subprocess,
+        "run",
+        lambda *a, **k: (calls.update(kwargs=k), SimpleNamespace(stdout=b"x"))[1],
+    )
+    bmod._default_pg_dump(_PG_URL)
+    assert calls["kwargs"].get("timeout") == bmod.BACKUP_PG_TIMEOUT
+    assert calls["kwargs"]["timeout"] > 0
+
+
+def test_backup_pg_timeout_env_override(monkeypatch):
+    import importlib
+
+    import app.utils.backup as bmod
+
+    monkeypatch.setenv("BACKUP_PG_TIMEOUT", "42")
+    importlib.reload(bmod)
+    assert bmod.BACKUP_PG_TIMEOUT == 42
+    monkeypatch.delenv("BACKUP_PG_TIMEOUT", raising=False)
+    importlib.reload(bmod)
+    assert bmod.BACKUP_PG_TIMEOUT == 600
+
+
 def test_round_trip_restores_attachment_files(tmp_path):
     roots = _att_roots(tmp_path)
     (roots[SPEC_ARCNAME] / "task1").mkdir()

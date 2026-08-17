@@ -31,6 +31,8 @@ interface BackupState {
   policy: BackupPolicy | null;
   loading: boolean;
   error: string | null;
+  restoring: boolean;
+  restoreMessage: string | null;
 }
 
 const initialState: BackupState = {
@@ -39,6 +41,8 @@ const initialState: BackupState = {
   policy: null,
   loading: false,
   error: null,
+  restoring: false,
+  restoreMessage: null,
 };
 
 const backupSlice = createSlice({
@@ -66,6 +70,17 @@ const backupSlice = createSlice({
       state.loading = false;
       state.error = action.payload;
     },
+    setRestoring: (state, action: PayloadAction<boolean>) => {
+      state.restoring = action.payload;
+      if (action.payload) {
+        state.restoreMessage = null;
+        state.error = null;
+      }
+    },
+    setRestoreMessage: (state, action: PayloadAction<string>) => {
+      state.restoring = false;
+      state.restoreMessage = action.payload;
+    },
   },
 });
 
@@ -75,6 +90,8 @@ export const {
   setBackupPolicy,
   setBackupLoading,
   setBackupError,
+  setRestoring,
+  setRestoreMessage,
 } = backupSlice.actions;
 
 export default backupSlice.reducer;
