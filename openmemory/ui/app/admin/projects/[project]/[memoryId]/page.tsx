@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft } from "lucide-react";
 import { resolveAttribution } from "@/lib/attribution";
+import { formatDateTime } from "@/lib/i18n/pt-BR";
 
 export default function AdminMemoryDetailPage() {
   const params = useParams<{ project: string; memoryId: string }>();
@@ -97,7 +98,7 @@ export default function AdminMemoryDetailPage() {
                           displayName: log.display_name,
                           avatarUrl: log.avatar_url,
                         }).label}{" "}
-                      — {log.accessed_at}
+                      — {formatDateTime(log.accessed_at)}
                     </li>
                   ))}
                 </ul>
