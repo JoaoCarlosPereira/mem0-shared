@@ -105,6 +105,29 @@ def test_list_memory_read_audit_for_detail_page(db_factory):
     assert body["logs"][0]["client_name"] == "claude"
     assert body["logs"][0]["hostname"] == "S0293"
     assert body["logs"][0]["access_type"] == "search"
+    # The column is UTC without tzinfo; a naive string would be read as local time.
+    assert body["logs"][0]["accessed_at"].endswith("+00:00")
+
+
+def test_project_access_stats_returns_utc_aware_timestamps(db_factory):
+    from app.utils.read_audit import project_access_stats
+
+    with patch("app.utils.read_audit.SessionLocal", db_factory):
+        record_memory_reads(
+            project="mem0-shared",
+            memory_ids=[str(uuid.uuid4())],
+            access_type="search",
+            source="mcp",
+            hostname="S0258",
+        )
+
+    db = db_factory()
+    try:
+        _, first_accessed, last_accessed = project_access_stats(db, "mem0-shared")
+        assert first_accessed is not None and first_accessed.tzinfo is not None
+        assert last_accessed is not None and last_accessed.tzinfo is not None
+    finally:
+        db.close()
 
 
 def test_apps_list_shows_access_count_for_projects(db_factory):
