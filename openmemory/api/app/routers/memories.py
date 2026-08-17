@@ -632,7 +632,7 @@ async def get_memory_access_log(
     page_size: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
-    from app.utils.read_audit import list_memory_read_audit
+    from app.utils.read_audit import list_memory_read_audit, utc_isoformat
 
     mid = str(memory_id)
 
@@ -663,7 +663,7 @@ async def get_memory_access_log(
                 "id": str(log.id),
                 "app_name": app.name if app else "unknown",
                 "display_name": app.name if app else "Desconhecido",
-                "accessed_at": log.accessed_at.isoformat() if log.accessed_at else None,
+                "accessed_at": utc_isoformat(log.accessed_at),
                 "access_type": log.access_type,
             }
         )

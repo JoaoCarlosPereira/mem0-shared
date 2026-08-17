@@ -9,7 +9,7 @@ records every memory returned by a read path so the Apps dashboard can show
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
 from app.database import SessionLocal
@@ -19,6 +19,21 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+
+
+def as_utc(value: Optional[datetime]) -> Optional[datetime]:
+    """Tag a naive ``accessed_at`` as UTC (the column stores UTC without tzinfo)."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def utc_isoformat(value: Optional[datetime]) -> Optional[str]:
+    """ISO-8601 with an explicit offset, so clients never guess the timezone."""
+    aware = as_utc(value)
+    return aware.isoformat() if aware else None
 
 
 def _normalize_memory_id(memory_id: Any) -> Optional[str]:
@@ -132,7 +147,7 @@ def project_access_stats(db: Session, project: str) -> tuple[int, Optional[datet
     )
     if not row:
         return 0, None, None
-    return int(row.distinct_memories or 0), row.first_accessed, row.last_accessed
+    return int(row.distinct_memories or 0), as_utc(row.first_accessed), as_utc(row.last_accessed)
 
 
 def _normalize_audit_hostname(hostname: Optional[str]) -> Optional[str]:
@@ -225,7 +240,7 @@ def list_memory_read_audit(
                 source=row.source,
             ),
             "client_name": row.client_name,
-            "accessed_at": row.accessed_at.isoformat() if row.accessed_at else None,
+            "accessed_at": utc_isoformat(row.accessed_at),
             "access_type": row.access_type,
             "source": row.source,
             "hostname": row.hostname,
@@ -284,7 +299,7 @@ def list_project_accessed_memories(
                     "metadata_": shared.get("metadata_") or {},
                 },
                 "access_count": int(access_count or 0),
-                "last_accessed": last_accessed,
+                "last_accessed": as_utc(last_accessed),
             }
         )
     return total, memories
