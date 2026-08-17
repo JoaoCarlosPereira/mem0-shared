@@ -264,3 +264,67 @@ class TestList:
         data = (await client.post("/v3/memories/?page=1&page_size=10", json=body)).json()
         assert data["count"] == 2
         assert {r["id"] for r in data["results"]} == {"a1", "a2"}
+
+
+class TestFlatHookContract:
+    """The lifecycle hooks post ``{query, user_id, project, limit}`` — not a filter tree.
+
+    Those fields used to be dropped by the request model, so every hook read was
+    audited as ``unknown-host`` with no project ranking hint.
+    """
+
+    @pytest.mark.asyncio
+    async def test_flat_user_id_is_audited_as_the_reader_hostname(self, client, monkeypatch):
+        calls = []
+        monkeypatch.setattr(compat_v3, "record_memory_reads", lambda **kw: calls.append(kw))
+
+        await client.post(
+            "/v3/memories/search/",
+            json={"query": "alpha", "user_id": "S0258", "project": "A", "limit": 5},
+        )
+
+        assert calls, "search must record a read-audit row"
+        assert calls[0]["hostname"] == "S0258"
+        assert calls[0]["project"] == "A"
+
+    @pytest.mark.asyncio
+    async def test_flat_star_user_id_still_flags_a_global_read(self, client, monkeypatch):
+        calls = []
+        monkeypatch.setattr(compat_v3, "record_memory_reads", lambda **kw: calls.append(kw))
+
+        data = (
+            await client.post(
+                "/v3/memories/search/", json={"query": "alpha", "user_id": "*"}
+            )
+        ).json()
+
+        # "*" is the global marker, never a hostname.
+        assert calls[0]["hostname"] == "unknown-host"
+        assert {r["id"] for r in data["results"]} == {"a1", "a2", "b1"}
+
+    @pytest.mark.asyncio
+    async def test_flat_limit_caps_the_page(self, client):
+        data = (
+            await client.post(
+                "/v3/memories/search/", json={"query": "alpha", "limit": 1}
+            )
+        ).json()
+        assert len(data["results"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_filter_tree_still_wins_over_flat_fields(self, client, monkeypatch):
+        calls = []
+        monkeypatch.setattr(compat_v3, "record_memory_reads", lambda **kw: calls.append(kw))
+
+        await client.post(
+            "/v3/memories/search/",
+            json={
+                "query": "alpha",
+                "filters": _and({"app_id": "A"}, {"user_id": "S0293"}),
+                "user_id": "S0258",
+                "project": "B",
+            },
+        )
+
+        assert calls[0]["hostname"] == "S0293"
+        assert calls[0]["project"] == "A"

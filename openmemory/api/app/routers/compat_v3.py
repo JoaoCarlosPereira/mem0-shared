@@ -142,6 +142,14 @@ class SearchRequest(BaseModel):
     top_k: int = DEFAULT_TOP_K
     threshold: float = 0.0
     rerank: bool = False
+    # Flat form of the same scope fields. The lifecycle hooks (and the
+    # UserPromptSubmit hook the provisioner installs) post
+    # ``{"query", "user_id", "project", "limit"}`` instead of the cloud filter
+    # tree; without these the reader hostname is dropped and every hook read is
+    # audited as ``unknown-host`` with no project ranking hint.
+    user_id: Optional[str] = None
+    project: Optional[str] = None
+    limit: Optional[int] = None
 
 
 @router.post("/search/")
@@ -152,6 +160,13 @@ async def search(request: SearchRequest, http_request: Request) -> dict:
         return {"results": []}
 
     project, metadata_filters, is_global, requester_hostname = _extract_scope(request.filters)
+    # Filter-tree values win; the flat fields only fill what they left unset.
+    if request.user_id == "*":
+        is_global = True
+    elif requester_hostname is None:
+        requester_hostname = request.user_id
+    if project is None:
+        project = request.project
     preferred_project = None if is_global else project
 
     # Grupo do solicitante: user_id nos filters (plugin) ou header legado → users.group_id.
@@ -160,7 +175,10 @@ async def search(request: SearchRequest, http_request: Request) -> dict:
 
     bind_active_collection(client)
 
-    top_k = max(1, min(request.top_k or DEFAULT_TOP_K, MAX_TOP_K))
+    # ``limit`` is the hooks' spelling of ``top_k``; it wins when present because
+    # ``top_k`` cannot tell "explicitly 20" from its own default.
+    requested_k = request.limit if request.limit is not None else request.top_k
+    top_k = max(1, min(requested_k or DEFAULT_TOP_K, MAX_TOP_K))
     # Over-fetch when we have to post-filter by metadata so the caller still
     # gets up to top_k matches after filtering.
     fetch_k = min(MAX_TOP_K, top_k * 4) if metadata_filters else top_k

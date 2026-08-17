@@ -145,3 +145,75 @@ def test_apps_list_shows_access_count_for_projects(db_factory):
     apps = resp.json()["apps"]
     sysmovs = next(a for a in apps if a["name"] == "sysmovs")
     assert sysmovs["total_memories_accessed"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# MCP dispatch path
+#
+# FastMCP's ``@mcp.tool`` captures the undecorated function in ``Tool.fn`` at
+# import time. The audit wrappers used to rebind only the ``app.mcp_server``
+# module attribute, which dispatch never reads — so every MCP read went
+# unrecorded while the installer logged success.
+# --------------------------------------------------------------------------- #
+def _registered(name):
+    from app import mcp_server
+
+    import app.routers.memories  # noqa: F401 — importing installs the wrappers
+
+    return mcp_server.mcp._tool_manager.get_tool(name)
+
+
+@pytest.mark.parametrize("tool_name", ["search_memory", "list_memories"])
+def test_read_audit_wraps_the_function_the_registry_dispatches_to(tool_name):
+    tool = _registered(tool_name)
+    assert getattr(tool.fn, "__wrapped__", None) is not None, (
+        f"{tool_name} is dispatched through Tool.fn; patching only the module "
+        "attribute leaves MCP reads unaudited"
+    )
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_records_a_read_audit_row(db_factory):
+    from unittest.mock import MagicMock
+
+    from app import mcp_server
+
+    tool = _registered("search_memory")
+    mem_id = str(uuid.uuid4())
+    # Priming the read cache keeps the vector store and embedder out of the test:
+    # search_memory serves the candidate pool straight from it.
+    cached = [
+        {
+            "id": mem_id,
+            "memory": "Fhelipe gosta de Counter Strike",
+            "hash": "h1",
+            "created_at": None,
+            "updated_at": None,
+            "project": "mem0-shared",
+            "owner": "S0258",
+            "score": 0.9,
+            "state": "active",
+        }
+    ]
+
+    with (
+        patch.object(mcp_server, "get_memory_client_safe", return_value=MagicMock()),
+        patch.object(mcp_server, "bind_active_collection"),
+        patch.object(mcp_server, "requester_group_for_mcp", return_value=None),
+        patch.object(mcp_server.read_cache, "get_search", return_value=cached),
+        patch("app.utils.read_audit.SessionLocal", db_factory),
+    ):
+        mcp_server.user_id_var.set("S0258")
+        mcp_server.client_name_var.set("claude-code")
+        await tool.fn("counter strike", project="mem0-shared")
+
+    db = db_factory()
+    try:
+        rows = db.query(ReadAuditLog).all()
+        assert len(rows) == 1
+        assert rows[0].memory_id == mem_id
+        assert rows[0].source == "mcp"
+        assert rows[0].access_type == "search"
+        assert rows[0].hostname == "S0258"
+    finally:
+        db.close()
