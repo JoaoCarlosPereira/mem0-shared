@@ -29,8 +29,10 @@ function progressView(
   if (backend) {
     if (backend.ok === true)
       return { value: 100, label: "Concluído", done: true };
-    if (backend.ok === false)
-      return { value: backend.percent, label: "Falhou", done: false };
+    if (backend.ok === false) {
+      const detail = backend.error ? `: ${backend.error}` : "";
+      return { value: backend.percent, label: `Falhou${detail}`, done: false };
+    }
     return {
       value: Math.max(2, Math.min(99, backend.percent)),
       label: backend.phase ?? "Em andamento…",

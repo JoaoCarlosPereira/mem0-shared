@@ -91,6 +91,25 @@ def test_backup_run_returns_202_and_triggers(ctx):
     assert fake.created is True
 
 
+def test_backup_archive_releases_policy_read_transaction(monkeypatch):
+    class FakeSession:
+        def __init__(self):
+            self.rolled_back = False
+
+        def rollback(self):
+            self.rolled_back = True
+
+    db = FakeSession()
+    policy = _admin.BackupPolicySchema(local_dir="/mnt/backups")
+    monkeypatch.setattr(_admin, "get_backup_policy_runtime", lambda current: policy)
+    monkeypatch.setattr(_admin, "BackupService", lambda: object())
+
+    archive = _admin._backup_archive(db)
+
+    assert isinstance(archive, _admin.BackupArchive)
+    assert db.rolled_back is True
+
+
 def test_backup_status_returns_rpo_and_archives(ctx):
     app, _ = ctx
     with TestClient(app) as client:

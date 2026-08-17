@@ -173,4 +173,40 @@ describe("useBackupApi", () => {
     expect(store.getState().backup.restoring).toBe(false);
     expect(store.getState().backup.error).toMatch(/Falha ao restaurar backup/);
   });
+
+  it("restore encerra o estado de restauração quando excede o prazo de polling", async () => {
+    jest.useFakeTimers();
+    mockedAxios.get.mockResolvedValue({
+      data: {
+        ...status,
+        progress: {
+          operation: "restore",
+          phase: "snapshot de segurança",
+          percent: 10,
+          started_at: null,
+          finished_at: null,
+          ok: null,
+          error: null,
+        },
+      },
+    });
+    mockedAxios.post.mockResolvedValue({ data: { status: "accepted" } });
+    const store = makeStore();
+    const { result } = renderHook(() => useBackupApi({ poll: false }), {
+      wrapper: wrapperFor(store),
+    });
+
+    let pending: Promise<boolean>;
+    await act(async () => {
+      pending = result.current.restore("20260618-030000.zip", "20260618-030000.zip");
+      await jest.advanceTimersByTimeAsync(180_000);
+    });
+    await act(async () => {
+      await pending;
+    });
+
+    expect(store.getState().backup.restoring).toBe(false);
+    expect(store.getState().backup.restoreMessage).toMatch(/3 min/);
+    jest.useRealTimers();
+  });
 });

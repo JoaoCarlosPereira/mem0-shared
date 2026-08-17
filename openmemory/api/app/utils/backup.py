@@ -61,14 +61,30 @@ def make_s3_client():
 
 
 def _default_pg_dump(db_url: str) -> bytes:
-    """Roda ``pg_dump`` e retorna o dump comprimido (gzip)."""
+    """Roda ``pg_dump`` portátil e retorna o dump comprimido (gzip)."""
     out = subprocess.run(
-        ["pg_dump", "--dbname", db_url],
+        [
+            "pg_dump",
+            "--dbname",
+            db_url,
+            "--no-owner",
+            "--no-acl",
+        ],
         check=True,
         capture_output=True,
         timeout=BACKUP_PG_TIMEOUT,
     ).stdout
-    return gzip.compress(out)
+    return gzip.compress(_sanitize_pg_dump(out))
+
+
+def _sanitize_pg_dump(sql: bytes) -> bytes:
+    """Remove settings emitidos por versões do PostgreSQL não universais."""
+    lines = sql.splitlines(keepends=True)
+    return b"".join(
+        line
+        for line in lines
+        if not line.lstrip().lower().startswith(b"set transaction_timeout")
+    )
 
 
 @dataclass
@@ -175,9 +191,16 @@ class BackupService:
     # -- restore primitives (reutilizado por BackupArchive, task_03) -------
     def apply_pg_dump(self, dump: bytes) -> None:
         """Aplica um dump gzip do PostgreSQL via ``psql`` (a partir de bytes)."""
-        sql = gzip.decompress(dump)
+        sql = _sanitize_pg_dump(gzip.decompress(dump))
         subprocess.run(
-            ["psql", "--dbname", self._db_url],
+            [
+                "psql",
+                "--dbname",
+                self._db_url,
+                "--single-transaction",
+                "--set",
+                "ON_ERROR_STOP=1",
+            ],
             input=sql,
             check=True,
             timeout=BACKUP_PG_TIMEOUT,

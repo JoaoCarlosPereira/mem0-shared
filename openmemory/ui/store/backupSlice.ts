@@ -65,9 +65,13 @@ const backupSlice = createSlice({
     setBackupStatus: (state, action: PayloadAction<BackupStatus>) => {
       state.status = action.payload;
       state.loading = false;
-      state.error = null;
       // Worker único: só existe uma operação de backup/restore de cada vez.
       state.progress = action.payload.progress ?? null;
+      // Polling de status não deve apagar o erro da operação que acabou de falhar.
+      // Um novo backup/restore ou uma ação explícita limpa esse estado.
+      if (action.payload.progress?.ok !== false && !action.payload.last_error) {
+        state.error = null;
+      }
     },
     setBackupList: (state, action: PayloadAction<BackupArchiveInfo[]>) => {
       state.archives = action.payload;

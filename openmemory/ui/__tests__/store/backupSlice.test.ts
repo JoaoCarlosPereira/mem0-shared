@@ -78,6 +78,27 @@ describe("backupSlice", () => {
     expect(cleared.progress).toBeNull();
   });
 
+  it("setBackupStatus preserva erro reportado pelo progresso durante o polling", () => {
+    const failedProgress = {
+      operation: "restore" as const,
+      phase: "snapshot de segurança",
+      percent: 10,
+      started_at: null,
+      finished_at: null,
+      ok: false,
+      error: "psql: timeout expired",
+    };
+
+    const state = backupReducer(undefined, setBackupError("psql: timeout expired"));
+    const polled = backupReducer(
+      state,
+      setBackupStatus({ ...status, progress: failedProgress }),
+    );
+
+    expect(polled.error).toBe("psql: timeout expired");
+    expect(polled.progress?.percent).toBe(10);
+  });
+
   it("setBackupPolicy popula a política", () => {
     const state = backupReducer(undefined, setBackupPolicy(policy));
     expect(state.policy?.frequency).toBe("weekly");

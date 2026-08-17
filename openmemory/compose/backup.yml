@@ -49,7 +49,14 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       QDRANT_HOST: ${QDRANT_HOST:-mem0_store}
       QDRANT_PORT: ${QDRANT_PORT:-6333}
+      SPEC_ATTACHMENTS_DIR: /mnt/spec-attachments
+      PLANKA_ATTACHMENTS_DIR: /mnt/planka-attachments
+    volumes:
+      - spec_attachments:/mnt/spec-attachments:ro
+      - planka_attachments:/mnt/planka-attachments:ro
     command: ["python", "-m", "app.scripts.run_backup"]
 
 volumes:
   minio_data:
+  spec_attachments:
+  planka_attachments:

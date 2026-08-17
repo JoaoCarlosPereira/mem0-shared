@@ -244,11 +244,51 @@ def test_default_pg_dump_passes_timeout_to_subprocess(monkeypatch):
     monkeypatch.setattr(
         bmod.subprocess,
         "run",
-        lambda *a, **k: (calls.update(kwargs=k), SimpleNamespace(stdout=b"x"))[1],
+        lambda *a, **k: (
+            calls.update(args=a[0], kwargs=k),
+            SimpleNamespace(stdout=b"x"),
+        )[1],
     )
     bmod._default_pg_dump(_PG_URL)
     assert calls["kwargs"].get("timeout") == bmod.BACKUP_PG_TIMEOUT
     assert calls["kwargs"]["timeout"] > 0
+    assert calls["args"] == [
+        "pg_dump",
+        "--dbname",
+        _PG_URL,
+        "--no-owner",
+        "--no-acl",
+    ]
+
+
+def test_pg_dump_sanitizes_transaction_timeout():
+    import app.utils.backup as bmod
+
+    sql = b"SET transaction_timeout = 600000;\nSELECT 1;\n"
+    assert bmod._sanitize_pg_dump(sql) == b"SELECT 1;\n"
+
+
+def test_apply_pg_dump_is_fail_fast_and_sanitizes_sql(monkeypatch):
+    import app.utils.backup as bmod
+
+    calls = {}
+    monkeypatch.setattr(
+        bmod.subprocess,
+        "run",
+        lambda *a, **k: calls.update(args=a[0], kwargs=k),
+    )
+    svc = BackupService(s3_client=FakeS3(), bucket="b", db_url=_PG_URL)
+    svc.apply_pg_dump(__import__("gzip").compress(b"SET transaction_timeout = 1;\nSELECT 1;\n"))
+
+    assert calls["args"] == [
+        "psql",
+        "--dbname",
+        _PG_URL,
+        "--single-transaction",
+        "--set",
+        "ON_ERROR_STOP=1",
+    ]
+    assert calls["kwargs"]["input"] == b"SELECT 1;\n"
 
 
 def test_backup_pg_timeout_env_override(monkeypatch):

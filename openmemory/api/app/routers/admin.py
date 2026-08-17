@@ -259,7 +259,11 @@ def promote_project(
 # --------------------------------------------------------------------------- #
 def _backup_archive(db: Session = Depends(get_db)) -> BackupArchive:
     """Build a BackupArchive wired to the live backends and persisted policy."""
-    return BackupArchive(BackupService(), get_backup_policy_runtime(db))
+    policy = get_backup_policy_runtime(db)
+    # A política é copiada para o objeto de backup; não mantenha a transação
+    # SQLAlchemy aberta enquanto create/restore roda em BackgroundTasks.
+    db.rollback()
+    return BackupArchive(BackupService(), policy)
 
 
 def _ensure_writable(path: str) -> None:

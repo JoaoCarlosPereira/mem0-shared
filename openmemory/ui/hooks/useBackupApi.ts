@@ -178,6 +178,7 @@ export const useBackupApi = (options?: UseBackupApiOptions) => {
             "Restore aceito, mas ainda não concluiu em 3 min. Atualize o status em breve.",
           ),
         );
+        dispatch(setRestoring(false));
         return false;
       } catch (err: unknown) {
         dispatch(setBackupError(backupApiError(err, "Falha ao restaurar backup")));
