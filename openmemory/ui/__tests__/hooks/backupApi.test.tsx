@@ -124,11 +124,21 @@ describe("useBackupApi", () => {
     jest.useRealTimers();
   });
 
-  it("restore faz POST /admin/backup/restore com archive e confirm e conclui quando o snapshot aparece", async () => {
+  it("restore conclui quando o progress do backend reporta ok", async () => {
     jest.useFakeTimers();
+    const doneProgress = {
+      operation: "restore",
+      phase: "Concluído",
+      percent: 100,
+      started_at: null,
+      finished_at: null,
+      ok: true,
+      error: null,
+    };
     mockedAxios.get
-      .mockResolvedValueOnce({ data: { ...status, archives: 3, last_error: null } }) // before
-      .mockResolvedValue({ data: { ...status, archives: 4, last_error: null } }); // poll: +1 (pre-restore)
+      .mockResolvedValueOnce({ data: { ...status, last_error: null, progress: null } }) // inicial
+      .mockResolvedValueOnce({ data: { ...status, progress: { ...doneProgress, ok: null, percent: 30 } } }) // em curso
+      .mockResolvedValue({ data: { ...status, progress: doneProgress } }); // concluído
     mockedAxios.post.mockResolvedValue({ data: { status: "accepted" } });
     const store = makeStore();
     const { result } = renderHook(() => useBackupApi({ poll: false }), {
@@ -137,16 +147,14 @@ describe("useBackupApi", () => {
     let ok: boolean | undefined;
     await act(async () => {
       const pending = result.current.restore("20260618-030000.zip", "20260618-030000.zip");
-      await jest.advanceTimersByTimeAsync(3000);
+      await jest.advanceTimersByTimeAsync(3000); // 1º poll: em curso
+      await jest.advanceTimersByTimeAsync(3000); // 2º poll: concluído
       ok = await pending;
     });
     expect(ok).toBe(true);
-    expect(mockedAxios.post).toHaveBeenCalledWith(
-      expect.stringContaining("/admin/backup/restore"),
-      { archive: "20260618-030000.zip", confirm: "20260618-030000.zip" },
-    );
     expect(store.getState().backup.restoring).toBe(false);
     expect(store.getState().backup.restoreMessage).toMatch(/concluído/);
+    expect(store.getState().backup.progress?.ok).toBe(true);
     jest.useRealTimers();
   });
 

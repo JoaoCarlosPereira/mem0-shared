@@ -65,6 +65,10 @@ class FakeQdrant:
     def get_collection(self, name):
         return SimpleNamespace(points_count=self._points)
 
+    def recover_snapshot(self, *, collection_name, location):
+        # no-op para testes de restore (não há estado real de vetores aqui)
+        return None
+
 
 class IncClock:
     """Relógio que avança 1s por chamada (nomes de arquivo distintos)."""
@@ -108,6 +112,92 @@ def _archive(tmp_path, s3, qc, *, retention=5, mirror_s3=False, clock=None):
         clock=clock or IncClock(),
         openmemory_version="test",
     )
+
+
+@pytest.fixture(autouse=True)
+def _reset_progress():
+    """O progresso é global (single-worker); reseta entre testes."""
+    import app.utils.backup_archive as bmod
+
+    bmod._PROGRESS.operation = None
+    bmod._PROGRESS.phase = None
+    bmod._PROGRESS.percent = 0
+    bmod._PROGRESS.started_at = None
+    bmod._PROGRESS.finished_at = None
+    bmod._PROGRESS.ok = None
+    bmod._PROGRESS.error = None
+    yield
+    bmod._PROGRESS.operation = None
+
+
+def test_create_reports_backup_progress(tmp_path):
+    import app.utils.backup_archive as bmod
+
+    arc = _archive(tmp_path, FakeS3(), FakeQdrant())
+    arc.create()
+    prog = bmod._PROGRESS.to_dict()
+    assert prog["operation"] == "backup"
+    assert prog["ok"] is True
+    assert prog["percent"] == 100
+    # status() expõe o progresso para a UI
+    assert arc.status()["progress"]["operation"] == "backup"
+
+
+def test_pre_restore_snapshot_does_not_touch_progress(tmp_path):
+    import app.utils.backup_archive as bmod
+
+    arc = _archive(tmp_path, FakeS3(), FakeQdrant())
+    # report=False (usado pelo snapshot de segurança de um restore) não deve
+    # sobrescrever a barra em andamento.
+    bmod._PROGRESS.start("restore")
+    bmod._PROGRESS.advance("restaurando Qdrant", 70)
+    arc.create(tag="pre-restore", report=False)
+    assert bmod._PROGRESS.operation == "restore"
+    assert bmod._PROGRESS.percent == 70
+
+
+def test_restore_reports_restore_progress(tmp_path, monkeypatch):
+    import app.utils.backup_archive as bmod
+    import os
+
+    # aplica o dump via psql mockado (sem binário real no ambiente de teste)
+    monkeypatch.setattr(
+        "app.utils.backup.subprocess.run", lambda *a, **k: SimpleNamespace()
+    )
+    qc = FakeQdrant(collections=("c1",), points=4)
+    arc = _archive(tmp_path, FakeS3(), qc)
+    # gera um backup válido e restaura a partir dele
+    arc.create()
+    zips = [f for f in os.listdir(str(tmp_path / "backups")) if f.endswith(".zip")]
+    arc.restore(str(tmp_path / "backups" / zips[0]), safety_snapshot=True)
+    prog = bmod._PROGRESS.to_dict()
+    assert prog["operation"] == "restore"
+    assert prog["ok"] is True
+    assert prog["percent"] == 100
+    assert arc.status()["progress"]["operation"] == "restore"
+
+
+def test_create_failure_reports_error_progress(tmp_path):
+    import app.utils.backup_archive as bmod
+
+    svc = BackupService(
+        s3_client=FakeS3(),
+        bucket="b",
+        db_url=_PG_URL,
+        qdrant_client_provider=lambda: FakeQdrant(),
+        pg_dump_runner=lambda url: (_ for _ in ()).throw(RuntimeError("pg_dump down")),
+        attachment_roots=_att_roots(tmp_path),
+    )
+    from app.schemas import BackupPolicySchema as P
+
+    d = tmp_path / "backups"
+    d.mkdir(exist_ok=True)
+    arc = BackupArchive(svc, P(local_dir=str(d), retention=5), clock=IncClock())
+    with pytest.raises(RuntimeError):
+        arc.create()
+    assert bmod._PROGRESS.ok is False
+    assert "pg_dump down" in (bmod._PROGRESS.error or "")
+    assert arc.status()["progress"]["ok"] is False
 
 
 def test_create_produces_zip_with_qdrant_pg_and_attachments(tmp_path):

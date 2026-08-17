@@ -43,6 +43,41 @@ describe("backupSlice", () => {
     expect(state.error).toBeNull();
   });
 
+  it("setBackupStatus popula o progress da operação em andamento", () => {
+    const backupProgress = {
+      operation: "backup" as const,
+      phase: "dump do PostgreSQL",
+      percent: 50,
+      started_at: null,
+      finished_at: null,
+      ok: null,
+      error: null,
+    };
+    const state = backupReducer(
+      undefined,
+      setBackupStatus({ ...status, progress: backupProgress }),
+    );
+    expect(state.progress?.operation).toBe("backup");
+    expect(state.progress?.percent).toBe(50);
+
+    const restoreProgress = {
+      operation: "restore" as const,
+      phase: "restaurando Qdrant",
+      percent: 70,
+      started_at: null,
+      finished_at: null,
+      ok: null,
+      error: null,
+    };
+    const next = backupReducer(state, setBackupStatus({ ...status, progress: restoreProgress }));
+    expect(next.progress?.operation).toBe("restore");
+    expect(next.progress?.percent).toBe(70);
+
+    // sem progress (operação finalizada) → limpa
+    const cleared = backupReducer(next, setBackupStatus({ ...status, progress: null }));
+    expect(cleared.progress).toBeNull();
+  });
+
   it("setBackupPolicy popula a política", () => {
     const state = backupReducer(undefined, setBackupPolicy(policy));
     expect(state.policy?.frequency).toBe("weekly");

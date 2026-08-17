@@ -18,11 +18,22 @@ export interface BackupArchiveInfo {
   location: string;
 }
 
+export interface BackupProgress {
+  operation: "backup" | "restore";
+  phase: string | null;
+  percent: number;
+  started_at: string | null;
+  finished_at: string | null;
+  ok: boolean | null;
+  error: string | null;
+}
+
 export interface BackupStatus {
   last_backup: string | null;
   rpo_age_seconds: number | null;
   archives: number;
   last_error: string | null;
+  progress?: BackupProgress | null;
 }
 
 interface BackupState {
@@ -33,6 +44,7 @@ interface BackupState {
   error: string | null;
   restoring: boolean;
   restoreMessage: string | null;
+  progress: BackupProgress | null;
 }
 
 const initialState: BackupState = {
@@ -43,6 +55,7 @@ const initialState: BackupState = {
   error: null,
   restoring: false,
   restoreMessage: null,
+  progress: null,
 };
 
 const backupSlice = createSlice({
@@ -53,6 +66,8 @@ const backupSlice = createSlice({
       state.status = action.payload;
       state.loading = false;
       state.error = null;
+      // Worker único: só existe uma operação de backup/restore de cada vez.
+      state.progress = action.payload.progress ?? null;
     },
     setBackupList: (state, action: PayloadAction<BackupArchiveInfo[]>) => {
       state.archives = action.payload;

@@ -137,32 +137,38 @@ export const useBackupApi = (options?: UseBackupApiOptions) => {
     async (archive: string, confirm: string): Promise<boolean> => {
       dispatch(setRestoring(true));
       try {
-        const before = (
-          await axios.get(`${getApiUrl()}/admin/backup/status`)
-        ).data;
-        const beforeCount = Number(before?.archives ?? 0);
+        await axios.get(`${getApiUrl()}/admin/backup/status`).then((r) =>
+          dispatch(setBackupStatus(r.data)),
+        );
         await axios.post(`${getApiUrl()}/admin/backup/restore`, {
           archive,
           confirm,
         });
-        // Restore roda em background (202). A conclusão é assinalada pela
-        // criação do snapshot de segurança pre-restore-*.zip (aumenta a
-        // contagem de cópias) — até lá a UI mostra "em andamento".
+        // Restore roda em background (202). A conclusão é assinalada pelo
+        // progresso real do backend (progress.ok) — a barra avança por fase
+        // (Qdrant → PostgreSQL → anexos) enquanto isso.
         const deadline = Date.now() + 180_000;
         while (Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, 3000));
           const st = (await axios.get(`${getApiUrl()}/admin/backup/status`)).data;
           dispatch(setBackupStatus(st));
+          const prog = st?.progress;
+          if (prog?.operation === "restore" && prog.ok === true) {
+            await fetchList();
+            dispatch(setRestoreMessage(`Restore de ${archive} concluído.`));
+            return true;
+          }
+          if (prog?.operation === "restore" && prog.ok === false) {
+            dispatch(setBackupError(prog.error || "Falha ao restaurar backup"));
+            dispatch(setRestoring(false));
+            await fetchList();
+            return false;
+          }
           if (st?.last_error) {
             dispatch(setBackupError(String(st.last_error)));
             dispatch(setRestoring(false));
             await fetchList();
             return false;
-          }
-          if (Number(st?.archives ?? 0) > beforeCount) {
-            await fetchList();
-            dispatch(setRestoreMessage(`Restore de ${archive} concluído.`));
-            return true;
           }
         }
         await fetchStatus();

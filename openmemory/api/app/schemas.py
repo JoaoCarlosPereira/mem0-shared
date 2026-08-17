@@ -214,11 +214,24 @@ class BackupArchiveInfo(BaseModel):
     location: str = "local"  # local | s3
 
 
+class BackupProgressResponse(BaseModel):
+    """Fase de backup/restore em andamento (ou o último resultado) para a UI."""
+
+    operation: str  # "backup" | "restore"
+    phase: Optional[str] = None
+    percent: int = 0
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    ok: Optional[bool] = None
+    error: Optional[str] = None
+
+
 class BackupStatusResponse(BaseModel):
     last_backup: Optional[str] = None
     rpo_age_seconds: Optional[float] = None
     archives: int = 0
     last_error: Optional[str] = None
+    progress: Optional[BackupProgressResponse] = None
 
 
 class BackupListResponse(BaseModel):

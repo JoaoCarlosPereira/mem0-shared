@@ -49,6 +49,62 @@ _REGULAR_RE = re.compile(r"^\d{8}-\d{6}\.zip$")
 _S3_ARCHIVE_PREFIX = "archives"
 
 
+# -- progresso (reportado em /admin/backup/status) ------------------------- #
+class BackupProgressTracker:
+    """Estado em memória de uma operação de backup/restore (worker único).
+
+    A tarefa roda em background (FastAPI ``BackgroundTasks``) e o endpoint de
+    status lê o MESMO objeto no MESMO processo. Sem lock por ser single-worker:
+    as atribuições são visíveis para o polling da UI e o pior caso é ler um
+    percent ligeiramente atrasado.
+    """
+
+    def __init__(self) -> None:
+        self.operation: Optional[str] = None
+        self.phase: Optional[str] = None
+        self.percent: int = 0
+        self.started_at: Optional[datetime] = None
+        self.finished_at: Optional[datetime] = None
+        self.ok: Optional[bool] = None
+        self.error: Optional[str] = None
+
+    def start(self, operation: str) -> None:
+        self.operation = operation
+        self.phase = None
+        self.percent = 0
+        self.started_at = datetime.now(UTC)
+        self.finished_at = None
+        self.ok = None
+        self.error = None
+
+    def advance(self, phase: str, percent: int) -> None:
+        self.phase = phase
+        self.percent = max(0, min(100, int(percent)))
+
+    def finish(self, ok: bool, error: Optional[str] = None) -> None:
+        self.finished_at = datetime.now(UTC)
+        self.ok = ok
+        self.error = error
+        if ok:
+            self.percent = 100
+
+    def to_dict(self) -> Optional[dict]:
+        if self.operation is None:
+            return None
+        return {
+            "operation": self.operation,
+            "phase": self.phase,
+            "percent": self.percent,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "ok": self.ok,
+            "error": self.error,
+        }
+
+
+_PROGRESS = BackupProgressTracker()
+
+
 class ArchiveCorruptError(Exception):
     """Checksum/manifest inválidos no .zip de backup."""
 
@@ -86,10 +142,18 @@ class BackupArchive:
         return self._policy
 
     # -- create ------------------------------------------------------------
-    def create(self, *, tag: Optional[str] = None) -> ArchiveResult:
+    def create(
+        self,
+        *,
+        tag: Optional[str] = None,
+        report: Optional[bool] = None,
+    ) -> ArchiveResult:
         """Coleta o estado completo, monta o ``.zip`` e aplica rotação FIFO.
 
         ``tag`` (ex.: ``"pre-restore"``) marca um arquivo fora da rotação FIFO.
+        ``report`` controla o progresso reportado em /status (default: só backup
+        manual, tag=None) — o snapshot de segurança de um restore não deve
+        sobrepor a barra de restore.
         """
         started = time.perf_counter()
         ts = self._clock()
@@ -97,12 +161,23 @@ class BackupArchive:
         os.makedirs(self._policy.local_dir, exist_ok=True)
         final_path = os.path.join(self._policy.local_dir, name)
         tmp_path = final_path + ".tmp"
+        report = (tag is None) if report is None else report
+        if report:
+            _PROGRESS.start("backup")
         try:
+            if report:
+                _PROGRESS.advance("snapshot do Qdrant", 15)
             snapshots = self._service.collect_qdrant_snapshots()
+            if report:
+                _PROGRESS.advance("dump do PostgreSQL", 50)
             dump = self._service.collect_pg_dump()
+            if report:
+                _PROGRESS.advance("coleta de anexos", 80)
             attachments = self._service.collect_attachment_archives()
             points = self._service.qdrant_points_count()
 
+            if report:
+                _PROGRESS.advance("arquivando .zip", 92)
             zip_bytes = self._build_zip(ts, snapshots, dump, points, attachments)
             with open(tmp_path, "wb") as fh:
                 fh.write(zip_bytes)
@@ -120,11 +195,15 @@ class BackupArchive:
             self._clear_last_error()
             BACKUP_DURATION_SECONDS.set(time.perf_counter() - started)
             BACKUP_LAST_SUCCESS_TIMESTAMP.set(ts.timestamp())
+            if report:
+                _PROGRESS.finish(True)
             return result
         except Exception as exc:
             BACKUP_ERRORS_TOTAL.inc()
             logger.exception("backup archive create failed")
             self._write_last_error(str(exc) or exc.__class__.__name__)
+            if report:
+                _PROGRESS.finish(False, str(exc) or exc.__class__.__name__)
             if os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)
@@ -173,26 +252,41 @@ class BackupArchive:
         """
         if not os.path.exists(archive_path):
             raise FileNotFoundError(archive_path)
-        members = self._read_validated_members(archive_path)
+        _PROGRESS.start("restore")
+        try:
+            _PROGRESS.advance("lendo backup", 5)
+            members = self._read_validated_members(archive_path)
 
-        if safety_snapshot:
-            self.create(tag="pre-restore")
+            _PROGRESS.advance("snapshot de segurança", 10)
+            if safety_snapshot:
+                # report=False: não sobrepõe a barra de restore na UI.
+                self.create(tag="pre-restore", report=False)
 
-        restored: dict = {"postgres": None, "qdrant": [], "attachments": []}
-        dump = members.get("postgres/dump.sql.gz")
-        if dump is not None:
-            self._service.apply_pg_dump(dump)
-            restored["postgres"] = "postgres/dump.sql.gz"
-        for arc, data in members.items():
-            if arc.startswith("qdrant/") and arc.endswith(".snapshot"):
-                name = arc[len("qdrant/") : -len(".snapshot")]
-                self._service.recover_qdrant_snapshot(name, data)
-                restored["qdrant"].append(name)
-        for arc, data in members.items():
-            if arc.startswith("attachments/") and arc.endswith(".tar.gz"):
-                self._service.apply_attachment_archive(arc, data)
-                restored["attachments"].append(arc)
-        return restored
+            _PROGRESS.advance("restaurando PostgreSQL", 30)
+            restored: dict = {"postgres": None, "qdrant": [], "attachments": []}
+            dump = members.get("postgres/dump.sql.gz")
+            if dump is not None:
+                self._service.apply_pg_dump(dump)
+                restored["postgres"] = "postgres/dump.sql.gz"
+
+            _PROGRESS.advance("restaurando Qdrant", 70)
+            for arc, data in members.items():
+                if arc.startswith("qdrant/") and arc.endswith(".snapshot"):
+                    name = arc[len("qdrant/") : -len(".snapshot")]
+                    self._service.recover_qdrant_snapshot(name, data)
+                    restored["qdrant"].append(name)
+
+            _PROGRESS.advance("restaurando anexos", 90)
+            for arc, data in members.items():
+                if arc.startswith("attachments/") and arc.endswith(".tar.gz"):
+                    self._service.apply_attachment_archive(arc, data)
+                    restored["attachments"].append(arc)
+
+            _PROGRESS.finish(True)
+            return restored
+        except Exception as exc:
+            _PROGRESS.finish(False, str(exc) or exc.__class__.__name__)
+            raise
 
     def _read_validated_members(self, archive_path: str) -> "dict[str, bytes]":
         try:
@@ -294,6 +388,7 @@ class BackupArchive:
     def status(self) -> dict:
         """Resumo para a UI/worker: último backup, idade (RPO), nº de cópias."""
         last_error = self._read_last_error()
+        progress = _PROGRESS.to_dict()
         infos = [i for i in self.list() if i.location == "local"]
         if not infos:
             return {
@@ -301,6 +396,7 @@ class BackupArchive:
                 "rpo_age_seconds": None,
                 "archives": 0,
                 "last_error": last_error,
+                "progress": progress,
             }
         newest = max(infos, key=lambda i: i.created_at or datetime.min.replace(tzinfo=UTC))
         age = None
@@ -311,6 +407,7 @@ class BackupArchive:
             "rpo_age_seconds": age,
             "archives": len(infos),
             "last_error": last_error,
+            "progress": progress,
         }
 
     def _last_error_path(self) -> str:

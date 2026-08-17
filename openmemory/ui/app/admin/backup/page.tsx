@@ -4,8 +4,9 @@ import { useEffect, useState } from "react";
 import { useSelector } from "react-redux";
 import { HardDrive, AlertTriangle, RotateCcw, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { RootState } from "@/store/store";
-import { BackupPolicy } from "@/store/backupSlice";
+import { BackupPolicy, BackupProgress } from "@/store/backupSlice";
 import { useBackupApi } from "@/hooks/useBackupApi";
 import { canRestore, isStale, isValidRetention } from "@/lib/backup";
 
@@ -19,6 +20,47 @@ const DEFAULT_POLICY: BackupPolicy = {
   mirror_s3: false,
 };
 
+// Funde o progresso real (backend, via /status) com o flag local da UI para
+// já mostrar a barra logo após clicar (antes do primeiro poll).
+function progressView(
+  local: boolean,
+  backend: BackupProgress | null | undefined,
+): { value: number; label: string; done: boolean } | null {
+  if (backend) {
+    if (backend.ok === true)
+      return { value: 100, label: "Concluído", done: true };
+    if (backend.ok === false)
+      return { value: backend.percent, label: "Falhou", done: false };
+    return {
+      value: Math.max(2, Math.min(99, backend.percent)),
+      label: backend.phase ?? "Em andamento…",
+      done: false,
+    };
+  }
+  return local
+    ? { value: 2, label: "Iniciando…", done: false }
+    : null;
+}
+
+function ProgressBarRow({
+  view,
+  className,
+}: {
+  view: { value: number; label: string; done: boolean } | null;
+  className?: string;
+}) {
+  if (!view) return null;
+  return (
+    <div className="mt-3">
+      <div className="mb-1 flex items-center justify-between text-xs text-zinc-400">
+        <span>{view.label}</span>
+        <span>{view.done ? "✓" : `${view.value}%`}</span>
+      </div>
+      <Progress value={view.value} className={className} />
+    </div>
+  );
+}
+
 export default function BackupPage() {
   const { fetchStatus, fetchList, fetchPolicy, savePolicy, runBackup, restore } =
     useBackupApi();
@@ -29,10 +71,35 @@ export default function BackupPage() {
   const loading = useSelector((s: RootState) => s.backup.loading);
   const restoring = useSelector((s: RootState) => s.backup.restoring);
   const restoreMessage = useSelector((s: RootState) => s.backup.restoreMessage);
+  const progress = useSelector((s: RootState) => s.backup.progress);
+  // Worker único: a barra de backup/restore depende da operação reportada.
+  const backupProgress = progress?.operation === "backup" ? progress : null;
+  const restoreProgress = progress?.operation === "restore" ? progress : null;
 
   const [form, setForm] = useState<BackupPolicy>(DEFAULT_POLICY);
   const [selected, setSelected] = useState<string>("");
   const [confirmText, setConfirmText] = useState<string>("");
+
+  // A barra de conclusão ("Concluído") some após alguns segundos; o status/erro
+  // continuam nos banners existentes.
+  const [showDone, setShowDone] = useState(false);
+  const backupDone = backupProgress?.ok === true;
+  const restoreDone = restoreProgress?.ok === true;
+  useEffect(() => {
+    if (backupDone || restoreDone) {
+      setShowDone(true);
+      const t = setTimeout(() => setShowDone(false), 6000);
+      return () => clearTimeout(t);
+    }
+  }, [backupDone, restoreDone]);
+
+  const backupView = progressView(loading, backupProgress);
+  const restoreView = progressView(restoring, restoreProgress);
+  // Esconde só a barra de conclusão quando o auto-hide vence.
+  const backupBar =
+    !backupView || (backupView.done && !showDone) ? null : backupView;
+  const restoreBar =
+    !restoreView || (restoreView.done && !showDone) ? null : restoreView;
 
   useEffect(() => {
     fetchPolicy();
@@ -110,6 +177,7 @@ export default function BackupPage() {
           <Play className="mr-1 h-4 w-4" />{" "}
           {loading ? "Backup em andamento…" : "Fazer backup agora"}
         </Button>
+        <ProgressBarRow view={backupBar} />
       </section>
 
       {/* Política */}
@@ -236,6 +304,7 @@ export default function BackupPage() {
           <RotateCcw className={`mr-1 h-4 w-4 ${restoring ? "animate-spin" : ""}`} />
           {restoring ? "Restaurando…" : "Restaurar"}
         </Button>
+        <ProgressBarRow view={restoreBar} />
       </section>
     </div>
   );
