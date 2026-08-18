@@ -195,6 +195,9 @@ testing.ipynb
 .claude/scheduled_tasks.lock
 .claude/worktrees/
 
+# OpenClaude local session data (settings)
+.openclaude/settings.local.json
+
 # pnpm local store (never commit)
 .pnpm-store/
 **/.pnpm-store/
