@@ -23,22 +23,31 @@ export interface MachineSuggestions {
  */
 export const useOnboardingApi = () => {
   const submitOnboarding = useCallback(
-    async (hostname: string, groupName: string | null): Promise<OnboardingResult> => {
+    async (
+      hostname: string,
+      groupName: string | null,
+      signal?: AbortSignal,
+    ): Promise<OnboardingResult> => {
       const res = await axios.post<OnboardingResult>(
         `${getApiUrl()}/api/v1/auth/onboarding`,
         { hostname, group_name: groupName },
+        { signal },
       );
       return res.data;
     },
     [],
   );
 
-  const fetchMachineSuggestions = useCallback(async (): Promise<MachineSuggestions> => {
-    const res = await axios.get<MachineSuggestions>(
-      `${getApiUrl()}/api/v1/auth/machine-suggestions`,
-    );
-    return res.data;
-  }, []);
+  const fetchMachineSuggestions = useCallback(
+    async (signal?: AbortSignal): Promise<MachineSuggestions> => {
+      const res = await axios.get<MachineSuggestions>(
+        `${getApiUrl()}/api/v1/auth/machine-suggestions`,
+        { signal },
+      );
+      return res.data;
+    },
+    [],
+  );
 
   return { submitOnboarding, fetchMachineSuggestions };
 };

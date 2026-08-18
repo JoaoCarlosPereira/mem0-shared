@@ -26,6 +26,7 @@ describe("useGroupsApi (task_08)", () => {
 
     expect(mockedAxios.get).toHaveBeenCalledWith(
       expect.stringContaining("/admin/groups"),
+      expect.anything(),
     );
     expect(out).toEqual(groups);
   });

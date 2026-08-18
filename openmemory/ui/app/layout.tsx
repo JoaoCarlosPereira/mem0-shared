@@ -8,6 +8,7 @@ import { Providers } from "./providers";
 import { APP_DESCRIPTION, APP_PAGE_TITLE } from "@/lib/branding";
 import { ApiProxyGuardScript } from "@/components/ApiProxyGuardScript";
 import { AppShell } from "@/components/layout/AppShell";
+import { OnboardingRouteGuard } from "@/components/OnboardingRouteGuard";
 
 const spaceGrotesk = Space_Grotesk({
   subsets: ["latin"],
@@ -48,7 +49,9 @@ export default function RootLayout({
             enableSystem={false}
             disableTransitionOnChange
           >
-            <AppShell>{children}</AppShell>
+            <OnboardingRouteGuard>
+              <AppShell>{children}</AppShell>
+            </OnboardingRouteGuard>
             <Toaster />
           </ThemeProvider>
         </Providers>

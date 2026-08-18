@@ -1,5 +1,6 @@
 """Operational health endpoint for load balancers and bootstrap gates."""
 
+import asyncio
 import logging
 import os
 
@@ -66,20 +67,22 @@ async def health(response: Response):
     unhealthy = False
     degraded = False
 
-    db_status, db_err = _check_database()
+    # Cada check é síncrono (SQLAlchemy/urllib/queue) e bloqueante — roda em
+    # thread para não travar o event loop único da API (--workers 1).
+    db_status, db_err = await asyncio.to_thread(_check_database)
     checks["database"] = {"status": db_status, "error": db_err}
     unhealthy |= db_status == "error"
 
-    qdrant_status, qdrant_err = _check_qdrant()
+    qdrant_status, qdrant_err = await asyncio.to_thread(_check_qdrant)
     checks["qdrant"] = {"status": qdrant_status, "error": qdrant_err}
     unhealthy |= qdrant_status == "error"
 
-    mem_status, mem_err = _check_memory_client()
+    mem_status, mem_err = await asyncio.to_thread(_check_memory_client)
     checks["memory_client"] = {"status": mem_status, "error": mem_err}
     degraded |= mem_status == "degraded"
     unhealthy |= mem_status == "error"
 
-    queue_status, queue_info = _check_queue()
+    queue_status, queue_info = await asyncio.to_thread(_check_queue)
     checks["write_queue"] = {"status": queue_status, **queue_info}
     unhealthy |= queue_status == "error"
 

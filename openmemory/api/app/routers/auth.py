@@ -30,6 +30,7 @@ from app.utils.machine_resolver import (
 )
 from app.utils.identity_links import invalidate_identity_link_cache
 from app.utils.logging_context import auth_method_var
+from app.utils.metrics import AUTH_GOOGLE_LOGIN_TOTAL, ONBOARDING_SUBMIT_TOTAL
 from app.utils.session_jwt import (
     SessionJwtError,
     decode_session_jwt,
@@ -247,8 +248,23 @@ def login_with_google(payload: GoogleLoginRequest, db: Session = Depends(get_db)
     try:
         claims = _verify_google_id_token(payload.id_token)
     except Exception:
+        # Invalid token
+        AUTH_GOOGLE_LOGIN_TOTAL.labels(result="invalid_token").inc()
         raise HTTPException(status_code=401, detail="ID token do Google inválido")
-    return _complete_google_login(claims, db)
+    try:
+        login_resp = _complete_google_login(claims, db)
+        AUTH_GOOGLE_LOGIN_TOTAL.labels(result="success").inc()
+        return login_resp
+    except HTTPException as e:
+        # 403 = domain check (claim ``hd``) rejeitou; demais HTTP = erro.
+        if e.status_code == 403:
+            AUTH_GOOGLE_LOGIN_TOTAL.labels(result="domain_denied").inc()
+        else:
+            AUTH_GOOGLE_LOGIN_TOTAL.labels(result="error").inc()
+        raise
+    except Exception:
+        AUTH_GOOGLE_LOGIN_TOTAL.labels(result="error").inc()
+        raise
 
 
 class MachineSuggestionsResponse(BaseModel):
@@ -560,83 +576,93 @@ def onboarding(
     nunca vincula automaticamente (PRD "Regras de migração"). Repetição pela
     mesma pessoa é idempotente. Nenhum payload do Qdrant é tocado (ADR-005).
     """
-    if not (payload.hostname or "").strip():
-        raise HTTPException(status_code=422, detail="hostname obrigatório")
     try:
-        hostname = require_sysmo_hostname(payload.hostname)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if not (payload.hostname or "").strip():
+            ONBOARDING_SUBMIT_TOTAL.labels(result="validation_error").inc()
+            raise HTTPException(status_code=422, detail="hostname obrigatório")
+        try:
+            hostname = require_sysmo_hostname(payload.hostname)
+        except ValueError as exc:
+            ONBOARDING_SUBMIT_TOTAL.labels(result="validation_error").inc()
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    machine, legacy_user = resolve_or_create_machine(db, hostname)
-    hostname = machine.hostname
+        machine, legacy_user = resolve_or_create_machine(db, hostname)
+        hostname = machine.hostname
 
-    # Conflito: máquina pertence a outra conta — bloqueia e registra.
-    if machine.linked_user_id is not None and machine.linked_user_id != user.id:
-        machine.status = MachineStatus.conflict
-        db.add(
-            LinkAuditLog(
-                machine_id=machine.id,
-                actor_user_id=user.id,
-                action=LINK_ACTION_CONFLICT,
-                detail={
-                    "hostname": hostname,
-                    "linked_user_id": str(machine.linked_user_id),
-                },
+        # Conflito: máquina pertence a outra conta — bloqueia e registra.
+        if machine.linked_user_id is not None and machine.linked_user_id != user.id:
+            machine.status = MachineStatus.conflict
+            db.add(
+                LinkAuditLog(
+                    machine_id=machine.id,
+                    actor_user_id=user.id,
+                    action=LINK_ACTION_CONFLICT,
+                    detail={
+                        "hostname": hostname,
+                        "linked_user_id": str(machine.linked_user_id),
+                    },
+                )
             )
+            db.commit()
+            invalidate_identity_link_cache(hostname)
+            ONBOARDING_SUBMIT_TOTAL.labels(result="conflict").inc()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "máquina já vinculada a outra conta; o conflito foi registrado "
+                    "para tratamento administrativo"
+                ),
+            )
+
+        already_linked = (
+            machine.linked_user_id == user.id and machine.status == MachineStatus.linked
         )
+
+        explicit_group = normalize_group_name(payload.group_name)
+        if explicit_group is None and legacy_user is not None and legacy_user.group_id is not None:
+            group = legacy_user.group
+        else:
+            group = get_or_create_group(db, payload.group_name)
+
+        user.group_id = group.id
+        if legacy_user is not None:
+            legacy_user.group_id = group.id
+
+        backfill_legacy_user_id(machine, legacy_user)
+
+        if not already_linked:
+            machine.linked_user_id = user.id
+            machine.status = MachineStatus.linked
+            machine.linked_at = get_current_utc_time()
+            machine.linked_by = user.id
+            backfill_legacy_user_id(machine, legacy_user)
+            db.add(
+                LinkAuditLog(
+                    machine_id=machine.id,
+                    actor_user_id=user.id,
+                    action=LINK_ACTION_LINK,
+                    detail={
+                        "hostname": hostname,
+                        "group": group.name,
+                        "legacy_user_id": (
+                            str(machine.legacy_user_id) if machine.legacy_user_id else None
+                        ),
+                    },
+                )
+            )
         db.commit()
         invalidate_identity_link_cache(hostname)
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "máquina já vinculada a outra conta; o conflito foi registrado "
-                "para tratamento administrativo"
-            ),
+        ONBOARDING_SUBMIT_TOTAL.labels(result="success").inc()
+        return OnboardingResponse(
+            linked=True,
+            hostname=hostname,
+            group=group.name,
+            memories_count=_count_memories_for_hostname(hostname),
+            legacy_user_linked=machine.legacy_user_id is not None,
         )
-
-    already_linked = (
-        machine.linked_user_id == user.id and machine.status == MachineStatus.linked
-    )
-
-    explicit_group = normalize_group_name(payload.group_name)
-    if explicit_group is None and legacy_user is not None and legacy_user.group_id is not None:
-        group = legacy_user.group
-    else:
-        group = get_or_create_group(db, payload.group_name)
-
-    user.group_id = group.id
-    if legacy_user is not None:
-        legacy_user.group_id = group.id
-
-    backfill_legacy_user_id(machine, legacy_user)
-
-    if not already_linked:
-        machine.linked_user_id = user.id
-        machine.status = MachineStatus.linked
-        machine.linked_at = get_current_utc_time()
-        machine.linked_by = user.id
-        backfill_legacy_user_id(machine, legacy_user)
-        db.add(
-            LinkAuditLog(
-                machine_id=machine.id,
-                actor_user_id=user.id,
-                action=LINK_ACTION_LINK,
-                detail={
-                    "hostname": hostname,
-                    "group": group.name,
-                    "legacy_user_id": (
-                        str(machine.legacy_user_id) if machine.legacy_user_id else None
-                    ),
-                },
-            )
-        )
-    db.commit()
-    invalidate_identity_link_cache(hostname)
-
-    return OnboardingResponse(
-        linked=True,
-        hostname=hostname,
-        group=group.name,
-        memories_count=_count_memories_for_hostname(hostname),
-        legacy_user_linked=machine.legacy_user_id is not None,
-    )
+    except HTTPException:
+        # Caminhos 422/403/409 já emitiram sua métrica específica — apenas re-raise.
+        raise
+    except Exception:
+        ONBOARDING_SUBMIT_TOTAL.labels(result="error").inc()
+        raise

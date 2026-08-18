@@ -31,8 +31,9 @@ export interface GroupMemberCandidate {
  * Segue o padrão de `useAdminApi`: axios + `getApiUrl()` (proxy `/api-proxy`).
  */
 export const useGroupsApi = () => {
-  const fetchGroups = useCallback(async (): Promise<Group[]> => {
-    const res = await axios.get<{ groups: Group[] }>(`${getApiUrl()}/admin/groups`);
+  const fetchGroups = useCallback(async (options?: { signal?: AbortSignal }): Promise<Group[]> => {
+    const config = options?.signal ? { signal: options.signal } : {};
+    const res = await axios.get<{ groups: Group[] }>(`${getApiUrl()}/admin/groups`, config);
     return res.data.groups;
   }, []);
 

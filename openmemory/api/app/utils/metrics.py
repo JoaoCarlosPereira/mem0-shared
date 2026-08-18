@@ -67,6 +67,18 @@ AUTH_DENIED_TOTAL = Counter("auth_denied_total", "Requests with missing/invalid 
 AUTH_OK_TOTAL = Counter(
     "auth_ok_total", "Requests authenticated with a valid credential", ["method"]
 )
+# Auth & Onboarding observability (ADR-004 / ADR-006)
+AUTH_GOOGLE_LOGIN_TOTAL = Counter(
+    "om_auth_google_login_total",
+    "Total Google login attempts with result status",
+    ["result"],
+)
+ONBOARDING_SUBMIT_TOTAL = Counter(
+    "om_onboarding_submit_total",
+    "Total onboarding submissions with result status",
+    ["result"],
+)
+
 GOVERNANCE_REVERTED_TOTAL = Counter("governance_reverted_total", "Governance quarantines reverted")
 GOVERNANCE_QUARANTINED_CURRENT = Gauge(
     "governance_quarantined_current", "Memories currently in quarantine"
