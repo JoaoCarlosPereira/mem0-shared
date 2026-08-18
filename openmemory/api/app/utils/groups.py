@@ -117,10 +117,12 @@ def get_or_create_group(db, name: Optional[str]):
     """Retorna o ``Group`` com ``name`` (comparação case-insensitive), criando se faltar.
 
     Nome ausente/vazio recai no grupo Default. Não faz commit — o chamador controla a
-    transação.
+    transação. A criação usa SAVEPOINT para que uma corrida no índice ``name`` não
+    anule alterações pendentes na sessão do chamador.
     """
     from app.models import DEFAULT_GROUP_NAME, Group
     from sqlalchemy import func
+    from sqlalchemy.exc import IntegrityError
 
     target = normalize_group_name(name) or DEFAULT_GROUP_NAME
     group = (
@@ -130,8 +132,18 @@ def get_or_create_group(db, name: Optional[str]):
     )
     if group is None:
         group = Group(name=target)
-        db.add(group)
-        db.flush()
+        try:
+            with db.begin_nested():
+                db.add(group)
+                db.flush()
+        except IntegrityError:
+            group = (
+                db.query(Group)
+                .filter(func.lower(Group.name) == target.lower())
+                .first()
+            )
+            if group is None:
+                raise
     return group
 
 

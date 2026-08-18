@@ -33,7 +33,30 @@ def engine_connect_args(url: str | None = None) -> dict:
     return {}
 
 
-engine = create_engine(DATABASE_URL, connect_args=engine_connect_args())
+def _pool_int(name: str, default: int) -> int:
+    """Parse an integer pool env var, falling back to ``default`` on bad input.
+
+    A mistyped value (empty, non-numeric) must not crash the API at import
+    time — the pool is sized conservatively and the service keeps booting.
+    """
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+engine = create_engine(
+    DATABASE_URL,
+    connect_args=engine_connect_args(),
+    pool_size=_pool_int("DATABASE_POOL_SIZE", 10),
+    max_overflow=_pool_int("DATABASE_MAX_OVERFLOW", 20),
+    pool_timeout=_pool_int("DATABASE_POOL_TIMEOUT", 30),
+    pool_recycle=_pool_int("DATABASE_POOL_RECYCLE", 1800),
+    pool_pre_ping=True,
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()

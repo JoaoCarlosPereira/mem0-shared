@@ -959,11 +959,22 @@ def _kanban_board_id_ok(board_id: str) -> bool:
 def _issue_kanban_access_token(db: Session) -> str:
     """JWT Mem0 para o SPA Kanban (nome/e-mail/foto da pessoa logada).
 
-    Sempre HS256 com AUTH_JWT_SECRET — nunca INTERNAL (isso vira DEFAULT_ADMIN
-    no PLANKA). Identidade vem de ``auth_user_var`` / ``auth_email_var`` (Bearer
-    da sessão via AuthBridge), com enriquecimento na tabela ``users``.
+    O embed dura pelo menos o TTL da sessão da UI mais uma hora; isso evita que
+    o quadro expire antes da sessão principal. ``PLANKA_EMBED_TOKEN_TTL_SECONDS``
+    pode aumentar esse prazo, nunca reduzi-lo abaixo do TTL da UI.
     """
     import os
+
+    def _positive_seconds(name: str, default: int) -> int:
+        try:
+            value = int(os.getenv(name, str(default)))
+        except (TypeError, ValueError):
+            return default
+        return value if value > 0 else default
+
+    ui_ttl = _positive_seconds("AUTH_JWT_TTL_SECONDS", 7 * 24 * 60 * 60)
+    embed_ttl = _positive_seconds("PLANKA_EMBED_TOKEN_TTL_SECONDS", 8 * 24 * 60 * 60)
+    embed_ttl = max(embed_ttl, ui_ttl + 60 * 60)
 
     import jwt as pyjwt
 
@@ -1025,7 +1036,7 @@ def _issue_kanban_access_token(db: Session) -> str:
             # Marca embed Mem0: current-user do PLANKA não trata como sessão nativa.
             "mem0": True,
             "iat": now,
-            "exp": now + timedelta(hours=8),
+            "exp": now + timedelta(seconds=embed_ttl),
         },
         secret,
         algorithm="HS256",

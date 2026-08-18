@@ -25,6 +25,7 @@ from app.utils.identity import resolve_hostname
 logger = logging.getLogger(__name__)
 
 _SKIP_PREFIXES = ("/health", "/metrics", "/docs", "/openapi", "/redoc", "/admin")
+_AUTH_PREFIX = "/api/v1/auth/"
 _MCP_PREFIX = "/mcp/"
 _UI_CLIENT = "openmemory-ui"
 # POST bodies that only read state — never throttled.
@@ -181,6 +182,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self._write_per_min = _env_int("RL_WRITE_PER_MIN", 60)
         self._burst = _env_int("RL_BURST", 10)
         self._burst_window = _env_int("RL_BURST_WINDOW", 10)
+        self._auth_per_min = _env_int("RL_AUTH_PER_MIN", 10)
+        self._auth_poll_per_min = _env_int("RL_AUTH_POLL_PER_MIN", 60)
 
     @staticmethod
     def _scope(request: Request) -> Tuple[str, str]:
@@ -198,6 +201,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     def _limit_for(self, request: Request, *, mcp_category: Optional[str] = None) -> Tuple[str, int]:
         path = request.url.path.rstrip("/") or "/"
+        # Endpoints de login (Google, device flow, onboarding): limite per-IP
+        # conservador para dificultar brute-force sem quebrar o polling do device
+        # flow (a UI consulta a cada ``interval`` — default 5s ⇒ 12 req/min).
+        if path.startswith(_AUTH_PREFIX) and request.method == "POST":
+            if path.endswith("/google/device/poll"):
+                return "auth", self._auth_poll_per_min
+            return "auth", self._auth_per_min
         if request.method in ("GET", "HEAD"):
             return "search", self._search_per_min
         if mcp_category == "write":
@@ -211,7 +221,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if any(path.startswith(p) for p in _SKIP_PREFIXES):
             return await call_next(request)
 
-        if _is_trusted_ui_rest(request):
+        if _is_trusted_ui_rest(request) and not (
+            path.startswith(_AUTH_PREFIX) and request.method == "POST"
+        ):
             return await call_next(request)
 
         mcp_category: Optional[str] = None
@@ -225,6 +237,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         project, hostname = self._scope(request)
         category, limit = self._limit_for(request, mcp_category=mcp_category)
+        if category == "auth":
+            client = request.client
+            ip = client.host if client is not None else "unknown"
+            forwarded = request.headers.get("x-forwarded-for", "")
+            if forwarded:
+                ip = forwarded.split(",")[0].strip() or ip
+            hostname = f"ip:{ip}"
+            project = "auth"
+            burst_limit = limit
+            ok, retry = self._limiter.allow(f"auth:{hostname}", limit, 60)
+            if not ok:
+                return _too_many(retry)
+            return await call_next(request)
 
         burst_limit = (
             _env_int("RL_UI_BURST", 120)

@@ -1,21 +1,22 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
 
-// Recharts depende de medidas reais de layout (jsdom não tem); substituímos o
-// container/gráfico por stubs e testamos tiles, empty state e séries pivotadas.
+// Mock Recharts components used by TokenSummaryChart.
 jest.mock("recharts", () => {
   const Passthrough = ({ children }: { children?: React.ReactNode }) => (
     <div>{children}</div>
   );
   return {
     ResponsiveContainer: Passthrough,
-    LineChart: Passthrough,
+    AreaChart: Passthrough,
     CartesianGrid: () => null,
     XAxis: () => null,
     YAxis: () => null,
     Tooltip: () => null,
     Legend: () => <div data-testid="legend" />,
-    Line: ({ name }: { name: string }) => <div data-testid={`line-${name}`} />,
+    Area: ({ name }: { name: string }) => (
+      <div data-testid={`area-${name}`} />
+    ),
   };
 });
 
@@ -71,13 +72,13 @@ describe("TokenSummaryChart", () => {
         data={[row(), row({ group: "proj-b", total_tokens: 80 })]}
       />,
     );
-    expect(screen.getByTestId("line-proj-a")).toBeInTheDocument();
-    expect(screen.getByTestId("line-proj-b")).toBeInTheDocument();
+    expect(screen.getByTestId("area-proj-a")).toBeInTheDocument();
+    expect(screen.getByTestId("area-proj-b")).toBeInTheDocument();
     expect(screen.getByTestId("legend")).toBeInTheDocument();
   });
 
   it("agrega grupos além do teto em 'Outros'", () => {
-    const groups = ["a", "b", "c", "d", "e", "f", "g"];
+    const groups = ["a", "b", "c", "d", "e", "f", "g"]; // more than SERIES_COLORS length (5)
     render(
       <TokenSummaryChart
         data={groups.map((g, i) =>
@@ -85,12 +86,12 @@ describe("TokenSummaryChart", () => {
         )}
       />,
     );
-    expect(screen.getByTestId("line-Outros")).toBeInTheDocument();
-    expect(screen.queryByTestId("line-g")).not.toBeInTheDocument();
+    expect(screen.getByTestId("area-Outros")).toBeInTheDocument();
+    expect(screen.queryByTestId("area-g")).not.toBeInTheDocument();
   });
 
-  it("sem legenda para série única", () => {
+  it("exibe legenda também para série única", () => {
     render(<TokenSummaryChart data={[row()]} />);
-    expect(screen.queryByTestId("legend")).not.toBeInTheDocument();
+    expect(screen.getByTestId("legend")).toBeInTheDocument();
   });
 });

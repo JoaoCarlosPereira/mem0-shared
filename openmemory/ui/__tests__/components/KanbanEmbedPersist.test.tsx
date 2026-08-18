@@ -135,4 +135,39 @@ describe("KanbanEmbedCanvas persistence", () => {
       ).toContain("token.renovado.jwt");
     });
   });
+
+  it("postMessage auth-expired do iframe renova o embed com novo token", async () => {
+    mockedAxios.get
+      .mockResolvedValueOnce({
+        data: { embed_url: "/planka/", access_token: "token.inicial.jwt" },
+      })
+      .mockResolvedValueOnce({
+        data: { embed_url: "/planka/", access_token: "token.auto-renovado.jwt" },
+      });
+
+    render(<KanbanEmbedCanvas />);
+    const iframe = (await screen.findByTestId(
+      "kanban-home-canvas",
+    )) as HTMLIFrameElement;
+    expect(iframe.src).toContain("token.inicial.jwt");
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          origin: window.location.origin,
+          data: {
+            source: "mem0-kanban",
+            type: "auth-expired",
+          },
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(mockedAxios.get).toHaveBeenCalledTimes(2);
+      expect(
+        (screen.getByTestId("kanban-home-canvas") as HTMLIFrameElement).src,
+      ).toContain("token.auto-renovado.jwt");
+    });
+  });
 });

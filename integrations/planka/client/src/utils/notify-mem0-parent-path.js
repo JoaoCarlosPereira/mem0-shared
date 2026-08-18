@@ -8,6 +8,27 @@ import isMem0Embed from './is-mem0-embed';
 /**
  * @param {{ boardId?: string|null, cardId?: string|null, pathname?: string|null }} payload
  */
+export function notifyMem0ParentAuthExpired() {
+  if (!isMem0Embed()) {
+    return;
+  }
+  if (typeof window === 'undefined' || !window.parent || window.parent === window) {
+    return;
+  }
+
+  try {
+    window.parent.postMessage(
+      {
+        source: 'mem0-kanban',
+        type: 'auth-expired',
+      },
+      window.location.origin,
+    );
+  } catch (_err) {
+    // cross-origin / sandboxed — ignore
+  }
+}
+
 export default function notifyMem0ParentPath(payload = {}) {
   if (!isMem0Embed()) {
     return;

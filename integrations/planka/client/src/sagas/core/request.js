@@ -8,6 +8,8 @@ import { call, join, put, select, spawn, take } from 'redux-saga/effects';
 import selectors from '../../selectors';
 import entryActions from '../../entry-actions';
 import ErrorCodes from '../../constants/ErrorCodes';
+import isMem0Embed from '../../utils/is-mem0-embed';
+import { notifyMem0ParentAuthExpired } from '../../utils/notify-mem0-parent-path';
 
 let lastRequestTask;
 
@@ -28,8 +30,14 @@ function* queueRequest(method, ...args) {
     });
   } catch (error) {
     if (error.code === ErrorCodes.UNAUTHORIZED) {
-      yield put(entryActions.logout(false));
-      yield take();
+      if (isMem0Embed()) {
+        // O shell OpenMemory renova o JWT e remonta o iframe; nunca mostrar o
+        // login nativo do PLANKA para uma pessoa autenticada no shell.
+        notifyMem0ParentAuthExpired();
+      } else {
+        yield put(entryActions.logout(false));
+        yield take();
+      }
     }
 
     throw error;

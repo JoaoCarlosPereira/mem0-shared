@@ -115,7 +115,7 @@ describe("TokenDetailTable", () => {
     mockState.details = details({ total: 0, data: [] });
     render(<TokenDetailTable filters={filters} />);
     expect(
-      screen.getByText("Sem dados para o período selecionado."),
+      screen.getByText("Sem registros para os filtros aplicados."),
     ).toBeInTheDocument();
   });
 

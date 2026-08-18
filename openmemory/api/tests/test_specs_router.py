@@ -763,6 +763,48 @@ class TestKanbanHomeIdentity:
             assert claims["picture"] == "https://lh3.example/photo.jpg"
             assert claims["mem0"] is True
             assert claims["sub"] == "joao@example.com"
+            # O embed dura mais que a sessão UI (exp - iat >= 7 dias + 1h).
+            assert claims["exp"] - claims["iat"] >= 7 * 24 * 3600 + 3600
+        finally:
+            auth_email_var.reset(tok_e)
+            auth_user_var.reset(tok_u)
+
+    def test_jwt_embed_respeita_planka_embed_token_ttl_seconds(
+        self, client, factory, monkeypatch
+    ):
+        """Permite estender o TTL do embed pelo env PLANKA_EMBED_TOKEN_TTL_SECONDS."""
+        import jwt as pyjwt
+        from app.models import User
+        from app.utils.logging_context import auth_email_var, auth_user_var
+
+        secret = "kanban-home-test-secret-32bytes!!"
+        monkeypatch.setenv("AUTH_JWT_SECRET", secret)
+        monkeypatch.delenv("NEXTAUTH_SECRET", raising=False)
+        monkeypatch.setenv("PLANKA_EMBED_TOKEN_TTL_SECONDS", str(10 * 24 * 3600))
+
+        person_id = uuid.uuid4()
+        s = factory()
+        try:
+            s.add(
+                User(
+                    id=person_id,
+                    user_id=f"google-{person_id}",
+                    email="joao2@example.com",
+                    name="João",
+                )
+            )
+            s.commit()
+        finally:
+            s.close()
+
+        tok_u = auth_user_var.set(str(person_id))
+        tok_e = auth_email_var.set("joao2@example.com")
+        try:
+            r = client.get("/api/v1/specs/kanban-home")
+            assert r.status_code == 200
+            token = r.json()["access_token"]
+            claims = pyjwt.decode(token, secret, algorithms=["HS256"])
+            assert claims["exp"] - claims["iat"] == 10 * 24 * 3600
         finally:
             auth_email_var.reset(tok_e)
             auth_user_var.reset(tok_u)

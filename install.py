@@ -104,6 +104,21 @@ def run(args, **kwargs):
         die(f"Comando não encontrado: {args[0]}")
 
 
+def dry_run_report(args):
+    """Print planned actions without touching Docker, Git, env files, or hosts."""
+    mode = "update" if args.update else "fresh install"
+    print(f"DRY-RUN ({mode})")
+    if args.update:
+        print("- Validaria Docker/Compose e a instalação existente")
+        print("- Preservaria volumes e .env; sem down, rm ou recreate de dados")
+        print("- Faria git pull (salvo --no-pull), build seletivo, migrations e healthchecks")
+    else:
+        print("- Validaria Docker/Compose, prepararia .env e resolveria modelos")
+        print("- Subiria PostgreSQL/PgBouncer/Redis/Qdrant antes da API/UI")
+        print("- Aplicaria migrations, ativaria sidecars e aguardaria healthchecks")
+    print("Nenhuma ação foi executada.")
+
+
 def have_docker_compose():
     r = run(["docker", "compose", "version"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1273,6 +1288,22 @@ def wait_for_pgbouncer(compose_file, attempts=60):
     return False
 
 
+def update_state_services_are_running(dc):
+    """Fail closed unless production state services already run.
+
+    Update must never implicitly create or recreate Qdrant/PostgreSQL/Redis.
+    """
+    for service in ("postgres", "pgbouncer", "redis", "mem0_store"):
+        result = dc("ps", "--status", "running", "-q", service,
+                    capture_output=True, text=True)
+        if result.returncode != 0 or not (result.stdout or "").strip():
+            die(
+                f"Serviço persistente '{service}' não está em execução. "
+                "--update abortado sem alterar a stack; inicie-o manualmente "
+                "e tente novamente."
+            )
+
+
 # --------------------------------------------------------------------------- #
 # Atualização in-place (preserva memórias) — flag --update
 # --------------------------------------------------------------------------- #
@@ -1401,9 +1432,10 @@ def run_update(args):
     else:
         log("'git pull' pulado (--no-pull): usando o código já presente.")
 
-    # Parar só os serviços de aplicação antes do rebuild. NÃO parar Qdrant/
-    # PostgreSQL/Redis/PgBouncer: se o build falhar no meio, o stack de dados
-    # continua no ar (e a salvaguarda de points_count permanece mensurável).
+    # O update não cria/recria serviços persistentes. Eles precisam estar
+    # saudáveis antes de qualquer alteração na aplicação.
+    update_state_services_are_running(dc)
+
     # Containers de app não guardam estado próprio — dados vivem nos volumes.
     app_services = [
         "openmemory-mcp",
@@ -1412,10 +1444,6 @@ def run_update(args):
         "openmemory-backup-worker",
         "openmemory-ui",
     ]
-    log("Parando serviços de aplicação para liberar imagens no rebuild "
-        "(Qdrant/PostgreSQL/Redis/PgBouncer permanecem no ar)")
-    dc("stop", *app_services)
-
     # 2. Reconstrói as imagens (API + workers + UI) com o código novo ---------
     log("Reconstruindo as imagens (docker compose build --pull)")
     if not _rebuild_with_retry(dc):
@@ -1425,9 +1453,7 @@ def run_update(args):
     ok("Imagens reconstruídas com a versão nova.")
 
     # 3. Infra base + migrations aditivas -------------------------------------
-    log("Garantindo a infraestrutura base no ar (postgres, pgbouncer, redis, qdrant)")
-    if dc("up", "-d", "postgres", "pgbouncer", "redis", "mem0_store").returncode != 0:
-        die("Falha ao subir a infraestrutura base.")
+    log("Verificando a infraestrutura base (postgres, pgbouncer, redis, qdrant)")
     log("Aguardando o PgBouncer aceitar conexões")
     if not wait_for_pgbouncer(SCALE_COMPOSE):
         dc("logs", "--tail", "60", "postgres", "pgbouncer")
@@ -1449,13 +1475,6 @@ def run_update(args):
         "(Qdrant/PostgreSQL/Redis/PgBouncer preservados — sem recreate)")
     if dc("up", "-d", "--no-deps", "--force-recreate", *app_services).returncode != 0:
         die("Falha ao recriar os serviços de aplicação.")
-    # Garante o restante do stack no ar (Traefik, observabilidade, MinIO) SEM
-    # force-recreate: containers já em execução (inclui os com estado) ficam
-    # intocados; --remove-orphans só remove serviços que saíram do compose.
-    # Profile sidecars ativo para NÃO derrubar agentregistry/planka.
-    log("Subindo serviços auxiliares (sem recreate dos containers já no ar)")
-    if dc("--profile", "sidecars", "up", "-d", "--remove-orphans").returncode != 0:
-        die("Falha ao subir os serviços auxiliares do stack.")
     # Sidecars Store/Kanban: build+up explícito (imagens locais).
     if not ensure_sidecars_after_update(dc, timeout=min(args.timeout, 120)):
         die("Agent Registry não ficou saudável após a atualização. "
@@ -2062,6 +2081,8 @@ def run_production(args, compose_env, api_env, llm_spec, emb_spec):
 def parse_args(argv):
     p = argparse.ArgumentParser(
         description="Instalador rápido local-first (multiplataforma).")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Mostra as ações planejadas sem executá-las (modo seguro).")
     p.add_argument("--backend", choices=("auto", "ollama", "llamacpp", "api"), default="auto",
                    help="Backend: auto (detecta locais), ollama, llamacpp ou "
                         "api (endpoint remoto compatível com OpenAI — use --api-url).")
@@ -2141,6 +2162,9 @@ def parse_args(argv):
 
 def main(argv=None):
     args = parse_args(argv)
+    if args.dry_run:
+        dry_run_report(args)
+        return 0
     raw_argv = argv if argv is not None else sys.argv
     # URLs foram dadas explicitamente (≠ default)?
     ollama_explicit = ("--ollama-url" in raw_argv) or bool(os.environ.get("OLLAMA_URL"))

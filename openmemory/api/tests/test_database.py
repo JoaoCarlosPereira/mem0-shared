@@ -6,6 +6,7 @@ from sqlalchemy import create_engine
 
 from app.database import (
     DATABASE_URL,
+    engine,
     engine_connect_args,
     is_postgresql,
     is_sqlite,
@@ -54,3 +55,20 @@ class TestEngineCreation:
         assert engine_connect_args() == (
             {"check_same_thread": False} if is_sqlite() else {}
         )
+
+    def test_module_engine_uses_safe_pool_defaults(self):
+        assert engine.pool._pre_ping is True
+        assert engine.pool._recycle == 1800
+        assert engine.pool._timeout == 30
+        assert engine.pool.size() == 10
+        assert engine.pool._max_overflow == 20
+
+    def test_pool_int_falls_back_on_bad_input(self, monkeypatch):
+        from app.database import _pool_int
+
+        monkeypatch.setenv("DATABASE_POOL_SIZE", "not-a-number")
+        assert _pool_int("DATABASE_POOL_SIZE", 10) == 10
+        monkeypatch.setenv("DATABASE_POOL_SIZE", "")
+        assert _pool_int("DATABASE_POOL_SIZE", 10) == 10
+        monkeypatch.setenv("DATABASE_POOL_SIZE", "42")
+        assert _pool_int("DATABASE_POOL_SIZE", 10) == 42

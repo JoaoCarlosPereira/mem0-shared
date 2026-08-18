@@ -38,6 +38,7 @@ from app.utils.session_jwt import (
 )
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -224,12 +225,29 @@ def _complete_google_login(claims: dict, db: Session) -> LoginResponse:
             avatar_url=picture,
         )
         db.add(user)
+        try:
+            db.commit()
+        except IntegrityError:
+            # Outra requisição pode ter criado o mesmo ``google_sub`` depois do
+            # primeiro SELECT. O rollback limpa a transação abortada; o refetch
+            # reutiliza a linha vencedora sem alterar ``first_login``.
+            db.rollback()
+            user = db.query(User).filter(User.google_sub == sub).first()
+            if user is None:
+                raise
+            created_now = False
+            user.email = email or user.email
+            user.name = name or user.name
+            user.display_name = name or user.display_name
+            user.avatar_url = picture or user.avatar_url
+            db.commit()
     else:
         # Atualiza dados informativos; a chave da pessoa é sempre o ``sub``.
         user.email = email or user.email
+        user.name = name or user.name
         user.display_name = name or user.display_name
         user.avatar_url = picture or user.avatar_url
-    db.commit()
+        db.commit()
     db.refresh(user)
 
     # ``first_login`` = pessoa criada nesta chamada. O estado "precisa de

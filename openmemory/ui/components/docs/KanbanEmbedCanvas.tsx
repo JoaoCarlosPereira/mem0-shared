@@ -194,12 +194,19 @@ export function KanbanEmbedCanvas({ boardId: propBoardId, reloadToken = 0 }: Pro
     void hardLoad(propBoardId);
   }, [propBoardId, hardLoad]);
 
-  // Soft-nav do iframe: URL + storage apenas (nunca mexe no src).
+  // Soft-nav do iframe: URL + storage apenas (nunca mexe no src). Quando o
+  // JWT expira, o iframe pede um token novo ao shell em vez de mostrar login.
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return;
       const data = event.data;
-      if (!data || data.source !== "mem0-kanban" || data.type !== "path") return;
+      if (!data || data.source !== "mem0-kanban") return;
+      if (data.type === "auth-expired") {
+        if (!apiSessionReady) return;
+        void hardLoad(mountBoardRef.current ?? activeBoardId);
+        return;
+      }
+      if (data.type !== "path") return;
       const nextBoard =
         typeof data.boardId === "string" && BOARD_ID_RE.test(data.boardId)
           ? data.boardId
@@ -213,7 +220,7 @@ export function KanbanEmbedCanvas({ boardId: propBoardId, reloadToken = 0 }: Pro
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, []);
+  }, [activeBoardId, apiSessionReady, hardLoad]);
 
   // Foco/aba: só corrige a URL do shell. Nunca recarrega o iframe.
   useEffect(() => {

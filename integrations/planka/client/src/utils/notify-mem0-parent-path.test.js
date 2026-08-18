@@ -1,4 +1,4 @@
-import notifyMem0ParentPath from './notify-mem0-parent-path';
+import notifyMem0ParentPath, { notifyMem0ParentAuthExpired } from './notify-mem0-parent-path';
 
 describe('notifyMem0ParentPath', () => {
   const originalWindow = global.window;
@@ -40,6 +40,22 @@ describe('notifyMem0ParentPath', () => {
   test('no-ops when not embed', () => {
     global.window.location.search = '';
     notifyMem0ParentPath({ boardId: '123' });
+    expect(posted).toHaveLength(0);
+  });
+
+  test('notifyMem0ParentAuthExpired posts auth-expired to parent when embed=1', () => {
+    notifyMem0ParentAuthExpired();
+    expect(posted).toHaveLength(1);
+    expect(posted[0].data).toEqual({
+      source: 'mem0-kanban',
+      type: 'auth-expired',
+    });
+    expect(posted[0].origin).toBe('https://memorias.sysmo.com.br');
+  });
+
+  test('notifyMem0ParentAuthExpired no-ops when not embed', () => {
+    global.window.location.search = '';
+    notifyMem0ParentAuthExpired();
     expect(posted).toHaveLength(0);
   });
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { BarChart3 } from "lucide-react";
+import { BarChart3, Activity, Zap, Cpu, Layers, Search } from "lucide-react";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -11,6 +11,8 @@ import { TokenFilters } from "@/components/metrics/TokenFilters";
 import { TokenSummaryChart } from "@/components/metrics/TokenSummaryChart";
 import { useMetricsApi } from "@/hooks/useMetricsApi";
 import { MetricsFilters } from "@/types/metrics";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 
 /** Últimos 30 dias como período padrão (o start é obrigatório na API). */
 function defaultFilters(): MetricsFilters {
@@ -31,63 +33,84 @@ export default function MetricsPage() {
     void fetchSummary(filters);
   }, [fetchSummary, filters]);
 
-  const summaryBody = useMemo(() => {
+  const summaryData = useMemo(() => {
     if (error && !summary) {
-      return (
-        <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-6">
-          <p className="mb-3 text-sm text-red-400">{error}</p>
-          <button
-            type="button"
-            onClick={() => void fetchSummary(filters)}
-            className="rounded-md bg-zinc-800 px-3 py-1.5 text-sm text-zinc-100 hover:bg-zinc-700"
-          >
-            Tentar novamente
-          </button>
-        </div>
-      );
+      return {
+        error: error,
+        isError: true,
+      };
     }
     if (!summary) {
-      return (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <Skeleton key={i} className="h-20 w-full rounded-lg" />
-            ))}
-          </div>
-          <Skeleton className="h-72 w-full rounded-lg" />
-          {loading ? (
-            <p className="text-xs text-zinc-500">Carregando métricas…</p>
-          ) : null}
-        </div>
-      );
+      return {
+        isLoading: true,
+      };
     }
-    return <TokenSummaryChart data={summary.data} />;
+    return {
+      summary,
+      isError: false,
+      isLoading: false,
+    };
   }, [error, fetchSummary, filters, loading, summary]);
 
   return (
-    <div>
+    <div className="max-w-[1600px] mx-auto space-y-6 pb-12">
       <PageHeader
-        className="mb-4"
+        className="mb-2"
         icon={BarChart3}
-        title="Métricas de Tokens"
-        description="Consumo de tokens LLM por projeto, agente, usuário e modelo — embeddings locais não entram na contagem."
+        title="Análise de Consumo"
+        description="Monitoramento detalhado de tokens, operações e performance de modelos."
       />
-      <div className="space-y-4">
+
+      <div className="space-y-6">
         <TokenFilters filters={filters} onChange={setFilters} />
-        <Tabs defaultValue="tokens">
-          <TabsList>
-            <TabsTrigger value="tokens">Tokens</TabsTrigger>
-            <TabsTrigger value="details">Detalhes</TabsTrigger>
-            <TabsTrigger value="export">Exportar</TabsTrigger>
-          </TabsList>
-          <TabsContent value="tokens" className="mt-4">
-            {summaryBody}
+
+        {/* Summary / KPI Section - Automatically populated by TokenSummaryChart's internal tiles */}
+        
+        <Tabs defaultValue="tokens" className="w-full">
+          <div className="flex items-center justify-between mb-4">
+            <TabsList className="bg-zinc-900/50 border border-zinc-800 p-1">
+              <TabsTrigger value="tokens" className="px-6">Tendências de Tokens</TabsTrigger>
+              <TabsTrigger value="details" className="px-6">Log de Operações</TabsTrigger>
+              <TabsTrigger value="export" className="px-6">Exportação</TabsTrigger>
+            </TabsList>
+          </div>
+
+          <TabsContent value="tokens" className="space-y-6 outline-none">
+            {summaryData.isError ? (
+              <Card className="border-red-900/50 bg-red-950/20">
+                <CardContent className="p-6 text-center">
+                  <p className="text-red-400 mb-4">{summaryData.error}</p>
+                  <button
+                    type="button"
+                    onClick={() => void fetchSummary(filters)}
+                    className="rounded-md bg-red-500/20 px-4 py-2 text-sm font-medium text-red-200 hover:bg-red-500/30 transition-colors"
+                  >
+                    Tentar novamente
+                  </button>
+                </CardContent>
+              </Card>
+            ) : summaryData.isLoading ? (
+              <div className="space-y-6">
+                <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <Skeleton key={i} className="h-24 w-full rounded-xl" />
+                  ))}
+                </div>
+                <Skeleton className="h-[450px] w-full rounded-xl" />
+              </div>
+            ) : (
+              <TokenSummaryChart data={summaryData.summary.data} />
+            )}
           </TabsContent>
-          <TabsContent value="details" className="mt-4">
+
+          <TabsContent value="details" className="outline-none">
             <TokenDetailTable filters={filters} />
           </TabsContent>
-          <TabsContent value="export" className="mt-4">
-            <TokenExportButton filters={filters} />
+
+          <TabsContent value="export" className="outline-none">
+            <div className="flex justify-center py-12">
+              <TokenExportButton filters={filters} />
+            </div>
           </TabsContent>
         </Tabs>
       </div>

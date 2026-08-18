@@ -35,6 +35,10 @@ x-api-common: &api-common
     QDRANT_HOST: mem0_store
     QDRANT_PORT: "6333"
     DATABASE_URL: postgresql://${POSTGRES_USER:-mem0}:${POSTGRES_PASSWORD:-mem0}@pgbouncer:5432/${POSTGRES_DB:-openmemory}
+    DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
+    DATABASE_MAX_OVERFLOW: ${DATABASE_MAX_OVERFLOW:-20}
+    DATABASE_POOL_TIMEOUT: ${DATABASE_POOL_TIMEOUT:-30}
+    DATABASE_POOL_RECYCLE: ${DATABASE_POOL_RECYCLE:-1800}
     REDIS_URL: redis://redis:6379/0
     # Inferência via Ollama EXTERNO (host/rede), o padrão deste stack. Default
     # host.docker.internal cobre um Ollama no próprio host; para um Ollama em
@@ -98,6 +102,8 @@ x-api-common: &api-common
     PLANKA_INTERNAL_URL: ${PLANKA_INTERNAL_URL:-http://planka:1337}
     PLANKA_PUBLIC_URL: ${PLANKA_PUBLIC_URL:-/planka}
     PLANKA_MIRROR_SYNC: ${PLANKA_MIRROR_SYNC:-1}
+    # JWT do embed dura mais que a sessão UI (8 dias por padrão).
+    PLANKA_EMBED_TOKEN_TTL_SECONDS: ${PLANKA_EMBED_TOKEN_TTL_SECONDS:-691200}
     PLANKA_INTERNAL_ACCESS_TOKEN: ${PLANKA_INTERNAL_ACCESS_TOKEN:-${INTERNAL_ACCESS_TOKEN:-}}
     NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-}
     # Anexos de cards Spec (volume dedicado — nunca Qdrant / mem0_storage).
@@ -190,8 +196,21 @@ services:
     # session created by /mcp/*/sse/* and clients retry until their timeout.
     # Streamable HTTP is stateless, but the shared API process also serves SSE
     # for existing agent installations, so keep this service single-process.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request; response = urllib.request.urlopen(
+          'http://127.0.0.1:8765/health', timeout=2); raise SystemExit(
+          0 if response.status == 200 else 1)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
     command: >
-      sh -c "uvicorn main:app --host 0.0.0.0 --port 8765 --workers 1 --no-access-log"
+      sh -c "alembic upgrade head && exec uvicorn main:app --host 0.0.0.0 --port 8765 --workers 1 --no-access-log"
 
   openmemory-write-worker:
     <<: *api-common

@@ -16,22 +16,29 @@ import io
 import math
 import os
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
+from uuid import UUID
+
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models import (
     GovernanceJob,
     GovernanceJobStatus,
+    LinkAuditLog,
+    Machine,
+    MachineStatus,
     Project,
+    User,
     WriteAuditLog,
     WriteQueueJob,
     WriteQueueStatus,
+    get_current_utc_time,
 )
 from app.schemas import (
     AdminOverviewResponse,
@@ -45,6 +52,7 @@ from app.schemas import (
     WriteQueueJobResponse,
 )
 from app.utils.admin_auth import require_admin
+from app.utils.identity_links import invalidate_identity_link_cache
 from app.utils.backup import BackupService
 from app.utils.backup_archive import BackupArchive
 from app.utils.backup_policy import get_backup_policy, get_backup_policy_runtime, save_backup_policy
@@ -59,6 +67,125 @@ from app.utils.vector_stats import (
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+class MachineResolveRequest(BaseModel):
+    action: Literal["link", "unlink"]
+    user_id: Optional[UUID] = None
+    # Token authentication has no user identity; UI sessions are resolved via
+    # auth context, so callers may provide an explicit admin actor when needed.
+    admin_user_id: Optional[UUID] = None
+
+
+def _machine_user(user: Optional[User]) -> Optional[dict]:
+    if user is None:
+        return None
+    return {"id": str(user.id), "name": user.name, "email": user.email}
+
+
+@router.get("/machines")
+def list_machines(
+    status: Optional[MachineStatus] = Query(None),
+    hostname: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin),
+) -> dict:
+    """Lista máquinas e os usuários atual/legado para recuperação administrativa."""
+    query = db.query(Machine).options(
+        joinedload(Machine.linked_user), joinedload(Machine.legacy_user)
+    )
+    if status is not None:
+        query = query.filter(Machine.status == status)
+    if hostname:
+        query = query.filter(Machine.hostname.ilike(f"%{hostname}%"))
+    total = query.order_by(None).count()
+    rows = query.order_by(Machine.hostname).offset(offset).limit(limit).all()
+    return {
+        "items": [
+            {
+                "id": str(machine.id),
+                "hostname": machine.hostname,
+                "status": machine.status.value,
+                "linked_at": machine.linked_at,
+                "linked_user": _machine_user(machine.linked_user),
+                "legacy_user": _machine_user(machine.legacy_user),
+            }
+            for machine in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.post("/machines/{machine_id}/resolve")
+def resolve_machine(
+    machine_id: UUID,
+    payload: MachineResolveRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin),
+) -> dict:
+    """Resolve um vínculo de máquina e registra a transição em auditoria."""
+    machine = db.query(Machine).filter(Machine.id == machine_id).first()
+    if machine is None:
+        raise HTTPException(status_code=404, detail="máquina não encontrada")
+    if payload.action == "link" and payload.user_id is None:
+        raise HTTPException(status_code=400, detail="user_id obrigatório para link")
+    if payload.action == "unlink" and payload.user_id is not None:
+        raise HTTPException(status_code=400, detail="user_id não permitido para unlink")
+
+    actor_id = payload.admin_user_id
+    if payload.action == "link":
+        linked_user = db.query(User).filter(User.id == payload.user_id).first()
+        if linked_user is None:
+            raise HTTPException(status_code=400, detail="usuário não encontrado")
+    else:
+        linked_user = None
+
+    previous_status = machine.status.value
+    previous_linked_user_id = str(machine.linked_user_id) if machine.linked_user_id else None
+    now = get_current_utc_time()
+    if payload.action == "link":
+        machine.linked_user_id = payload.user_id
+        machine.status = MachineStatus.linked
+        machine.linked_at = now
+        machine.linked_by = actor_id
+    else:
+        machine.linked_user_id = None
+        machine.status = MachineStatus.unlinked
+        machine.linked_at = None
+        machine.linked_by = actor_id
+
+    action = (
+        "conflict_resolved"
+        if previous_status == MachineStatus.conflict.value
+        else payload.action
+    )
+    db.add(
+        LinkAuditLog(
+            machine_id=machine.id,
+            actor_user_id=actor_id,
+            action=action,
+            detail={
+                "previous_status": previous_status,
+                "previous_linked_user_id": previous_linked_user_id,
+                "admin_user_id": str(actor_id) if actor_id else None,
+            },
+        )
+    )
+    db.commit()
+    db.refresh(machine)
+    invalidate_identity_link_cache(machine.hostname)
+    return {
+        "id": str(machine.id),
+        "hostname": machine.hostname,
+        "status": machine.status.value,
+        "linked_at": machine.linked_at,
+        "linked_user": _machine_user(linked_user),
+        "legacy_user": _machine_user(machine.legacy_user),
+    }
 
 
 def _control() -> MigrationControl:

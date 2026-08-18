@@ -2,7 +2,7 @@
  * task_08 (feature auth Google): wizard de onboarding de primeiro login.
  */
 import React from "react";
-import { fireEvent, render, screen, waitFor, act } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, act, within } from "@testing-library/react";
 import { Provider } from "react-redux";
 
 jest.mock("axios");
@@ -211,8 +211,16 @@ describe("OnboardingPage", () => {
 
     // Deve exibir caixa de confirmação de divergência
     await waitFor(() => {
-      expect(screen.getByTestId("mismatch-confirm-box")).toBeInTheDocument();
-      expect(screen.getByText(/Detectamos S0281 na sua rede, mas você informou S0299/i)).toBeInTheDocument();
+      const box = screen.getByTestId("mismatch-confirm-box");
+      expect(box).toBeInTheDocument();
+      const paragraph = within(box).getByText((content, element) => {
+        const tag = element?.tagName?.toLowerCase();
+        return tag === "p" &&
+          element?.textContent?.includes("Detectamos") &&
+          element?.textContent?.includes("S0281") &&
+          element?.textContent?.includes("S0299");
+      });
+      expect(paragraph).toBeInTheDocument();
     });
 
     expect(mockedAxios.post).not.toHaveBeenCalled();

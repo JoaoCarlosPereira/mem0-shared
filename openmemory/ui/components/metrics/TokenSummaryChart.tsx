@@ -2,27 +2,26 @@
 
 import { useMemo } from "react";
 import {
+  Area,
+  AreaChart,
   CartesianGrid,
   Legend,
-  Line,
-  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
 import { TokenSummaryRow } from "@/types/metrics";
+import { Card, CardContent } from "@/components/ui/card";
 
 interface TokenSummaryChartProps {
   data: TokenSummaryRow[];
 }
 
-// Paleta categórica validada para o fundo zinc-950 (scripts/validate_palette.js
-// da skill dataviz: lightness band, chroma, CVD e contraste — todos PASS).
-const SERIES_COLORS = ["#8b5cf6", "#0284c7", "#d97706", "#059669", "#f43f5e"];
+const SERIES_COLORS = ["#8b5cf6", "#06b6d4", "#f59e0b", "#10b981", "#ef4444"];
 const MAX_SERIES = SERIES_COLORS.length;
 const OTHERS_KEY = "Outros";
-const OTHERS_COLOR = "#71717a"; // zinc-500 — agregado, não é uma identidade
+const OTHERS_COLOR = "#71717a";
 
 interface Totals {
   input: number;
@@ -43,16 +42,12 @@ function computeTotals(data: TokenSummaryRow[]): Totals {
   );
 }
 
-/** Pivota linhas (period, group) em séries por period; top N grupos + "Outros". */
+/** Pivots lines (period, group) into series by period; top N groups + "Others". */
 function pivot(data: TokenSummaryRow[]) {
   const totalsByGroup = new Map<string, number>();
   for (const row of data) {
-    totalsByGroup.set(
-      row.group,
-      (totalsByGroup.get(row.group) ?? 0) + row.total_tokens,
-    );
+    totalsByGroup.set(row.group, (totalsByGroup.get(row.group) ?? 0) + row.total_tokens);
   }
-  // Ordem fixa por volume total: a identidade de cor segue o grupo.
   const groups = [...totalsByGroup.entries()]
     .sort((a, b) => b[1] - a[1])
     .map(([group]) => group);
@@ -66,106 +61,101 @@ function pivot(data: TokenSummaryRow[]) {
     bucket[key] = ((bucket[key] as number) ?? 0) + row.total_tokens;
     byPeriod.set(row.period, bucket);
   }
-  const rows = [...byPeriod.values()].sort((a, b) =>
-    String(a.period).localeCompare(String(b.period)),
-  );
+  const rows = [...byPeriod.values()].sort((a, b) => String(a.period).localeCompare(String(b.period)));
   const series = hasOthers ? [...top, OTHERS_KEY] : top;
   return { rows, series };
 }
 
 const numberFmt = new Intl.NumberFormat("pt-BR");
 
-function StatTile({ label, value }: { label: string; value: string }) {
+function CustomTooltip({ active, payload, label }: any) {
+  if (!active || !payload?.length) return null;
+
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-3">
-      <div className="text-xs text-zinc-400">{label}</div>
-      <div className="mt-1 text-xl font-semibold tabular-nums text-zinc-100">
-        {value}
+    <div className="rounded-lg border border-zinc-800 bg-zinc-950/95 p-3 shadow-xl backdrop-blur-sm">
+      <div className="mb-2 text-xs font-medium text-zinc-500">{label}</div>
+      <div className="space-y-1">
+        {payload.map((entry: any, index: number) => (
+          <div key={index} className="flex items-center justify-between gap-4 text-xs">
+            <div className="flex items-center gap-2">
+              <div className="h-2 w-2 rounded-full" style={{ backgroundColor: entry.color }} />
+              <span className="text-zinc-400">{entry.name}</span>
+            </div>
+            <span className="font-mono font-medium text-zinc-100">{numberFmt.format(entry.value)}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-/**
- * Tendência de consumo de tokens por período (task_05): tiles com totais do
- * intervalo + linha por grupo da granularidade selecionada.
- */
 export function TokenSummaryChart({ data }: TokenSummaryChartProps) {
   const totals = useMemo(() => computeTotals(data), [data]);
   const { rows, series } = useMemo(() => pivot(data), [data]);
 
   if (data.length === 0) {
     return (
-      <p className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-6 text-sm text-zinc-400">
-        Sem dados para o período selecionado.
-      </p>
+      <Card className="border-dashed">
+        <CardContent className="flex h-72 items-center justify-center text-sm text-zinc-500">
+          Sem dados para o período selecionado.
+        </CardContent>
+      </Card>
     );
   }
 
+  const kpis = [
+    ["Total de tokens", totals.total],
+    ["Entrada", totals.input],
+    ["Saída", totals.output],
+    ["Operações", totals.operations],
+    ["Média/op", totals.operations ? Math.round(totals.total / totals.operations) : 0],
+  ];
+
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        <StatTile label="Total de tokens" value={numberFmt.format(totals.total)} />
-        <StatTile label="Tokens de entrada" value={numberFmt.format(totals.input)} />
-        <StatTile label="Tokens de saída" value={numberFmt.format(totals.output)} />
-        <StatTile label="Operações" value={numberFmt.format(totals.operations)} />
-        <StatTile
-          label="Média de tokens/op"
-          value={numberFmt.format(
-            totals.operations ? Math.round(totals.total / totals.operations) : 0,
-          )}
-        />
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
+        {kpis.map(([label, value]) => (
+          <Card key={label} className="border-zinc-800/50 bg-zinc-900/40">
+            <CardContent className="p-4">
+              <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">{label}</p>
+              <p className="mt-1 text-lg font-bold tabular-nums text-zinc-100">{numberFmt.format(value as number)}</p>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
-      <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
-        <div className="h-72 w-full" data-testid="token-summary-chart">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={rows} margin={{ top: 8, right: 16, bottom: 4, left: 8 }}>
-              <CartesianGrid stroke="#27272a" vertical={false} />
-              <XAxis
-                dataKey="period"
-                stroke="#52525b"
-                tick={{ fill: "#a1a1aa", fontSize: 12 }}
-                tickLine={false}
-              />
-              <YAxis
-                stroke="#52525b"
-                tick={{ fill: "#a1a1aa", fontSize: 12 }}
-                tickLine={false}
-                axisLine={false}
-                width={70}
-                tickFormatter={(v: number) => numberFmt.format(v)}
-              />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "#18181b",
-                  border: "1px solid #3f3f46",
-                  borderRadius: 8,
-                  color: "#e4e4e7",
-                }}
-                labelStyle={{ color: "#a1a1aa" }}
-                formatter={(value: number) => numberFmt.format(value)}
-              />
-              {series.length > 1 ? (
-                <Legend wrapperStyle={{ color: "#a1a1aa", fontSize: 12 }} />
-              ) : null}
-              {series.map((name, i) => (
-                <Line
-                  key={name}
-                  type="monotone"
-                  dataKey={name}
-                  name={name}
-                  stroke={name === OTHERS_KEY ? OTHERS_COLOR : SERIES_COLORS[i]}
-                  strokeWidth={2}
-                  dot={false}
-                  activeDot={{ r: 4 }}
-                  connectNulls
-                />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
+      <Card className="border-zinc-800/50 bg-zinc-900/40">
+        <CardContent className="p-6">
+          <div className="h-[400px] w-full" data-testid="token-summary-chart">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={rows} margin={{ top: 10, right: 10, bottom: 0, left: 0 }}>
+                <defs>
+                  {series.map((name, i) => {
+                    const color = name === OTHERS_KEY ? OTHERS_COLOR : SERIES_COLORS[i];
+                    return (
+                      <linearGradient key={`gradient-${i}`} id={`gradient-${i}`} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={color} stopOpacity={0.3} />
+                        <stop offset="95%" stopColor={color} stopOpacity={0} />
+                      </linearGradient>
+                    );
+                  })}
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#27272a" />
+                <XAxis dataKey="period" axisLine={false} tickLine={false} tick={{ fill: "#71717a", fontSize: 12 }} dy={10} />
+                <YAxis axisLine={false} tickLine={false} tick={{ fill: "#71717a", fontSize: 12 }} tickFormatter={(value: number) => numberFmt.format(value)} />
+                <Tooltip content={<CustomTooltip />} />
+                <Legend verticalAlign="top" align="right" iconType="circle" wrapperStyle={{ paddingBottom: "20px", fontSize: "12px", color: "#a1a1aa" }} />
+                {series.map((name, i) => {
+                  const color = name === OTHERS_KEY ? OTHERS_COLOR : SERIES_COLORS[i];
+                  return (
+                    <Area key={name} type="monotone" dataKey={name} name={name} stroke={color} strokeWidth={2.5} fill={`url(#gradient-${i})`} connectNulls />
+                  );
+                })}
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
