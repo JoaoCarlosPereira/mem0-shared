@@ -3,10 +3,19 @@
  */
 
 module.exports.up = async (knex) => {
-  await knex.schema.alterTable('project', (table) => {
-    table.boolean('is_archived').notNullable().defaultTo(false);
-    table.boolean('is_completed').notNullable().defaultTo(false);
-  });
+  const hasArchived = await knex.schema.hasColumn('project', 'is_archived');
+  const hasCompleted = await knex.schema.hasColumn('project', 'is_completed');
+
+  if (!hasArchived || !hasCompleted) {
+    await knex.schema.alterTable('project', (table) => {
+      if (!hasArchived) {
+        table.boolean('is_archived').notNullable().defaultTo(false);
+      }
+      if (!hasCompleted) {
+        table.boolean('is_completed').notNullable().defaultTo(false);
+      }
+    });
+  }
 
   return knex.schema.alterTable('project', (table) => {
     table.boolean('is_archived').notNullable().alter();
