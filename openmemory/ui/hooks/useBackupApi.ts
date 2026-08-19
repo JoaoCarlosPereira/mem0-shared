@@ -134,7 +134,11 @@ export const useBackupApi = (options?: UseBackupApiOptions) => {
   }, [dispatch, fetchStatus, fetchList]);
 
   const restore = useCallback(
-    async (archive: string, confirm: string): Promise<boolean> => {
+    async (
+      archive: string,
+      confirm: string,
+      acknowledgeCompleteOverwrite: boolean,
+    ): Promise<boolean> => {
       dispatch(setRestoring(true));
       try {
         await axios.get(`${getApiUrl()}/admin/backup/status`).then((r) =>
@@ -143,6 +147,7 @@ export const useBackupApi = (options?: UseBackupApiOptions) => {
         await axios.post(`${getApiUrl()}/admin/backup/restore`, {
           archive,
           confirm,
+          acknowledge_complete_overwrite: acknowledgeCompleteOverwrite,
         });
         // Restore roda em background (202). A conclusão é assinalada pelo
         // progresso real do backend (progress.ok) — a barra avança por fase

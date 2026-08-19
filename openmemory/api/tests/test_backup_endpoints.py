@@ -30,8 +30,9 @@ router = _admin.router
 
 
 class FakeArchive:
-    def __init__(self, exists=True):
+    def __init__(self, exists=True, verification_error=None):
         self._exists = exists
+        self._verification_error = verification_error
         self.created = False
         self.restored = None
 
@@ -49,6 +50,11 @@ class FakeArchive:
 
     def path_for(self, name):
         return f"/mnt/backups/{name}"
+
+    def assert_restore_allowed(self, path):
+        if self._verification_error is not None:
+            raise _admin.SchemaIncompatibleError(self._verification_error)
+        return {"status": "verified"}
 
     def restore(self, path):
         self.restored = path
@@ -186,7 +192,11 @@ def test_restore_confirm_mismatch_returns_400(ctx):
     with TestClient(app) as client:
         resp = client.post(
             "/admin/backup/restore",
-            json={"archive": "20260618-030000.zip", "confirm": "errado"},
+            json={
+                "archive": "20260618-030000.zip",
+                "confirm": "errado",
+                "acknowledge_complete_overwrite": True,
+            },
             headers=ADMIN_HEADERS,
         )
     assert resp.status_code == 400
@@ -206,7 +216,11 @@ def test_restore_missing_archive_returns_404(monkeypatch):
     with TestClient(app) as client:
         resp = client.post(
             "/admin/backup/restore",
-            json={"archive": "nope.zip", "confirm": "nope.zip"},
+            json={
+                "archive": "nope.zip",
+                "confirm": "nope.zip",
+                "acknowledge_complete_overwrite": True,
+            },
             headers=ADMIN_HEADERS,
         )
     assert resp.status_code == 404
@@ -219,11 +233,57 @@ def test_restore_valid_returns_202_and_triggers(ctx):
     with TestClient(app) as client:
         resp = client.post(
             "/admin/backup/restore",
-            json={"archive": "20260618-030000.zip", "confirm": "20260618-030000.zip"},
+            json={
+                "archive": "20260618-030000.zip",
+                "confirm": "20260618-030000.zip",
+                "acknowledge_complete_overwrite": True,
+            },
             headers=ADMIN_HEADERS,
         )
     assert resp.status_code == 202
     assert fake.restored == "/mnt/backups/20260618-030000.zip"
+    assert resp.json()["warning"].startswith("O restore sobrescreverá completamente")
+    assert resp.json()["recovery"].startswith("A reversão exige restaurar")
+
+
+def test_restore_requires_complete_overwrite_acknowledgement(ctx):
+    app, fake = ctx
+    with TestClient(app) as client:
+        resp = client.post(
+            "/admin/backup/restore",
+            json={
+                "archive": "20260618-030000.zip",
+                "confirm": "20260618-030000.zip",
+                "acknowledge_complete_overwrite": False,
+            },
+            headers=ADMIN_HEADERS,
+        )
+    assert resp.status_code == 400
+    assert "sobrescrita completa" in resp.json()["detail"]
+    assert fake.restored is None
+
+
+def test_restore_rejects_uncertified_archive(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", "test-admin-token")
+    fake = FakeArchive(verification_error="backup não certificado")
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[_admin._backup_archive] = lambda: fake
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/admin/backup/restore",
+            json={
+                "archive": "invalid.zip",
+                "confirm": "invalid.zip",
+                "acknowledge_complete_overwrite": True,
+            },
+            headers=ADMIN_HEADERS,
+        )
+
+    assert resp.status_code == 409
+    assert "não certificado" in resp.json()["detail"]
+    assert fake.restored is None
 
 
 def test_restore_denied_without_admin(ctx):
@@ -231,7 +291,11 @@ def test_restore_denied_without_admin(ctx):
     with TestClient(app) as client:
         resp = client.post(
             "/admin/backup/restore",
-            json={"archive": "20260618-030000.zip", "confirm": "20260618-030000.zip"},
+            json={
+                "archive": "20260618-030000.zip",
+                "confirm": "20260618-030000.zip",
+                "acknowledge_complete_overwrite": True,
+            },
         )
     assert resp.status_code == 401
     assert fake.restored is None
