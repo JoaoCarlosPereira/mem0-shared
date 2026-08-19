@@ -7,7 +7,7 @@ from typing import Optional
 from uuid import UUID
 
 from app.database import get_db
-from app.models import Group, User, USER_TYPE_LEGACY_HOST
+from app.models import Group, Machine, User, USER_TYPE_LEGACY_HOST
 from app.utils.creator_identity import (
     identity_for_hostname,
     resolve_creator_identities_with_db,
@@ -121,6 +121,33 @@ def _user_summary(
     )
 
 
+def _visible_group_members(db: Session, group_id: UUID) -> list[tuple[User, Optional[str]]]:
+    """Return person accounts and unpaired legacy hosts with metric hostnames."""
+    users = db.query(User).filter(User.group_id == group_id).all()
+    user_ids = [user.id for user in users]
+    machines = (
+        db.query(Machine).filter(Machine.linked_user_id.in_(user_ids)).all()
+        if user_ids
+        else []
+    )
+    linked_legacy_ids = {
+        machine.legacy_user_id
+        for machine in machines
+        if machine.legacy_user_id is not None
+    }
+    machine_by_person = {
+        machine.linked_user_id: machine.hostname
+        for machine in machines
+        if machine.linked_user_id is not None
+    }
+    visible = [
+        (user, machine_by_person.get(user.id, user.user_id))
+        for user in users
+        if user.id not in linked_legacy_ids
+    ]
+    return sorted(visible, key=lambda item: item[1].lower())
+
+
 @router.get("/groups")
 def list_groups_analytics(db: Session = Depends(get_db)) -> dict:
     """List all groups with aggregated usage metrics."""
@@ -150,25 +177,29 @@ def get_group_analytics(group_id: UUID, db: Session = Depends(get_db)) -> dict:
     group = _get_group_or_404(db, group_id)
     consolidate_group_legacy_members(db, group_id)
     stats = group_activity_stats(db, group.id)
-    members = (
-        db.query(User)
-        .filter(User.group_id == group_id, User.user_type == USER_TYPE_LEGACY_HOST)
-        .order_by(User.user_id)
-        .all()
-    )
-    identities = resolve_creator_identities_with_db(db, (m.user_id for m in members))
+    members = _visible_group_members(db, group_id)
+    identities = resolve_creator_identities_with_db(db, (hostname for _, hostname in members))
     member_summaries: list[dict] = []
-    for member in members:
-        identity = identity_for_hostname(member.user_id, identities)
+    for member, hostname in members:
+        identity = identity_for_hostname(hostname, identities)
+        summary_user = UserAnalyticsSummary(
+            id=member.id,
+            user_id=hostname,
+            name=member.name,
+            display_name=(
+                identity.display_name
+                if identity
+                else member.display_name or member.name or member.email or hostname
+            ),
+            avatar_url=identity.avatar_url if identity else member.avatar_url,
+            group_id=member.group_id,
+            group_name=member.group.name if member.group else None,
+            created_at=member.created_at,
+        )
+        member_stats = user_activity_stats(db, hostname)
+        summary_user = summary_user.model_copy(update=member_stats)
         member_summaries.append(
-            _user_summary(
-                db,
-                member,
-                identity_display_name=(
-                    identity.display_name if identity else member.display_name or member.name
-                ),
-                identity_avatar_url=identity.avatar_url if identity else member.avatar_url,
-            ).model_dump(mode="json")
+            summary_user.model_dump(mode="json")
         )
     return {
         "group": GroupAnalyticsSummary(

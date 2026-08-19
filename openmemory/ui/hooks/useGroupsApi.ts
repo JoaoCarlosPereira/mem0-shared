@@ -14,6 +14,7 @@ export interface GroupMember {
   name?: string | null;
   display_name?: string | null;
   avatar_url?: string | null;
+  machine_hostname?: string | null;
 }
 
 export interface GroupMemberCandidate {

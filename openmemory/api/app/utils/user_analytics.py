@@ -6,7 +6,14 @@ from datetime import datetime, timedelta
 from typing import Optional
 from uuid import UUID
 
-from app.models import User, WriteAuditLog, WriteQueueJob, USER_TYPE_LEGACY_HOST, get_current_utc_time
+from app.models import (
+    Machine,
+    User,
+    WriteAuditLog,
+    WriteQueueJob,
+    USER_TYPE_LEGACY_HOST,
+    get_current_utc_time,
+)
 from app.read_audit_log_model import ReadAuditLog
 from app.utils.datetime_utc import as_utc_naive
 from app.utils.machine_resolver import legacy_hostname_variants
@@ -240,12 +247,28 @@ def user_activity_stats(db: Session, hostname: str) -> dict:
 
 def group_activity_stats(db: Session, group_id: UUID) -> dict:
     """Roll up write/read stats across all members of a group."""
-    members = (
-        db.query(User.user_id)
-        .filter(User.group_id == group_id, User.user_type == USER_TYPE_LEGACY_HOST)
-        .all()
+    users = db.query(User).filter(User.group_id == group_id).all()
+    user_ids = [user.id for user in users]
+    machines = (
+        db.query(Machine).filter(Machine.linked_user_id.in_(user_ids)).all()
+        if user_ids
+        else []
     )
-    hostnames = [m.user_id for m in members]
+    linked_legacy_ids = {
+        machine.legacy_user_id
+        for machine in machines
+        if machine.legacy_user_id is not None
+    }
+    machine_by_person = {
+        machine.linked_user_id: machine.hostname
+        for machine in machines
+        if machine.linked_user_id is not None
+    }
+    hostnames = [
+        machine_by_person.get(user.id, user.user_id)
+        for user in users
+        if user.id not in linked_legacy_ids
+    ]
     if not hostnames:
         return {
             "member_count": 0,

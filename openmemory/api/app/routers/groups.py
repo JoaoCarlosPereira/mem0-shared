@@ -60,6 +60,7 @@ class MemberResponse(BaseModel):
     name: Optional[str] = None
     display_name: Optional[str] = None
     avatar_url: Optional[str] = None
+    machine_hostname: Optional[str] = None
 
 
 class MemberAdd(BaseModel):
@@ -103,18 +104,59 @@ def _legacy_members_query(db: Session, group_id: UUID):
 
 
 def _legacy_member_count(db: Session, group_id: UUID) -> int:
-    return _legacy_members_query(db, group_id).count()
+    return len(_group_members(db, group_id))
 
 
-def _member_response(db: Session, user: User) -> dict:
-    identities = resolve_creator_identities_with_db(db, [user.user_id])
-    identity = identity_for_hostname(user.user_id, identities)
+def _group_members(db: Session, group_id: UUID) -> list[tuple[User, Optional[str]]]:
+    """Return person accounts and unpaired legacy hosts in a group.
+
+    A linked machine may retain a historical ``legacy_host`` row. In that case
+    the Google ``person`` row is the canonical visible member, so the legacy
+    row is suppressed to avoid counting the same user twice.
+    """
+    users = db.query(User).filter(User.group_id == group_id).all()
+    user_ids = [user.id for user in users]
+    machines = (
+        db.query(Machine).filter(Machine.linked_user_id.in_(user_ids)).all()
+        if user_ids
+        else []
+    )
+    linked_legacy_ids = {
+        machine.legacy_user_id
+        for machine in machines
+        if machine.legacy_user_id is not None
+    }
+    machine_by_person = {
+        machine.linked_user_id: machine.hostname
+        for machine in machines
+        if machine.linked_user_id is not None
+    }
+    visible = [
+        (user, machine_by_person.get(user.id))
+        for user in users
+        if user.id not in linked_legacy_ids
+    ]
+    return sorted(
+        visible,
+        key=lambda item: (item[0].display_name or item[0].name or item[0].user_id).lower(),
+    )
+
+
+def _member_response(db: Session, user: User, machine_hostname: Optional[str] = None) -> dict:
+    identity_key = machine_hostname or user.user_id
+    identities = resolve_creator_identities_with_db(db, [identity_key])
+    identity = identity_for_hostname(identity_key, identities)
     return MemberResponse(
         id=user.id,
         user_id=user.user_id,
         name=user.name,
-        display_name=identity.display_name if identity else user.display_name or user.name,
+        display_name=(
+            identity.display_name
+            if identity
+            else user.display_name or user.name or user.email or user.user_id
+        ),
         avatar_url=identity.avatar_url if identity else user.avatar_url,
+        machine_hostname=machine_hostname,
     ).model_dump()
 
 
@@ -132,6 +174,20 @@ def _sync_linked_person_group(db: Session, legacy_user: User, group_id: UUID) ->
         person.group_id = group_id
 
 
+def _sync_linked_legacy_group(db: Session, person: User, group_id: UUID) -> None:
+    """Keep a historical hostname row aligned when moving a person account."""
+    machine = (
+        db.query(Machine)
+        .filter(Machine.linked_user_id == person.id, Machine.legacy_user_id.isnot(None))
+        .first()
+    )
+    if machine is None:
+        return
+    legacy = db.query(User).filter(User.id == machine.legacy_user_id).first()
+    if legacy is not None:
+        legacy.group_id = group_id
+
+
 def _name_taken(db: Session, name: str, exclude_id: Optional[UUID] = None) -> bool:
     q = db.query(Group).filter(func.lower(Group.name) == name.lower())
     if exclude_id is not None:
@@ -145,18 +201,10 @@ def _name_taken(db: Session, name: str, exclude_id: Optional[UUID] = None) -> bo
 @router.get("")
 def list_groups(db: Session = Depends(get_db)) -> dict:
     """Lista grupos com a contagem de membros."""
-    rows = (
-        db.query(Group, func.count(User.id))
-        .outerjoin(
-            User,
-            (User.group_id == Group.id) & (User.user_type == USER_TYPE_LEGACY_HOST),
-        )
-        .group_by(Group.id)
-        .order_by(Group.name)
-        .all()
-    )
+    rows = db.query(Group).order_by(Group.name).all()
     groups = [
-        GroupResponse(id=g.id, name=g.name, member_count=count) for g, count in rows
+        GroupResponse(id=g.id, name=g.name, member_count=_legacy_member_count(db, g.id))
+        for g in rows
     ]
     return {"groups": [g.model_dump() for g in groups]}
 
@@ -216,23 +264,31 @@ def list_member_candidates(db: Session = Depends(get_db)) -> dict:
     Não inclui contas Google (``person``). Evita digitação livre que criava
     usuários fantasma (ex.: nome de pessoa no lugar do hostname da máquina).
     """
-    users = (
-        db.query(User)
-        .filter(User.user_type == USER_TYPE_LEGACY_HOST)
-        .order_by(User.user_id)
-        .all()
-    )
-    identities = resolve_creator_identities_with_db(db, (u.user_id for u in users))
+    users = db.query(User).order_by(User.user_id).all()
+    machines = db.query(Machine).filter(Machine.linked_user_id.isnot(None)).all()
+    machine_by_person = {machine.linked_user_id: machine.hostname for machine in machines}
+    linked_legacy_ids = {
+        machine.legacy_user_id
+        for machine in machines
+        if machine.legacy_user_id is not None
+    }
     items: list[dict] = []
     for user in users:
-        identity = identity_for_hostname(user.user_id, identities)
+        if user.id in linked_legacy_ids:
+            continue
+        machine_hostname = machine_by_person.get(user.id)
+        identity_key = machine_hostname or user.user_id
+        identities = resolve_creator_identities_with_db(db, [identity_key])
+        identity = identity_for_hostname(identity_key, identities)
         items.append(
             MemberCandidate(
                 id=user.id,
                 user_id=user.user_id,
                 name=user.name,
                 display_name=(
-                    identity.display_name if identity else user.display_name or user.name
+                    identity.display_name
+                    if identity
+                    else user.display_name or user.name or user.email or user.user_id
                 ),
                 avatar_url=identity.avatar_url if identity else user.avatar_url,
                 group_id=user.group_id,
@@ -245,22 +301,10 @@ def list_member_candidates(db: Session = Depends(get_db)) -> dict:
 @router.get("/{group_id}/members")
 def list_members(group_id: UUID, db: Session = Depends(get_db)) -> dict:
     _get_group_or_404(db, group_id)
-    members = _legacy_members_query(db, group_id).order_by(User.user_id).all()
-    identities = resolve_creator_identities_with_db(db, (m.user_id for m in members))
+    members = _group_members(db, group_id)
     items: list[dict] = []
-    for member in members:
-        identity = identity_for_hostname(member.user_id, identities)
-        items.append(
-            MemberResponse(
-                id=member.id,
-                user_id=member.user_id,
-                name=member.name,
-                display_name=(
-                    identity.display_name if identity else member.display_name or member.name
-                ),
-                avatar_url=identity.avatar_url if identity else member.avatar_url,
-            ).model_dump()
-        )
+    for member, machine_hostname in members:
+        items.append(_member_response(db, member, machine_hostname))
     return {"members": items}
 
 
@@ -275,7 +319,9 @@ def add_member(group_id: UUID, payload: MemberAdd, db: Session = Depends(get_db)
     hostname = payload.user_id.strip()
     if not hostname:
         raise HTTPException(status_code=400, detail="user_id must not be empty")
-    user = consolidate_legacy_host_users(db, hostname)
+    user = db.query(User).filter(User.user_id == hostname).first()
+    if user is None:
+        user = consolidate_legacy_host_users(db, hostname)
     if user is None:
         user = find_legacy_host_user(db, hostname)
     if user is None:
@@ -284,26 +330,39 @@ def add_member(group_id: UUID, payload: MemberAdd, db: Session = Depends(get_db)
             detail="Hostname não encontrado; selecione um usuário existente",
         )
     user.group_id = group.id
-    _sync_linked_person_group(db, user, group.id)
+    if user.user_type == USER_TYPE_LEGACY_HOST:
+        _sync_linked_person_group(db, user, group.id)
+    else:
+        _sync_linked_legacy_group(db, user, group.id)
     db.commit()
     invalidate_group_cache(user.user_id)
-    return _member_response(db, user)
+    machine = (
+        db.query(Machine)
+        .filter(Machine.linked_user_id == user.id)
+        .order_by(Machine.linked_at.desc())
+        .first()
+    )
+    return _member_response(db, user, machine.hostname if machine else None)
 
 
 @router.delete("/{group_id}/members/{user_id}")
 def remove_member(group_id: UUID, user_id: str, db: Session = Depends(get_db)) -> dict:
     _get_group_or_404(db, group_id)
-    user = (
-        _legacy_members_query(db, group_id)
-        .filter(User.user_id == user_id)
-        .first()
-    )
+    user = db.query(User).filter(User.group_id == group_id, User.user_id == user_id).first()
+    if user is None:
+        user = (
+            _legacy_members_query(db, group_id)
+            .filter(User.user_id == user_id)
+            .first()
+        )
     if user is None:
         raise HTTPException(status_code=404, detail="Member not found in this group")
     # Realoca para o grupo Default (mantém a invariante "todo usuário tem um grupo").
     default_group = get_or_create_group(db, DEFAULT_GROUP_NAME)
     user.group_id = default_group.id
     _sync_linked_person_group(db, user, default_group.id)
+    if user.user_type != USER_TYPE_LEGACY_HOST:
+        _sync_linked_legacy_group(db, user, default_group.id)
     db.commit()
     invalidate_group_cache(user.user_id)
     return {"status": "moved_to_default"}
