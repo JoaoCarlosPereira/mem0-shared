@@ -99,7 +99,7 @@ export default function MetricsPage() {
                 <Skeleton className="h-[450px] w-full rounded-xl" />
               </div>
             ) : (
-              <TokenSummaryChart data={summaryData.summary.data} />
+              <TokenSummaryChart data={summaryData.summary!.data} />
             )}
           </TabsContent>
 
