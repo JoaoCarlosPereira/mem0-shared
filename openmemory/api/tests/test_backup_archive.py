@@ -224,7 +224,8 @@ def test_manifest_has_correct_checksums_and_points(tmp_path):
         snap = zf.read("qdrant/c1.snapshot")
         spec_tar = zf.read(SPEC_ARCNAME)
     assert manifest["points_count"] == 6  # 2 coleções x 3 pontos
-    assert manifest["schema_version"] == 1
+    assert manifest["schema_version"] == 2
+    assert manifest["qdrant"]["collections"]["c1"]["points_count"] == 3
     part = next(p for p in manifest["parts"] if p["path"] == "qdrant/c1.snapshot")
     assert part["sha256"] == hashlib.sha256(snap).hexdigest()
     att = next(p for p in manifest["parts"] if p["path"] == SPEC_ARCNAME)

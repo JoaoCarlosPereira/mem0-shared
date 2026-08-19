@@ -2,16 +2,19 @@ import { canRestore, isStale, isValidRetention } from "@/lib/backup";
 
 describe("canRestore", () => {
   it("habilita quando o texto bate exatamente com o nome do backup", () => {
-    expect(canRestore("20260618-030000.zip", "20260618-030000.zip")).toBe(true);
+    expect(canRestore("20260618-030000.zip", "20260618-030000.zip", true)).toBe(true);
   });
   it("desabilita quando o texto não bate", () => {
-    expect(canRestore("errado", "20260618-030000.zip")).toBe(false);
+    expect(canRestore("errado", "20260618-030000.zip", true)).toBe(false);
   });
   it("desabilita quando não há backup selecionado", () => {
-    expect(canRestore("", "")).toBe(false);
+    expect(canRestore("", "", true)).toBe(false);
   });
   it("ignora espaços nas pontas da confirmação", () => {
-    expect(canRestore("  20260618-030000.zip  ", "20260618-030000.zip")).toBe(true);
+    expect(canRestore("  20260618-030000.zip  ", "20260618-030000.zip", true)).toBe(true);
+  });
+  it("exige aceite explícito da sobrescrita completa", () => {
+    expect(canRestore("20260618-030000.zip", "20260618-030000.zip", false)).toBe(false);
   });
 });
 

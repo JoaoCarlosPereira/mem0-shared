@@ -212,6 +212,12 @@ class BackupArchiveInfo(BaseModel):
     size: int = 0
     points_count: Optional[int] = None
     location: str = "local"  # local | s3
+    schema_version: Optional[int] = None
+    verification_status: Literal[
+        "verified", "legacy_verified", "unverified", "invalid", "incompatible"
+    ] = "unverified"
+    restore_allowed: bool = False
+    verification_error: Optional[str] = None
 
 
 class BackupProgressResponse(BaseModel):
@@ -241,3 +247,4 @@ class BackupListResponse(BaseModel):
 class BackupRestoreRequest(BaseModel):
     archive: str
     confirm: str
+    acknowledge_complete_overwrite: bool = False

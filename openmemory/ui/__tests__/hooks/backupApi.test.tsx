@@ -146,7 +146,11 @@ describe("useBackupApi", () => {
     });
     let ok: boolean | undefined;
     await act(async () => {
-      const pending = result.current.restore("20260618-030000.zip", "20260618-030000.zip");
+      const pending = result.current.restore(
+        "20260618-030000.zip",
+        "20260618-030000.zip",
+        true,
+      );
       await jest.advanceTimersByTimeAsync(3000); // 1º poll: em curso
       await jest.advanceTimersByTimeAsync(3000); // 2º poll: concluído
       ok = await pending;
@@ -155,6 +159,14 @@ describe("useBackupApi", () => {
     expect(store.getState().backup.restoring).toBe(false);
     expect(store.getState().backup.restoreMessage).toMatch(/concluído/);
     expect(store.getState().backup.progress?.ok).toBe(true);
+    expect(mockedAxios.post).toHaveBeenCalledWith(
+      expect.stringContaining("/admin/backup/restore"),
+      {
+        archive: "20260618-030000.zip",
+        confirm: "20260618-030000.zip",
+        acknowledge_complete_overwrite: true,
+      },
+    );
     jest.useRealTimers();
   });
 
@@ -167,7 +179,7 @@ describe("useBackupApi", () => {
     });
     let ok: boolean | undefined;
     await act(async () => {
-      ok = await result.current.restore("20260618-030000.zip", "errado.zip");
+      ok = await result.current.restore("20260618-030000.zip", "errado.zip", true);
     });
     expect(ok).toBe(false);
     expect(store.getState().backup.restoring).toBe(false);
@@ -198,7 +210,11 @@ describe("useBackupApi", () => {
 
     let pending: Promise<boolean>;
     await act(async () => {
-      pending = result.current.restore("20260618-030000.zip", "20260618-030000.zip");
+      pending = result.current.restore(
+        "20260618-030000.zip",
+        "20260618-030000.zip",
+        true,
+      );
       await jest.advanceTimersByTimeAsync(180_000);
     });
     await act(async () => {

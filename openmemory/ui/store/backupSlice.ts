@@ -16,6 +16,15 @@ export interface BackupArchiveInfo {
   size: number;
   points_count: number | null;
   location: string;
+  schema_version: number | null;
+  verification_status:
+    | "verified"
+    | "legacy_verified"
+    | "unverified"
+    | "invalid"
+    | "incompatible";
+  restore_allowed: boolean;
+  verification_error: string | null;
 }
 
 export interface BackupProgress {

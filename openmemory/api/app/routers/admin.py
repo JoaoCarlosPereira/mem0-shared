@@ -54,7 +54,11 @@ from app.schemas import (
 from app.utils.admin_auth import require_admin
 from app.utils.identity_links import invalidate_identity_link_cache
 from app.utils.backup import BackupService
-from app.utils.backup_archive import BackupArchive
+from app.utils.backup_archive import (
+    ArchiveCorruptError,
+    BackupArchive,
+    SchemaIncompatibleError,
+)
 from app.utils.backup_policy import get_backup_policy, get_backup_policy_runtime, save_backup_policy
 from app.utils.backup_paths import to_container_path
 from app.utils.metrics import PROJECT_MEMORY_COUNT, PROJECT_SIZE_OVER_THRESHOLD
@@ -459,8 +463,31 @@ def backup_restore(
         raise HTTPException(status_code=404, detail=f"backup inexistente: {req.archive}")
     if req.confirm != req.archive:
         raise HTTPException(status_code=400, detail="confirmação não corresponde ao backup")
+    if not req.acknowledge_complete_overwrite:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "confirme explicitamente a sobrescrita completa do estado atual; "
+                "a reversão exigirá restaurar o backup pré-restore"
+            ),
+        )
+    try:
+        verification = archive.assert_restore_allowed(archive.path_for(req.archive))
+    except (SchemaIncompatibleError, ArchiveCorruptError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     background.add_task(archive.restore, archive.path_for(req.archive))
-    return {"status": "accepted", "archive": req.archive}
+    return {
+        "status": "accepted",
+        "archive": req.archive,
+        "verification_status": verification["status"],
+        "warning": (
+            "O restore sobrescreverá completamente o estado atual da memória, "
+            "do PostgreSQL, do Qdrant e dos anexos."
+        ),
+        "recovery": (
+            "A reversão exige restaurar o backup pre-restore criado antes da sobrescrita."
+        ),
+    }
 
 
 # --------------------------------------------------------------------------- #

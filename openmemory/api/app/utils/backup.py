@@ -19,8 +19,10 @@ from __future__ import annotations
 import gzip
 import logging
 import os
+import re
 import subprocess
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Callable, List, Optional
@@ -85,6 +87,70 @@ def _sanitize_pg_dump(sql: bytes) -> bytes:
         for line in lines
         if not line.lstrip().lower().startswith(b"set transaction_timeout")
     )
+
+
+_CREATE_SCHEMA_RE = re.compile(
+    rb"^\s*CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?P<name>\"(?:[^\"]|\"\")+\"|[A-Za-z_][A-Za-z0-9_$]*)\s*;",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _managed_schema_reset(sql: bytes) -> bytes:
+    """Prepara um dump SQL para substituir integralmente os schemas gerenciados.
+
+    Dumps SQL do ``pg_dump`` não incluem ``DROP`` por padrão. Aplicá-los sobre uma
+    instalação viva falha no primeiro objeto existente e não constitui restore.
+    O preâmbulo roda dentro da mesma ``--single-transaction`` do dump.
+    """
+    schemas = {b"public"}
+    for match in _CREATE_SCHEMA_RE.finditer(sql):
+        raw = match.group("name")
+        if raw.startswith(b'"'):
+            name = raw[1:-1].replace(b'""', b'"')
+        else:
+            name = raw
+        schemas.add(name)
+
+    ordered = sorted(schemas - {b"public"}) + [b"public"]
+    statements = []
+    for name in ordered:
+        quoted = b'"' + name.replace(b'"', b'""') + b'"'
+        statements.append(b"DROP SCHEMA IF EXISTS " + quoted + b" CASCADE;\n")
+    statements.append(b'CREATE SCHEMA "public";\n')
+    statements.append(b'GRANT ALL ON SCHEMA "public" TO CURRENT_USER;\n')
+    statements.append(b'SET search_path TO "public";\n')
+    footer = b"""
+DO $openmemory$
+BEGIN
+    IF to_regclass('planka.migration') IS NOT NULL
+       AND EXISTS (
+           SELECT 1 FROM planka.migration
+           WHERE name = '20260812000000_add_board_creator_user.js'
+       )
+       AND NOT EXISTS (
+           SELECT 1 FROM planka.migration
+           WHERE name = '20260818000000_add_board_creator_user.js'
+       )
+       AND EXISTS (
+           SELECT 1
+           FROM information_schema.columns
+           WHERE table_schema = 'planka'
+             AND table_name = 'board'
+             AND column_name = 'creator_user_id'
+       )
+    THEN
+        UPDATE planka.migration
+        SET name = '20260818000000_add_board_creator_user.js'
+        WHERE name = '20260812000000_add_board_creator_user.js';
+    END IF;
+    EXECUTE format(
+        'ALTER DATABASE %I SET search_path TO public',
+        current_database()
+    );
+END
+$openmemory$;
+"""
+    return b"".join(statements) + sql + footer
 
 
 @dataclass
@@ -188,28 +254,89 @@ class BackupService:
                 found = True
         return total if found else None
 
+    def qdrant_collection_points(self, qc=None) -> "dict[str, int]":
+        """Contagem exata por coleção, usada pelo manifesto e certificação."""
+        qc = qc if qc is not None else self._qdrant()
+        if qc is None:
+            return {}
+        result: "dict[str, int]" = {}
+        for name in self._collections(qc):
+            info = qc.get_collection(name)
+            count = getattr(info, "points_count", None)
+            if count is None:
+                raise RuntimeError(f"Qdrant não informou points_count para {name}")
+            result[name] = int(count)
+        return result
+
     # -- restore primitives (reutilizado por BackupArchive, task_03) -------
     def apply_pg_dump(self, dump: bytes) -> None:
-        """Aplica um dump gzip do PostgreSQL via ``psql`` (a partir de bytes)."""
-        sql = _sanitize_pg_dump(gzip.decompress(dump))
-        subprocess.run(
-            [
-                "psql",
-                "--dbname",
-                self._db_url,
-                "--single-transaction",
-                "--set",
-                "ON_ERROR_STOP=1",
-            ],
-            input=sql,
-            check=True,
-            timeout=BACKUP_PG_TIMEOUT,
+        """Substitui os schemas PostgreSQL pelo dump, em uma única transação."""
+        sql = _managed_schema_reset(_sanitize_pg_dump(gzip.decompress(dump)))
+        try:
+            subprocess.run(
+                [
+                    "psql",
+                    "--dbname",
+                    self._db_url,
+                    "--single-transaction",
+                    "--set",
+                    "ON_ERROR_STOP=1",
+                ],
+                input=sql,
+                check=True,
+                capture_output=True,
+                timeout=BACKUP_PG_TIMEOUT,
+            )
+            self._reconnect_pgbouncer()
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or b"").decode("utf-8", errors="replace").strip()
+            detail = stderr or f"psql terminou com código {exc.returncode}"
+            raise RuntimeError(f"Falha ao restaurar PostgreSQL: {detail}") from None
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"Falha ao restaurar PostgreSQL: tempo limite de {BACKUP_PG_TIMEOUT}s excedido"
+            ) from None
+
+    def _reconnect_pgbouncer(self) -> None:
+        """Descarta conexões de servidor antigas após a troca atômica de schemas."""
+        parsed = urllib.parse.urlsplit(self._db_url)
+        if (parsed.hostname or "").lower() != "pgbouncer":
+            return
+        admin_db = os.getenv("PGBOUNCER_ADMIN_DB", "pgbouncer")
+        admin_url = urllib.parse.urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                "/" + admin_db,
+                "",
+                "",
+            )
         )
+        try:
+            subprocess.run(
+                [
+                    "psql",
+                    "--dbname",
+                    admin_url,
+                    "--set",
+                    "ON_ERROR_STOP=1",
+                    "--command",
+                    f"RECONNECT {parsed.path.lstrip('/')};",
+                ],
+                check=True,
+                capture_output=True,
+                timeout=BACKUP_PG_TIMEOUT,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            logger.warning("PgBouncer RECONNECT failed after restore: %s", exc)
 
     def recover_qdrant_snapshot(self, name: str, data: bytes, qc=None) -> None:
         """Recupera uma coleção do Qdrant a partir dos bytes do snapshot."""
         qc = qc if qc is not None else self._qdrant()
         if qc is None:
+            return
+        if _is_real_qdrant_client(qc):
+            _upload_qdrant_snapshot_http(name, data)
             return
         qc.recover_snapshot(collection_name=name, location=data)
 
@@ -289,7 +416,7 @@ class BackupService:
             for k in [k for k in keys if "/qdrant/" in k]:
                 name = k.rsplit("/", 1)[-1].removesuffix(".snapshot")
                 obj = s3.get_object(Bucket=self._bucket, Key=k)
-                qc.recover_snapshot(collection_name=name, location=obj["Body"].read())
+                self.recover_qdrant_snapshot(name, obj["Body"].read(), qc=qc)
                 restored["qdrant"].append(name)
         return restored
 
@@ -392,3 +519,42 @@ def _download_collection_snapshot(qc, collection_name: str, snapshot_name: str) 
     if callable(downloader) and not _is_real_qdrant_client(qc):
         return downloader(collection_name=collection_name, snapshot_name=snapshot_name)
     return _download_qdrant_snapshot_http(collection_name, snapshot_name)
+
+
+def _upload_qdrant_snapshot_http(collection_name: str, data: bytes) -> None:
+    """Restaura bytes de snapshot pelo endpoint multipart oficial do Qdrant."""
+    import json
+    import urllib.error
+    import urllib.request
+    import uuid
+
+    host = os.getenv("QDRANT_HOST", "localhost")
+    port = os.getenv("QDRANT_PORT", "6333")
+    api_key = os.getenv("QDRANT_API_KEY", "")
+    boundary = f"----openmemory-{uuid.uuid4().hex}"
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="snapshot"; filename="snapshot.snapshot"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
+    url = (
+        f"http://{host}:{port}/collections/{collection_name}/snapshots/upload"
+        "?priority=snapshot"
+    )
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+    req.add_header("Content-Length", str(len(body)))
+    if api_key:
+        req.add_header("api-key", api_key)
+    try:
+        with urllib.request.urlopen(req, timeout=_qdrant_snapshot_timeout()) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"qdrant snapshot restore failed for {collection_name} ({exc.code}): {detail}"
+        ) from exc
+    if payload.get("status") != "ok" or payload.get("result") is not True:
+        raise RuntimeError(
+            f"qdrant snapshot restore returned unexpected payload for {collection_name}: {payload}"
+        )

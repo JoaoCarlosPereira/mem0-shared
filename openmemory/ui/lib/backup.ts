@@ -5,9 +5,17 @@
 // "desatualizado" na UI (alinhado ao PRD/TechSpec, alerta via UI + Prometheus).
 export const DEFAULT_RPO_THRESHOLD_SECONDS = 24 * 3600;
 
-/** Restore só é habilitado quando o texto de confirmação bate exatamente com o nome do backup. */
-export function canRestore(confirmText: string, archiveName: string): boolean {
-  return archiveName.length > 0 && confirmText.trim() === archiveName;
+/** Restore exige nome exato e aceite explícito da sobrescrita completa. */
+export function canRestore(
+  confirmText: string,
+  archiveName: string,
+  acknowledgeCompleteOverwrite: boolean,
+): boolean {
+  return (
+    acknowledgeCompleteOverwrite &&
+    archiveName.length > 0 &&
+    confirmText.trim() === archiveName
+  );
 }
 
 /** Último backup está desatualizado quando a idade (RPO) excede o limite. */

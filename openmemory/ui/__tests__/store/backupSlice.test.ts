@@ -107,7 +107,17 @@ describe("backupSlice", () => {
 
   it("setBackupList substitui a lista de cópias", () => {
     const archives: BackupArchiveInfo[] = [
-      { name: "a.zip", created_at: null, size: 1, points_count: 6, location: "local" },
+      {
+        name: "a.zip",
+        created_at: null,
+        size: 1,
+        points_count: 6,
+        location: "local",
+        schema_version: 2,
+        verification_status: "verified",
+        restore_allowed: true,
+        verification_error: null,
+      },
     ];
     const state = backupReducer(undefined, setBackupList(archives));
     expect(state.archives).toHaveLength(1);

@@ -6,7 +6,11 @@ import { HardDrive, AlertTriangle, RotateCcw, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { RootState } from "@/store/store";
-import { BackupPolicy, BackupProgress } from "@/store/backupSlice";
+import {
+  BackupArchiveInfo,
+  BackupPolicy,
+  BackupProgress,
+} from "@/store/backupSlice";
 import { useBackupApi } from "@/hooks/useBackupApi";
 import { canRestore, isStale, isValidRetention } from "@/lib/backup";
 
@@ -81,6 +85,7 @@ export default function BackupPage() {
   const [form, setForm] = useState<BackupPolicy>(DEFAULT_POLICY);
   const [selected, setSelected] = useState<string>("");
   const [confirmText, setConfirmText] = useState<string>("");
+  const [acknowledgeOverwrite, setAcknowledgeOverwrite] = useState(false);
 
   // A barra de conclusão ("Concluído") some após alguns segundos; o status/erro
   // continuam nos banners existentes.
@@ -114,6 +119,22 @@ export default function BackupPage() {
   }, [policy]);
 
   const stale = isStale(status?.rpo_age_seconds ?? null);
+  const selectedArchive = archives.find((archive) => archive.name === selected);
+
+  function verificationLabel(statusValue: BackupArchiveInfo["verification_status"]) {
+    switch (statusValue) {
+      case "verified":
+        return "verificado";
+      case "legacy_verified":
+        return "legado verificado";
+      case "invalid":
+        return "inválido";
+      case "incompatible":
+        return "incompatível";
+      default:
+        return "não verificado";
+    }
+  }
 
   return (
     <div className="flex flex-col gap-6 p-6 text-zinc-200">
@@ -278,16 +299,37 @@ export default function BackupPage() {
             onChange={(e) => {
               setSelected(e.target.value);
               setConfirmText("");
+              setAcknowledgeOverwrite(false);
             }}
           >
             <option value="">Selecione…</option>
             {archives.map((a) => (
-              <option key={`${a.location}:${a.name}`} value={a.name}>
-                {a.name} ({a.location})
+              <option
+                key={`${a.location}:${a.name}`}
+                value={a.name}
+                disabled={!a.restore_allowed}
+              >
+                {a.name} ({a.location}; {verificationLabel(a.verification_status)})
               </option>
             ))}
           </select>
         </label>
+        {selectedArchive && (
+          <div
+            className={`mt-2 rounded-md px-3 py-2 text-xs ${
+              selectedArchive.restore_allowed
+                ? "bg-emerald-950 text-emerald-300"
+                : "bg-red-950 text-red-300"
+            }`}
+          >
+            Certificação: {verificationLabel(selectedArchive.verification_status)}.
+            {selectedArchive.verification_error
+              ? ` ${selectedArchive.verification_error}`
+              : selectedArchive.restore_allowed
+                ? " O SHA-256 e o contrato do arquivo foram validados pelo motor de restore."
+                : " Este arquivo não pode ser restaurado."}
+          </div>
+        )}
         <label className="mt-2 block text-sm">
           Digite o nome do backup para confirmar
           <input
@@ -297,11 +339,30 @@ export default function BackupPage() {
             onChange={(e) => setConfirmText(e.target.value)}
           />
         </label>
+        <label className="mt-3 flex items-start gap-2 rounded-md border border-red-900 bg-red-950/40 p-3 text-sm text-red-200">
+          <input
+            aria-label="Confirmar sobrescrita completa"
+            type="checkbox"
+            className="mt-1"
+            checked={acknowledgeOverwrite}
+            onChange={(e) => setAcknowledgeOverwrite(e.target.checked)}
+          />
+          <span>
+            Entendo que o restore substituirá completamente o PostgreSQL, as coleções
+            de memória do Qdrant e os anexos atuais. Depois que a sobrescrita começar,
+            só será possível retornar ao estado atual restaurando o backup pré-restore
+            criado automaticamente.
+          </span>
+        </label>
         <Button
           variant="destructive"
           className="mt-3"
-          disabled={!canRestore(confirmText, selected) || restoring}
-          onClick={() => restore(selected, confirmText)}
+          disabled={
+            !selectedArchive?.restore_allowed ||
+            !canRestore(confirmText, selected, acknowledgeOverwrite) ||
+            restoring
+          }
+          onClick={() => restore(selected, confirmText, acknowledgeOverwrite)}
         >
           <RotateCcw className={`mr-1 h-4 w-4 ${restoring ? "animate-spin" : ""}`} />
           {restoring ? "Restaurando…" : "Restaurar"}
