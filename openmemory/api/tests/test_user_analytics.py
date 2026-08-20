@@ -193,7 +193,6 @@ def test_group_analytics_with_member_stats(factory, client):
 
 
 def test_group_analytics_includes_person_account_and_linked_machine(factory, client):
-    import uuid as _uuid
 
     s = factory()
     try:

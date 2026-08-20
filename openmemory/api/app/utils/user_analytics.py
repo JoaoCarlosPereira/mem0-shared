@@ -11,7 +11,6 @@ from app.models import (
     User,
     WriteAuditLog,
     WriteQueueJob,
-    USER_TYPE_LEGACY_HOST,
     get_current_utc_time,
 )
 from app.read_audit_log_model import ReadAuditLog

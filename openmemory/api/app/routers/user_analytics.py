@@ -7,7 +7,7 @@ from typing import Optional
 from uuid import UUID
 
 from app.database import get_db
-from app.models import Group, Machine, User, USER_TYPE_LEGACY_HOST
+from app.models import Group, Machine, User
 from app.utils.creator_identity import (
     identity_for_hostname,
     resolve_creator_identities_with_db,
