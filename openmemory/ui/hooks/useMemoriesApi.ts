@@ -110,6 +110,7 @@ interface UseMemoriesApiReturn {
   deleteMemories: (memoryIds: string[]) => Promise<void>;
   updateMemory: (memoryId: string, content: string) => Promise<void>;
   updateMemoryState: (memoryIds: string[], state: string) => Promise<void>;
+  fetchMemoryGraph: (projectId?: string) => Promise<{ nodes: any[]; links: any[] }>;
   deletionPolicy: DeletionPolicy | null;
   isLoading: boolean;
   error: string | null;
@@ -410,6 +411,24 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
     }
   };
 
+  const fetchMemoryGraph = async (projectId?: string): Promise<{ nodes: any[]; links: any[] }> => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (projectId) params.set("project", projectId);
+      const url = `${getApiUrl()}/api/v1/memories/graph${params.toString() ? `?${params.toString()}` : ""}`;
+      const response = await axios.get<{ nodes: any[]; links: any[] }>(url);
+      setIsLoading(false);
+      return { nodes: response.data.nodes, links: response.data.links };
+    } catch (err: any) {
+      const errorMessage = err.message || "Falha ao buscar grafo de memórias";
+      setError(errorMessage);
+      setIsLoading(false);
+      throw err;
+    }
+  };
+
   return {
     fetchMemories,
     fetchMemoryById,
@@ -419,6 +438,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
     deleteMemories,
     updateMemory,
     updateMemoryState,
+    fetchMemoryGraph,
     deletionPolicy,
     isLoading,
     error,

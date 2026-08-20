@@ -7,6 +7,17 @@ SEARCH_LATENCY = Histogram(
     "Latency of MCP search_memory calls",
     buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
 )
+# Feature "Visualização de Memórias em Grafo" (task_06): observabilidade do
+# endpoint GET /api/v1/memories/graph — latência do cold path (build do
+# grafo) e hit/miss do cache curto, por escopo (project ou 'global').
+GRAPH_BUILD_DURATION = Histogram(
+    "memory_graph_build_seconds",
+    "Duration of a memory graph cold build (Qdrant scroll + kNN searches)",
+    ["project"],
+    buckets=(0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0),
+)
+GRAPH_CACHE_HITS = Counter("memory_graph_cache_hit_total", "Memory graph cache hits", ["project"])
+GRAPH_CACHE_MISSES = Counter("memory_graph_cache_miss_total", "Memory graph cache misses", ["project"])
 EMBED_CACHE_HIT = Counter("embed_cache_hit_total", "Embedding cache hits")
 EMBED_CACHE_MISS = Counter("embed_cache_miss_total", "Embedding cache misses")
 SEARCH_CACHE_HIT = Counter("search_cache_hit_total", "Search result cache hits")
