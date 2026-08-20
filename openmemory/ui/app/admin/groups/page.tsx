@@ -251,7 +251,7 @@ export default function GroupsPage() {
             </Button>
           </div>
           <p className="mb-3 text-xs text-zinc-500">
-            Selecione um hostname já cadastrado. Digitação livre foi desabilitada
+            Selecione um usuário já cadastrado. Digitação livre foi desabilitada
             para evitar usuários fantasma.
           </p>
           <Table>
@@ -273,7 +273,7 @@ export default function GroupsPage() {
                   <TableRow key={m.id}>
                     <TableCell>
                       <ActorLabel
-                        hostname={m.user_id}
+                        hostname={m.machine_hostname ?? m.user_id}
                         displayName={m.display_name ?? m.name}
                         avatarUrl={m.avatar_url}
                       />

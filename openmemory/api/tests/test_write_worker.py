@@ -157,6 +157,53 @@ class TestConsumeSuccess:
         assert client.add.call_count == 1
         assert _status(db_path, job_id).status == WriteQueueStatus.done
 
+    @pytest.mark.asyncio
+    async def test_slow_autodedup_does_not_block_heartbeat_side_loop(
+        self, queue, db_path
+    ):
+        client = _async_client()
+        worker = WriteWorker(
+            queue=queue,
+            client_provider=lambda: client,
+            upsert_project=lambda *a, **k: None,
+            heartbeat_interval_sec=0.01,
+        )
+        # Production clamps this to >=1s; shorten only for the regression test.
+        worker._heartbeat_interval_sec = 0.01
+        job_id = queue.enqueue(_job())
+        dedup_started = asyncio.Event()
+        release_dedup = asyncio.Event()
+        beats = []
+        loop = asyncio.get_running_loop()
+
+        def slow_autodedup(*args, **kwargs):
+            loop.call_soon_threadsafe(dedup_started.set)
+            asyncio.run_coroutine_threadsafe(release_dedup.wait(), loop).result()
+
+        with patch(
+            "app.utils.autodedup.autodedup_after_write",
+            side_effect=slow_autodedup,
+        ):
+            with patch(
+                "app.workers.write_worker._heartbeat_beat",
+                side_effect=lambda meta=None: beats.append(meta),
+            ):
+                with patch.object(worker, "_log_llm_startup_status"):
+                    worker.start()
+                    await asyncio.wait_for(dedup_started.wait(), timeout=1)
+                    beats_before = len(beats)
+                    await asyncio.sleep(0.08)
+                    assert len(beats) > beats_before
+                    release_dedup.set()
+
+                    for _ in range(100):
+                        await asyncio.sleep(0.01)
+                        if _status(db_path, job_id).status == WriteQueueStatus.done:
+                            break
+                    await worker.stop()
+
+        assert _status(db_path, job_id).status == WriteQueueStatus.done
+
 
 # --------------------------------------------------------------------------- #
 # Failure handling

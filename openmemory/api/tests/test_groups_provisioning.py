@@ -98,3 +98,48 @@ def test_requester_group_for_mcp_registers_and_returns_group(session_factory):
     finally:
         s.close()
     assert groups_mod.requester_group_for_mcp("S0293") == "Fiscal"
+
+
+def test_ensure_user_group_inherits_linked_person_group(session_factory):
+    """Onboarding vincula person antes do legado existir — MCP não deve criar no Default."""
+    from app.models import Machine, MachineStatus, USER_TYPE_PERSON
+
+    s = session_factory()
+    try:
+        team = Group(name="Super Pricing")
+        s.add(team)
+        s.flush()
+        person = User(
+            user_id="google-sub-luis",
+            google_sub="google-sub-luis",
+            user_type=USER_TYPE_PERSON,
+            display_name="Luis Justino",
+            group_id=team.id,
+        )
+        s.add(person)
+        s.flush()
+        s.add(
+            Machine(
+                hostname="S0302",
+                linked_user_id=person.id,
+                status=MachineStatus.linked,
+            )
+        )
+        s.commit()
+    finally:
+        s.close()
+
+    groups_mod.ensure_user_group("S0302", None)
+    exists, group_name = _user_group_name(session_factory, "S0302")
+    assert exists
+    assert group_name == "Super Pricing"
+
+    s = session_factory()
+    try:
+        machine = s.query(Machine).filter(Machine.hostname == "S0302").first()
+        legacy = s.query(User).filter(User.user_id == "S0302").first()
+        assert machine is not None and legacy is not None
+        assert machine.legacy_user_id == legacy.id
+    finally:
+        s.close()
+

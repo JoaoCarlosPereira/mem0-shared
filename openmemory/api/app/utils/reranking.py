@@ -83,6 +83,38 @@ def reset_reranker_cache() -> None:
         _loaded = False
 
 
+def rerank_config_status() -> dict:
+    """Operator-facing status: whether rerank is configured and usable.
+
+    Does not load the model unless already cached — reports env + cache state.
+    """
+    provider = reranker_provider() or None
+    configured = bool(provider)
+    if not configured:
+        return {
+            "configured": False,
+            "provider": None,
+            "reason": "not_configured",
+        }
+    if _loaded:
+        if _reranker is None:
+            return {
+                "configured": True,
+                "provider": provider,
+                "reason": _load_error or "unavailable",
+            }
+        return {
+            "configured": True,
+            "provider": provider,
+            "reason": None,
+        }
+    return {
+        "configured": True,
+        "provider": provider,
+        "reason": "not_loaded_yet",
+    }
+
+
 def _normalize_into_score(results: list[dict]) -> None:
     """Map ``rerank_score`` onto ``score`` in [0, 1], preserving the originals.
 

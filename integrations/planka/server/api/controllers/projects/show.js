@@ -102,6 +102,8 @@
 
 const { idInput } = require('../../../utils/inputs');
 const filterBoardsByGroup = require('../../../utils/filter-boards-by-group');
+const getBoardGroupIds = require('../../../utils/get-board-group-ids');
+const getGroupVisibilityUserIds = require('../../../utils/get-group-visibility-user-ids');
 
 const Errors = {
   PROJECT_NOT_FOUND: {
@@ -157,29 +159,24 @@ module.exports = {
 
     if (boards.length > 0 && currentUser.email) {
       try {
-        const groupResult = await sails.sendNativeQuery(
-          `SELECT group_id FROM public.users WHERE lower(email) = lower($1) AND group_id IS NOT NULL LIMIT 1`,
-          [currentUser.email],
+        const groupVisibilityUserIds = await getGroupVisibilityUserIds(
+          (sql, values) => sails.sendNativeQuery(sql, values),
+          currentUser,
         );
-        if (groupResult.rows.length > 0) {
-          const groupId = groupResult.rows[0].group_id;
-          const result = await sails.sendNativeQuery(
-            `SELECT ua.id, grouped_user.group_id = $1 AS same_group
-               FROM planka.user_account AS ua
-               JOIN public.users AS grouped_user
-                 ON lower(grouped_user.email) = lower(ua.email)
-              WHERE grouped_user.group_id IS NOT NULL`,
-            [groupId],
+        if (groupVisibilityUserIds) {
+          const boardGroupIds = await getBoardGroupIds(
+            (sql, values) => sails.sendNativeQuery(sql, values),
+            boards,
           );
           boards = filterBoardsByGroup(
             boards,
-            [
-              ...result.rows
-                .filter(({ same_group: sameGroup }) => sameGroup)
-                .map(({ id }) => String(id)),
-              currentUser.id,
-            ],
-            result.rows.map(({ id }) => String(id)),
+            [...groupVisibilityUserIds.sameGroupUserIds, currentUser.id],
+            groupVisibilityUserIds.groupedUserIds,
+            {
+              boardGroupIds,
+              currentGroupId: groupVisibilityUserIds.currentGroupId,
+              restrictUnknownCreators: groupVisibilityUserIds.restrictUnknownCreators,
+            },
           );
         }
       } catch (error) {
@@ -187,6 +184,11 @@ module.exports = {
         boards = [];
       }
     }
+
+    const visibleBoardIds = new Set(boards.map(({ id }) => String(id)));
+    const visibleBoardMemberships = boardMemberships.filter(({ boardId }) =>
+      visibleBoardIds.has(String(boardId)),
+    );
 
     project.isFavorite = await sails.helpers.users.isProjectFavorite(currentUser.id, project.id);
 
@@ -215,7 +217,7 @@ module.exports = {
         projectManagers,
         baseCustomFieldGroups,
         boards,
-        boardMemberships,
+        boardMemberships: visibleBoardMemberships,
         customFields,
         notificationServices,
         users: sails.helpers.users.presentMany(users, currentUser),

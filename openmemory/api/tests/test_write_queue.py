@@ -287,3 +287,29 @@ class TestPersistence:
             assert texts == {"persist-me", "and-me"}
         finally:
             engine2.dispose()
+
+
+# ---------------------------------------------------------------------------
+# ETA calibration (MCP add_memories ack)
+# ---------------------------------------------------------------------------
+
+
+class TestEstimateWriteWaitSec:
+    def test_defaults_match_serial_llm_drain(self, monkeypatch):
+        from app.utils.write_queue import estimate_write_wait_sec
+
+        monkeypatch.delenv("WRITE_WORKER_EMA_JOB_SEC", raising=False)
+        monkeypatch.delenv("WRITE_WORKER_ETA_CONCURRENCY", raising=False)
+        monkeypatch.setenv("WRITE_WORKER_MAX_CONCURRENCY", "2")
+        # depth 40 × 45s / 1 ≈ 1800 (not optimistic 40×50/2=1000)
+        assert estimate_write_wait_sec(40) == 1800
+
+    def test_explicit_eta_concurrency(self, monkeypatch):
+        from app.utils.write_queue import estimate_write_wait_sec
+
+        assert (
+            estimate_write_wait_sec(3, ema_job_sec=50, concurrency=2) == 75
+        )
+        monkeypatch.setenv("WRITE_WORKER_EMA_JOB_SEC", "45")
+        monkeypatch.setenv("WRITE_WORKER_ETA_CONCURRENCY", "2")
+        assert estimate_write_wait_sec(4) == 90

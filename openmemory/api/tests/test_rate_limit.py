@@ -92,6 +92,11 @@ def test_middleware_blocks_after_search_limit(monkeypatch):
         resp = client.get("/x", headers={"x-hostname": "h1"})
     assert resp.status_code == 429
     assert int(resp.headers["Retry-After"]) > 0
+    body = resp.json()
+    assert body["detail"] == "rate limit exceeded"
+    assert body["error"] == "rate_limit_exceeded"
+    assert body["retry_after_sec"] == int(resp.headers["Retry-After"])
+    assert body["retry_after_sec"] > 0
 
 
 def test_middleware_independent_projects(monkeypatch):

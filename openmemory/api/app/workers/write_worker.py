@@ -67,6 +67,10 @@ JOB_TIMEOUT_ERROR_FMT = (
 
 # Default bound on concurrent LLM inferences. Kept small so the local LLM is not
 # saturated by a burst of queued writes; overridable via the constructor.
+# NOTE: local llama.cpp often runs with ``--parallel 1``; raising this without
+# raising LLM parallel slots does not improve drain rate (requests still serialize).
+# Also: the shared mem0 Memory singleton is not safe for overlapping ``add()``;
+# only raise concurrency after confirming LLM parallel slots AND client isolation.
 DEFAULT_MAX_CONCURRENCY = 1
 
 # How many times a job is attempted before it is marked terminally ``failed``.
@@ -76,6 +80,8 @@ DEFAULT_MAX_ATTEMPTS = 3
 
 # How many jobs to pull from the queue per pass and how long to idle (seconds)
 # when the queue is empty before polling again.
+# Must be >= max_concurrency or the semaphore never sees overlapping jobs
+# (historical bug: concurrency=2 + batch_size=1 → strictly serial drain).
 DEFAULT_BATCH_SIZE = 1
 DEFAULT_IDLE_SLEEP = 1.0
 
@@ -195,7 +201,10 @@ class WriteWorker:
         self._client_provider = client_provider or _default_client_provider
         self._upsert_project = upsert_project or _default_upsert_project
         self._max_concurrency = max(1, int(max_concurrency))
-        self._batch_size = max(1, int(batch_size))
+        # Dequeue at least max_concurrency jobs per pass so the semaphore can
+        # actually overlap work. A smaller batch_size silently forced serial FIFO.
+        configured_batch = max(1, int(batch_size))
+        self._batch_size = max(configured_batch, self._max_concurrency)
         self._idle_sleep = idle_sleep
         self._max_attempts = max(1, int(max_attempts))
         self._failed_retry_after_minutes = max(0, int(failed_retry_after_minutes))
@@ -294,7 +303,7 @@ class WriteWorker:
             return
         self._maybe_dual_write(client, result)
         self._apply_supersedes(client, job, result)
-        self._auto_supersede_duplicates(client, job, result)
+        await self._auto_supersede_duplicates(client, job, result)
         self._catalog_project(job)
         read_cache.invalidate_search(job.project)
         # Prefer conditional done: a concurrent timeout/stall watchdog may have
@@ -461,17 +470,25 @@ class WriteWorker:
                 "supersedes apply failed job_id=%s project=%s", job.id, job.project
             )
 
-    def _auto_supersede_duplicates(self, client, job: WriteJob, result) -> None:
+    async def _auto_supersede_duplicates(self, client, job: WriteJob, result) -> None:
         """Supersede existing memories that duplicate what was just written.
 
         Complements ``_apply_supersedes``, which only handles IDs the caller knew
         about. Off unless MEM0_AUTODEDUP_MODE is set; see app.utils.autodedup.
+        The lookup is synchronous and may perform one slow embedding request per
+        extracted memory, so keep it off the event loop. Otherwise the heartbeat
+        side task is starved and the API incorrectly reports a dead worker while
+        the job is still making progress.
         """
         try:
             from app.utils.autodedup import autodedup_after_write
 
-            autodedup_after_write(
-                client, result, project=job.project, job_id=job.id
+            await asyncio.to_thread(
+                autodedup_after_write,
+                client,
+                result,
+                project=job.project,
+                job_id=job.id,
             )
         except Exception:  # noqa: BLE001 - dedup must never fail a write
             logger.exception(
@@ -515,7 +532,9 @@ class WriteWorker:
         self._log_llm_startup_status()
         logger.info(
             "write worker started (max_concurrency=%s, batch_size=%s, "
-            "job_timeout_sec=%s)",
+            "job_timeout_sec=%s). Overlapping Phase-2 still requires the LLM "
+            "server to accept parallel slots (e.g. llama.cpp --parallel N); "
+            "otherwise drain stays ~serial despite concurrency>1.",
             self._max_concurrency,
             self._batch_size,
             self._job_timeout_sec,

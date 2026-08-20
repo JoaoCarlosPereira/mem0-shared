@@ -192,6 +192,43 @@ def test_group_analytics_with_member_stats(factory, client):
     assert body["members"][0]["offline_days"] is None
 
 
+def test_group_analytics_includes_person_account_and_linked_machine(factory, client):
+    import uuid as _uuid
+
+    s = factory()
+    try:
+        group = Group(name="Google Team")
+        s.add(group)
+        s.flush()
+        person = User(
+            user_id="google-sub-1",
+            user_type=USER_TYPE_PERSON,
+            google_sub="google-sub-1",
+            display_name="Rafael Chielle",
+            group_id=group.id,
+        )
+        s.add(person)
+        s.flush()
+        s.add(
+            Machine(
+                hostname="S0352",
+                linked_user_id=person.id,
+                status=MachineStatus.linked,
+            )
+        )
+        s.commit()
+        group_id = str(group.id)
+    finally:
+        s.close()
+
+    r = client.get(f"/admin/analytics/groups/{group_id}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["group"]["member_count"] == 1
+    assert body["members"][0]["user_id"] == "S0352"
+    assert body["members"][0]["display_name"] == "Rafael Chielle"
+
+
 def test_group_analytics_offline_member_does_not_500(factory, client):
     """Regression: group detail must return 200 when a member is offline."""
     from datetime import timezone
@@ -221,6 +258,9 @@ def test_group_analytics_offline_member_does_not_500(factory, client):
 
 
 def test_group_analytics_shows_google_display_name_for_linked_machine(factory, client):
+    """Após o vínculo, a person (no mesmo grupo) é o membro canônico com o hostname."""
+    import uuid as _uuid
+
     group_id, hostname = _seed_group_and_user(factory, hostname="S0293")
     s = factory()
     try:
@@ -229,6 +269,7 @@ def test_group_analytics_shows_google_display_name_for_linked_machine(factory, c
             google_sub="google-sub-1",
             display_name="João Silva",
             user_type=USER_TYPE_PERSON,
+            group_id=_uuid.UUID(group_id),
         )
         legacy = s.query(User).filter(User.user_id == hostname).one()
         s.add(person)
@@ -247,7 +288,9 @@ def test_group_analytics_shows_google_display_name_for_linked_machine(factory, c
 
     r = client.get(f"/admin/analytics/groups/{group_id}")
     assert r.status_code == 200
-    member = r.json()["members"][0]
+    members = r.json()["members"]
+    assert len(members) == 1
+    member = members[0]
     assert member["user_id"] == hostname
     assert member["display_name"] == "João Silva"
 

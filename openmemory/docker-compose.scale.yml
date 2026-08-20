@@ -57,6 +57,10 @@ x-api-common: &api-common
     OPENMEMORY_DISCOVERY_BASE_URL: ${OPENMEMORY_DISCOVERY_BASE_URL:-}
     RUN_EMBEDDED_WORKER: "false"
     WRITE_WORKER_MAX_CONCURRENCY: ${WRITE_WORKER_MAX_CONCURRENCY:-1}
+    # ETA for MCP ack: measured ~45s/job with serial LLM; do not divide by worker
+    # concurrency until llama.cpp --parallel (or equivalent) is raised.
+    WRITE_WORKER_EMA_JOB_SEC: ${WRITE_WORKER_EMA_JOB_SEC:-45}
+    WRITE_WORKER_ETA_CONCURRENCY: ${WRITE_WORKER_ETA_CONCURRENCY:-1}
     WRITE_QUEUE_STALL_WATCHDOG_INTERVAL_SEC: ${WRITE_QUEUE_STALL_WATCHDOG_INTERVAL_SEC:-60}
     WRITE_WORKER_HEARTBEAT_STALE_SEC: ${WRITE_WORKER_HEARTBEAT_STALE_SEC:-90}
     # Limites do caminho de leitura MCP: uma busca lenta não deve prender a
@@ -218,6 +222,8 @@ services:
     environment:
       <<: *api-env
       RUN_EMBEDDED_WORKER: "false"
+      # Keep <= llama.cpp --parallel (currently 1). Raising without LLM parallel
+      # slots does not speed drain; batch_size is auto-raised to >= concurrency.
       WRITE_WORKER_MAX_CONCURRENCY: ${WRITE_WORKER_MAX_CONCURRENCY:-1}
       WRITE_WORKER_BATCH_SIZE: ${WRITE_WORKER_BATCH_SIZE:-1}
       WRITE_WORKER_JOB_TIMEOUT_SEC: ${WRITE_WORKER_JOB_TIMEOUT_SEC:-1800}

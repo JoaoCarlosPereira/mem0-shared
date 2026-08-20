@@ -52,18 +52,20 @@ Call `search_memories` with:
 
 ### Check 4: Memory write capability
 
-Call `add_memory` with:
+Call `add_memories` (OpenMemory) or `add_memory` (hosted) with a probe:
 - `text="Health check probe — safe to delete."`
-- `user_id=<active_user_id>`
-- `app_id=<active_project_id>`
-- `metadata={"type": "health_check", "probe": true}`
-- `infer=False`
+- project / `app_id=<active_project_id>`
+- metadata probe flags as supported
 
-The response returns `event_id` (v3 writes are async). Call `get_event_status(event_id=<event_id>)` to check processing.
+**Rate limit:** On HTTP 429 / `rate_limit_exceeded`, wait `retry_after_sec` and retry the same probe 1–3×; do not treat rate limit as a write-capability failure until retries are exhausted.
 
-- If status is `SUCCEEDED`: PASS — extract the memory ID from the event result, then call `delete_memory` with that ID to clean up.
+OpenMemory returns `status=accepted` with `job_id` / `queue_depth` — PASS if accepted (memory is not searchable immediately). Hosted may return `event_id`; call `get_event_status` once if available.
+
+- If status is `SUCCEEDED` / `accepted`: PASS
 - If status is `PENDING` after 5 seconds: PASS (write accepted, processing delayed)
-- If errors: FAIL — show the error.
+- If errors after retries: FAIL — show the error.
+
+On OpenMemory, do **not** call delete tools to clean up unless `MEM0_ALLOW_MEMORY_DELETE` is explicitly enabled by an operator (default fail-closed).
 
 ### Check 5: Session stats tracker
 

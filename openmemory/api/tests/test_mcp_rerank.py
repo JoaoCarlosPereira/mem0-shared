@@ -98,7 +98,19 @@ class TestRerankReporting:
 
         assert data["rerank"]["applied"] is False
         assert data["rerank"]["reason"] == "not_configured"
+        assert data["rerank"]["provider"] is None
         assert len(data["results"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_rerank_config_status_not_configured(self, monkeypatch):
+        monkeypatch.delenv("MEM0_RERANKER_PROVIDER", raising=False)
+        reranking.reset_reranker_cache()
+        status = reranking.rerank_config_status()
+        assert status == {
+            "configured": False,
+            "provider": None,
+            "reason": "not_configured",
+        }
 
     @pytest.mark.asyncio
     async def test_provider_that_fails_to_load_reports_reason(

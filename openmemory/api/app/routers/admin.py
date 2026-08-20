@@ -527,6 +527,27 @@ def write_guard_admin() -> dict:
     }
 
 
+@router.get("/rerank")
+def rerank_admin() -> dict:
+    """Expose whether cross-encoder rerank is configured (honesty for operators)."""
+    from app.utils.reranking import rerank_config_status
+
+    status = rerank_config_status()
+    if not status["configured"]:
+        message = (
+            "Rerank not configured (default). search_memory(rerank=true) returns "
+            "applied=false reason=not_configured. To enable later: set "
+            "MEM0_RERANKER_PROVIDER (e.g. sentence_transformer or cohere) and "
+            "optional MEM0_RERANKER_MODEL / MEM0_RERANKER_API_KEY, then recreate "
+            "only openmemory-mcp."
+        )
+    elif status.get("reason") and status["reason"] != "not_loaded_yet":
+        message = f"Rerank provider set but unavailable: {status['reason']}"
+    else:
+        message = f"Rerank configured with provider={status['provider']}."
+    return {**status, "message": message}
+
+
 # --------------------------------------------------------------------------- #
 # Admin dashboard: overview, write-queue & write-audit (Interface Admin)
 # --------------------------------------------------------------------------- #

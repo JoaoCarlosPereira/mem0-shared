@@ -57,7 +57,7 @@ from app.utils.recency import rank_search_results
 from app.utils.reranking import apply_rerank
 from app.utils.token_usage_wrapper import usage_attribution
 from app.utils.write_guard import check_write_allowed
-from app.utils.write_queue import WriteJob, write_queue
+from app.utils.write_queue import WriteJob, estimate_write_wait_sec, write_queue
 from fastapi import FastAPI, Request
 from fastapi.routing import APIRouter
 from mcp.server.fastmcp import FastMCP
@@ -174,7 +174,7 @@ mcp_router = APIRouter(prefix="/mcp")
 # Initialize SSE transport
 sse = SseServerTransport("/mcp/messages/")
 
-@mcp.tool(description="Save content for asynchronous memory extraction in a project. Call this whenever the user shares durable facts or preferences, or asks you to remember something. `project` is REQUIRED and scopes the memory (memories are shared across all machines on the local network). Optional `supersedes` is a list of memory IDs this write replaces — those are marked obsolete and hidden from search by default. Returns immediately with status accepted after enqueue; extraction runs in the background. Do NOT poll for job status. To find conflicting memories, use search_memory / mark_obsolete — never on this write path.")
+@mcp.tool(description="Save content for asynchronous memory extraction in a project. Call this whenever the user shares durable facts or preferences, or asks you to remember something. `project` is REQUIRED and scopes the memory (memories are shared across all machines on the local network). Optional `supersedes` is a list of memory IDs this write replaces — those are marked obsolete and hidden from search by default. Returns immediately with status accepted after enqueue (includes job_id, queue_depth, estimated_wait_sec); extraction runs in the background — the memory is not searchable until the worker finishes. Do NOT poll for job status. If the HTTP call returns 429 / rate_limit_exceeded, wait retry_after_sec (or Retry-After) and retry the same text 1–3 times with backoff; do not discard the content. To find conflicting memories, use search_memory / mark_obsolete — never on this write path.")
 async def add_memories(
     text: str,
     project: str,
@@ -250,11 +250,24 @@ async def add_memories(
         supersede_ids or None,
     )
 
+    queue_depth = 0
+    try:
+        queue_depth = int(write_queue.depth())
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("write_queue.depth() failed after enqueue: %s", exc)
+
+    estimated_wait_sec = estimate_write_wait_sec(queue_depth)
+
     payload = {
         "status": "accepted",
+        "job_id": job_id,
+        "queue_depth": queue_depth,
+        "estimated_wait_sec": estimated_wait_sec,
         "message": (
-            "Memory received successfully. The server will process and store it "
-            "in the background — no further action needed."
+            "Memory queued for background extraction; it is not searchable yet. "
+            "An immediate search may miss it — that is expected, not an error. "
+            "Do NOT poll for job status. Operators can inspect GET /admin/write-queue "
+            "or /health (not on the hot agent path)."
         ),
         "project": project,
     }
@@ -431,7 +444,7 @@ async def _fetch_all_memories(memory_client, top_k: int = DEFAULT_LIST_TOP_K) ->
     return [_point_to_memory_result(p) for p in points]
 
 
-@mcp.tool(description="Search stored memories across all projects, ranked by relevance and recency. By default `project` is a soft hint (slight boost for matching names) — wrong or slightly different project names do not exclude results. Pass `strict_project=true` to hard-filter to that exact project name only. Obsolete (superseded) memories are hidden by default; pass `include_obsolete=true` for audit. Pass `rerank=true` to refine relevance with a cross-encoder when the server has one configured — the response then carries a `rerank` object reporting whether it was actually applied. Memories are shared across all machines on the local network.")
+@mcp.tool(description="Search stored memories across all projects, ranked by relevance and recency. By default `project` is a soft hint (slight boost for matching names) — wrong or slightly different project names do not exclude results. Pass `strict_project=true` to hard-filter to that exact project name only. Obsolete (superseded) memories are hidden by default; pass `include_obsolete=true` for audit. Pass `rerank=true` only if you want cross-encoder reordering: it applies solely when MEM0_RERANKER_PROVIDER is set on the server; otherwise the response includes `rerank.applied=false` with reason `not_configured` (expected, not a bug). Memories are shared across all machines on the local network.")
 async def search_memory(
     query: str,
     project: str,

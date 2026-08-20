@@ -376,3 +376,52 @@ class WriteQueue:
 # Default instance backed by the application's SessionLocal. The worker
 # (task_06) and add_memories (task_07) import this.
 write_queue = WriteQueue()
+
+
+def estimate_write_wait_sec(
+    queue_depth: int,
+    *,
+    ema_job_sec: float | None = None,
+    concurrency: int | None = None,
+) -> int:
+    """Approximate seconds until a just-enqueued write becomes searchable.
+
+    Uses ``depth * ema_job_sec / eta_concurrency``.
+
+    Defaults reflect measured local drain (~43–50s/job wall-clock) with a
+    **serial** LLM (llama.cpp ``--parallel 1`` / Ollama embed ``-np 1``):
+
+    - ``WRITE_WORKER_EMA_JOB_SEC`` default **45** (Phase-2 dominated job time)
+    - ``WRITE_WORKER_ETA_CONCURRENCY`` default **1** (do not assume worker
+      ``MAX_CONCURRENCY`` speeds the queue when the LLM only accepts one slot)
+
+    Set ``WRITE_WORKER_ETA_CONCURRENCY`` to match real parallel LLM slots when
+    those are raised; until then, dividing by ``WRITE_WORKER_MAX_CONCURRENCY``
+    underestimates wait by ~40%+ (e.g. depth 40 → ~1000s optimistic vs ~1800s).
+    """
+    import math
+    import os
+
+    if ema_job_sec is None:
+        try:
+            ema_job_sec = float(os.getenv("WRITE_WORKER_EMA_JOB_SEC", "45"))
+        except ValueError:
+            ema_job_sec = 45.0
+    if concurrency is None:
+        # Prefer explicit ETA concurrency; do NOT default to MAX_CONCURRENCY
+        # (worker semaphore can be >1 while the LLM still serializes).
+        raw = os.getenv("WRITE_WORKER_ETA_CONCURRENCY")
+        if raw is None or raw.strip() == "":
+            concurrency = 1
+        else:
+            try:
+                concurrency = int(raw)
+            except ValueError:
+                concurrency = 1
+
+    depth = max(0, int(queue_depth))
+    ema = max(0.1, float(ema_job_sec))
+    conc = max(1, int(concurrency))
+    if depth <= 0:
+        return 0
+    return int(math.ceil(depth * ema / conc))

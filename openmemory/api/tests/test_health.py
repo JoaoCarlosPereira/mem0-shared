@@ -52,7 +52,10 @@ class TestHealth:
         ):
             resp = await client.get("/health")
         assert resp.status_code == 200
-        assert resp.json()["status"] == "healthy"
+        body = resp.json()
+        assert body["status"] == "healthy"
+        assert body["checks"]["rerank"]["reason"] == "not_configured"
+        assert body["checks"]["rerank"]["configured"] is False
 
     @pytest.mark.asyncio
     async def test_unhealthy_when_database_fails(self, client, health_mod):

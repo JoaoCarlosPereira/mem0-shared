@@ -151,6 +151,9 @@
  */
 
 const { idInput } = require('../../../utils/inputs');
+const getBoardGroupIds = require('../../../utils/get-board-group-ids');
+const filterBoardsByGroup = require('../../../utils/filter-boards-by-group');
+const getGroupVisibilityUserIds = require('../../../utils/get-group-visibility-user-ids');
 
 const Errors = {
   BOARD_NOT_FOUND: {
@@ -181,6 +184,39 @@ module.exports = {
     const { board, project } = await sails.helpers.boards
       .getPathToProjectById(inputs.id)
       .intercept('pathNotFound', () => Errors.BOARD_NOT_FOUND);
+
+    if (currentUser.email) {
+      try {
+        const groupVisibilityUserIds = await getGroupVisibilityUserIds(
+          (sql, values) => sails.sendNativeQuery(sql, values),
+          currentUser,
+        );
+        if (
+          groupVisibilityUserIds &&
+          filterBoardsByGroup(
+            [board],
+            [...groupVisibilityUserIds.sameGroupUserIds, currentUser.id],
+            groupVisibilityUserIds.groupedUserIds,
+            {
+              boardGroupIds: await getBoardGroupIds(
+                (sql, values) => sails.sendNativeQuery(sql, values),
+                [board],
+              ),
+              currentGroupId: groupVisibilityUserIds.currentGroupId,
+              restrictUnknownCreators: true,
+            },
+          ).length === 0
+        ) {
+          throw Errors.BOARD_NOT_FOUND;
+        }
+      } catch (error) {
+        if (error === Errors.BOARD_NOT_FOUND) {
+          throw error;
+        }
+        sails.log.warn('boards/show: failed to resolve current user group:', error.message);
+        throw Errors.BOARD_NOT_FOUND;
+      }
+    }
 
     if (currentUser.role !== User.Roles.ADMIN || project.ownerProjectManagerId) {
       const isProjectManager = await sails.helpers.users.isProjectManager(

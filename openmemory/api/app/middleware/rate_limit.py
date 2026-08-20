@@ -267,8 +267,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 
 def _too_many(retry_after: int) -> JSONResponse:
+    """429 with actionable body so MCP/agents can wait and retry the write."""
+    retry = max(int(retry_after), 1)
     return JSONResponse(
         status_code=429,
-        content={"detail": "rate limit exceeded"},
-        headers={"Retry-After": str(retry_after)},
+        content={
+            "detail": "rate limit exceeded",
+            "retry_after_sec": retry,
+            "error": "rate_limit_exceeded",
+        },
+        headers={"Retry-After": str(retry)},
     )

@@ -114,35 +114,39 @@ export function* handleLocationChange() {
       break;
     }
     case Paths.BOARDS:
-      if (currentBoard) {
-        ({ id: currentBoardId } = currentBoard);
+      if (!currentBoard) {
+        yield call(goToRoot);
+        return;
+      }
 
-        if (currentBoard.isFetching === null) {
-          yield put(actions.handleLocationChange.fetchBoard(currentBoard.id));
+      ({ id: currentBoardId } = currentBoard);
 
-          try {
-            ({
-              item: board,
-              included: {
-                projects,
-                boardMemberships,
-                labels,
-                lists,
-                cards,
-                users: users1,
-                cardMemberships: cardMemberships1,
-                cardLabels: cardLabels1,
-                taskLists: taskLists1,
-                tasks: tasks1,
-                attachments: attachments1,
-                customFieldGroups: customFieldGroups1,
-                customFields: customFields1,
-                customFieldValues: customFieldValues1,
-              },
-            } = yield call(request, api.getBoard, currentBoard.id, true));
-          } catch {
-            /* empty */
-          }
+      if (currentBoard.isFetching === null) {
+        yield put(actions.handleLocationChange.fetchBoard(currentBoard.id));
+
+        try {
+          ({
+            item: board,
+            included: {
+              projects,
+              boardMemberships,
+              labels,
+              lists,
+              cards,
+              users: users1,
+              cardMemberships: cardMemberships1,
+              cardLabels: cardLabels1,
+              taskLists: taskLists1,
+              tasks: tasks1,
+              attachments: attachments1,
+              customFieldGroups: customFieldGroups1,
+              customFields: customFields1,
+              customFieldValues: customFieldValues1,
+            },
+          } = yield call(request, api.getBoard, currentBoard.id, true));
+        } catch {
+          yield call(goToRoot);
+          return;
         }
       }
 
@@ -224,6 +228,11 @@ export function* handleLocationChange() {
             /* empty */
           }
         }
+      }
+
+      if (!currentBoardId) {
+        yield call(goToRoot);
+        return;
       }
 
       break;

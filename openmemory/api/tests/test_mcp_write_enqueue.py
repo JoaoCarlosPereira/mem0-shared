@@ -1,9 +1,9 @@
 """Tests for the non-blocking MCP write tool ``add_memories`` (task_07 / ADR-004).
 
 ``add_memories`` enqueues a :class:`WriteJob` and returns an immediate
-fire-and-forget ack ``{"status": "accepted", ...}`` (no job_id — agents must
-not poll). No embed/search/LLM on the request path; extraction runs in the
-write worker.
+fire-and-forget ack ``{"status": "accepted", "job_id", "queue_depth",
+"estimated_wait_sec", ...}``. Agents must not poll; depth/ETA are informational.
+No embed/search/LLM on the request path; extraction runs in the write worker.
 
 Covered:
 - a valid call enqueues exactly one job and returns the accepted ack;
@@ -88,12 +88,16 @@ FAKE_JOB_ID = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
 class _FakeQueue:
     """Records enqueued jobs; returns a deterministic (valid UUID) job id."""
 
-    def __init__(self):
+    def __init__(self, depth: int = 3):
         self.jobs = []
+        self._depth = depth
 
     def enqueue(self, job):
         self.jobs.append(job)
         return FAKE_JOB_ID
+
+    def depth(self):
+        return self._depth
 
 
 @pytest.fixture
@@ -118,15 +122,46 @@ def _set_ctx(uid="maqA", client="cursor"):
 # --------------------------------------------------------------------------- #
 class TestEnqueueAck:
     @pytest.mark.asyncio
-    async def test_valid_call_enqueues_and_acks(self, fake_queue):
+    async def test_valid_call_enqueues_and_acks(self, fake_queue, monkeypatch):
+        monkeypatch.setenv("WRITE_WORKER_EMA_JOB_SEC", "45")
+        monkeypatch.setenv("WRITE_WORKER_ETA_CONCURRENCY", "1")
+        monkeypatch.delenv("WRITE_WORKER_MAX_CONCURRENCY", raising=False)
         _set_ctx()
         out = await add_memories("remember X", project="alpha")
         data = json.loads(out)
 
         assert data["status"] == "accepted"
-        assert "job_id" not in data
+        assert data["job_id"] == FAKE_JOB_ID
+        assert data["queue_depth"] == 3
+        assert data["estimated_wait_sec"] == 135  # ceil(3 * 45 / 1)
+        assert "not searchable" in data["message"].lower() or "not searchable yet" in data["message"]
         assert data["project"] == "alpha"
         assert len(fake_queue.jobs) == 1
+
+    @pytest.mark.asyncio
+    async def test_eta_ignores_worker_concurrency_by_default(
+        self, fake_queue, monkeypatch
+    ):
+        """Worker MAX_CONCURRENCY must not optimistic-divide ETA while LLM is serial."""
+        monkeypatch.setenv("WRITE_WORKER_EMA_JOB_SEC", "45")
+        monkeypatch.setenv("WRITE_WORKER_MAX_CONCURRENCY", "2")
+        monkeypatch.delenv("WRITE_WORKER_ETA_CONCURRENCY", raising=False)
+        _set_ctx()
+        out = await add_memories("remember X", project="alpha")
+        data = json.loads(out)
+        # depth=3 from fake queue; must NOT be ceil(3*45/2)=68
+        assert data["estimated_wait_sec"] == 135
+
+    @pytest.mark.asyncio
+    async def test_eta_respects_explicit_eta_concurrency(
+        self, fake_queue, monkeypatch
+    ):
+        monkeypatch.setenv("WRITE_WORKER_EMA_JOB_SEC", "50")
+        monkeypatch.setenv("WRITE_WORKER_ETA_CONCURRENCY", "2")
+        _set_ctx()
+        out = await add_memories("remember X", project="alpha")
+        data = json.loads(out)
+        assert data["estimated_wait_sec"] == 75  # ceil(3 * 50 / 2)
 
     @pytest.mark.asyncio
     async def test_job_carries_hostname_and_client(self, fake_queue):
@@ -278,6 +313,9 @@ class TestIntegrationWithQueue:
         data = json.loads(out)
         assert data["status"] == "accepted"
         assert data["project"] == "alpha"
+        assert data["job_id"]
+        assert data["queue_depth"] >= 1
+        assert "estimated_wait_sec" in data
 
         # The job is persisted as queued before the worker dequeues it.
         db = factory()
