@@ -86,6 +86,18 @@ async def health(response: Response):
     checks["write_queue"] = {"status": queue_status, **queue_info}
     unhealthy |= queue_status == "error"
 
+    # Informational only — missing reranker is expected and must not fail health.
+    try:
+        from app.utils.reranking import rerank_config_status
+
+        checks["rerank"] = rerank_config_status()
+    except Exception as exc:  # noqa: BLE001
+        checks["rerank"] = {
+            "configured": False,
+            "provider": None,
+            "reason": f"status_error: {exc}",
+        }
+
     overall = "unhealthy" if unhealthy else ("degraded" if degraded else "healthy")
     payload = {"status": overall, "checks": checks}
     status_code = 503 if unhealthy else 200

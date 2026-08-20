@@ -16,7 +16,7 @@ from app.models import (
 )
 from app.read_audit_log_model import ReadAuditLog
 from app.utils.datetime_utc import as_utc_naive
-from app.utils.machine_resolver import legacy_hostname_variants
+from app.utils.machine_resolver import legacy_hostname_variants, linked_legacy_ids_for_users
 from app.utils.read_audit import read_audit_hostname_variants
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
@@ -249,16 +249,12 @@ def group_activity_stats(db: Session, group_id: UUID) -> dict:
     """Roll up write/read stats across all members of a group."""
     users = db.query(User).filter(User.group_id == group_id).all()
     user_ids = [user.id for user in users]
+    linked_legacy_ids = linked_legacy_ids_for_users(db, user_ids)
     machines = (
         db.query(Machine).filter(Machine.linked_user_id.in_(user_ids)).all()
         if user_ids
         else []
     )
-    linked_legacy_ids = {
-        machine.legacy_user_id
-        for machine in machines
-        if machine.legacy_user_id is not None
-    }
     machine_by_person = {
         machine.linked_user_id: machine.hostname
         for machine in machines

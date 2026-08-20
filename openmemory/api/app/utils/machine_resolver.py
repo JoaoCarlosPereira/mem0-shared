@@ -337,6 +337,26 @@ def backfill_legacy_user_id(machine: Machine, legacy_user: Optional[User]) -> No
         machine.legacy_user_id = legacy_user.id
 
 
+def linked_legacy_ids_for_users(db: Session, user_ids: list[UUID]) -> set[UUID]:
+    """IDs de ``legacy_host`` em ``user_ids`` já cobertos por máquina vinculada.
+
+    A pessoa Google é o membro canônico; o legado fica oculto na listagem mesmo
+    quando ``person.group_id`` e ``legacy.group_id`` divergem (ex.: onboarding
+    antes do primeiro ``ensure_user_group`` via MCP).
+    """
+    if not user_ids:
+        return set()
+    rows = (
+        db.query(Machine.legacy_user_id)
+        .filter(
+            Machine.legacy_user_id.in_(user_ids),
+            Machine.linked_user_id.isnot(None),
+        )
+        .all()
+    )
+    return {row[0] for row in rows if row[0] is not None}
+
+
 def resolve_or_create_machine(
     db: Session, hostname: str
 ) -> Tuple[Machine, Optional[User]]:

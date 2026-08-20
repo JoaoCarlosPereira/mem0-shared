@@ -19,7 +19,11 @@ from app.utils.user_analytics import (
     user_activity_stats,
 )
 from app.utils.legacy_user_deletion import purge_legacy_host_user
-from app.utils.machine_resolver import consolidate_group_legacy_members, find_legacy_host_user
+from app.utils.machine_resolver import (
+    consolidate_group_legacy_members,
+    find_legacy_host_user,
+    linked_legacy_ids_for_users,
+)
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func
@@ -125,16 +129,12 @@ def _visible_group_members(db: Session, group_id: UUID) -> list[tuple[User, Opti
     """Return person accounts and unpaired legacy hosts with metric hostnames."""
     users = db.query(User).filter(User.group_id == group_id).all()
     user_ids = [user.id for user in users]
+    linked_legacy_ids = linked_legacy_ids_for_users(db, user_ids)
     machines = (
         db.query(Machine).filter(Machine.linked_user_id.in_(user_ids)).all()
         if user_ids
         else []
     )
-    linked_legacy_ids = {
-        machine.legacy_user_id
-        for machine in machines
-        if machine.legacy_user_id is not None
-    }
     machine_by_person = {
         machine.linked_user_id: machine.hostname
         for machine in machines

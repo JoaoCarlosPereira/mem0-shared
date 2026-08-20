@@ -258,6 +258,9 @@ def test_group_analytics_offline_member_does_not_500(factory, client):
 
 
 def test_group_analytics_shows_google_display_name_for_linked_machine(factory, client):
+    """Após o vínculo, a person (no mesmo grupo) é o membro canônico com o hostname."""
+    import uuid as _uuid
+
     group_id, hostname = _seed_group_and_user(factory, hostname="S0293")
     s = factory()
     try:
@@ -266,6 +269,7 @@ def test_group_analytics_shows_google_display_name_for_linked_machine(factory, c
             google_sub="google-sub-1",
             display_name="João Silva",
             user_type=USER_TYPE_PERSON,
+            group_id=_uuid.UUID(group_id),
         )
         legacy = s.query(User).filter(User.user_id == hostname).one()
         s.add(person)
@@ -284,7 +288,9 @@ def test_group_analytics_shows_google_display_name_for_linked_machine(factory, c
 
     r = client.get(f"/admin/analytics/groups/{group_id}")
     assert r.status_code == 200
-    member = r.json()["members"][0]
+    members = r.json()["members"]
+    assert len(members) == 1
+    member = members[0]
     assert member["user_id"] == hostname
     assert member["display_name"] == "João Silva"
 

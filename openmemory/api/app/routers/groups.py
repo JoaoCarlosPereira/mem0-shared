@@ -18,7 +18,11 @@ from uuid import UUID
 
 from app.database import get_db
 from app.models import DEFAULT_GROUP_NAME, Group, Machine, User, USER_TYPE_LEGACY_HOST
-from app.utils.machine_resolver import consolidate_legacy_host_users, find_legacy_host_user
+from app.utils.machine_resolver import (
+    consolidate_legacy_host_users,
+    find_legacy_host_user,
+    linked_legacy_ids_for_users,
+)
 from app.utils.creator_identity import identity_for_hostname, resolve_creator_identities_with_db
 from app.utils.groups import (
     get_or_create_group,
@@ -112,20 +116,17 @@ def _group_members(db: Session, group_id: UUID) -> list[tuple[User, Optional[str
 
     A linked machine may retain a historical ``legacy_host`` row. In that case
     the Google ``person`` row is the canonical visible member, so the legacy
-    row is suppressed to avoid counting the same user twice.
+    row is suppressed to avoid counting the same user twice — including when
+    person and legacy temporarily sit in different groups.
     """
     users = db.query(User).filter(User.group_id == group_id).all()
     user_ids = [user.id for user in users]
+    linked_legacy_ids = linked_legacy_ids_for_users(db, user_ids)
     machines = (
         db.query(Machine).filter(Machine.linked_user_id.in_(user_ids)).all()
         if user_ids
         else []
     )
-    linked_legacy_ids = {
-        machine.legacy_user_id
-        for machine in machines
-        if machine.legacy_user_id is not None
-    }
     machine_by_person = {
         machine.linked_user_id: machine.hostname
         for machine in machines

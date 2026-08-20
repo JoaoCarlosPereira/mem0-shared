@@ -79,6 +79,7 @@ Notes:
 - Do NOT pass the original `id` — the platform assigns a new ID.
 - Skip records where `content` is empty (the parser already filters these, but be defensive).
 - Continue importing even if individual records fail; track the count of successes.
+- **Rate limit (HTTP 429):** If a write returns `rate_limit_exceeded` / 429, wait `retry_after_sec` (or `Retry-After`) and retry that same record 1–3 times with backoff before counting it failed. Do not discard the content.
 
 ### Step 5: Print results
 

@@ -161,27 +161,51 @@ def ensure_user_group(hostname: Optional[str], group_name: Optional[str] = None)
     O ``group_name`` da URL ``?group=`` (instalação) é aplicado **somente** quando o
     usuário ainda não tem grupo (criação ou linha sem ``group_id``). Reconexões e o
     Admin prevalecem — não sobrescrevem ajustes posteriores. Ausente recai no Default.
+
+    Se a máquina já estiver vinculada a uma conta ``person`` com grupo (onboarding),
+    esse grupo é herdado — evita legado órfão no Default enquanto a pessoa está em
+    outra equipe.
     Best-effort: falhas não derrubam a conexão MCP.
     """
     key = canonical_machine_hostname(hostname)
     from app.database import SessionLocal
-    from app.models import USER_TYPE_LEGACY_HOST, User
-    from app.utils.machine_resolver import consolidate_legacy_host_users, find_legacy_host_user
+    from app.models import Group, USER_TYPE_LEGACY_HOST, User
+    from app.utils.machine_resolver import (
+        backfill_legacy_user_id,
+        consolidate_legacy_host_users,
+        find_legacy_host_user,
+        find_machine,
+    )
 
     db = SessionLocal()
     try:
         user = consolidate_legacy_host_users(db, key)
         if user is None:
             user = find_legacy_host_user(db, key)
+        machine = find_machine(db, key)
         if user is not None and user.group_id is not None:
+            if machine is not None:
+                backfill_legacy_user_id(machine, user)
             db.commit()
             return
-        group = get_or_create_group(db, group_name)
+
+        inherited_group = None
+        if machine is not None and machine.linked_user_id is not None:
+            person = db.query(User).filter(User.id == machine.linked_user_id).first()
+            if person is not None and person.group_id is not None:
+                inherited_group = (
+                    db.query(Group).filter(Group.id == person.group_id).first()
+                )
+
+        group = inherited_group or get_or_create_group(db, group_name)
         if user is None:
             user = User(user_id=key, group_id=group.id, user_type=USER_TYPE_LEGACY_HOST)
             db.add(user)
+            db.flush()
         else:
             user.group_id = group.id
+        if machine is not None:
+            backfill_legacy_user_id(machine, user)
         db.commit()
         invalidate_group_cache(key)
     except Exception:  # noqa: BLE001 - upsert de grupo é best-effort no connect

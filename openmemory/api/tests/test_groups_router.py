@@ -239,3 +239,45 @@ def test_remove_member_moves_to_default(client, factory, monkeypatch):
     default_id = groups[DEFAULT_GROUP_NAME]["id"]
     default_members = client.get(f"/admin/groups/{default_id}/members").json()["members"]
     assert any(m["user_id"] == "host-rm" for m in default_members)
+
+
+def test_list_members_hides_linked_legacy_in_other_group(client, factory):
+    """Legado no Default não aparece se a máquina já está linked a person noutro grupo."""
+    import uuid as _uuid
+
+    from app.models import Machine, MachineStatus
+
+    default_id = _seed_default(factory)
+    team_id = client.post("/admin/groups", json={"name": "Super Pricing"}).json()["id"]
+    _seed_user(factory, "S0302", group_id=default_id)
+
+    s = factory()
+    try:
+        legacy = s.query(User).filter(User.user_id == "S0302").first()
+        person = User(
+            user_id="google-sub-luis",
+            google_sub="google-sub-luis",
+            user_type=USER_TYPE_PERSON,
+            display_name="Luis Justino",
+            group_id=_uuid.UUID(team_id),
+        )
+        s.add(person)
+        s.flush()
+        s.add(
+            Machine(
+                hostname="S0302",
+                linked_user_id=person.id,
+                legacy_user_id=legacy.id,
+                status=MachineStatus.linked,
+            )
+        )
+        s.commit()
+    finally:
+        s.close()
+
+    default_members = client.get(f"/admin/groups/{default_id}/members").json()["members"]
+    assert all(m["user_id"] != "S0302" for m in default_members)
+
+    team_members = client.get(f"/admin/groups/{team_id}/members").json()["members"]
+    assert {m["user_id"] for m in team_members} == {"google-sub-luis"}
+    assert team_members[0]["machine_hostname"] == "S0302"

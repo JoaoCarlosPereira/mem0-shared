@@ -90,7 +90,13 @@ def test_mcp_write_still_rate_limited(monkeypatch):
         path = "/mcp/claude/http/S0293"
         assert client.post(path, headers=h, content=json.dumps(_mcp_call("add_memories"))).status_code == 200
         assert client.post(path, headers=h, content=json.dumps(_mcp_call("add_memories"))).status_code == 200
-        assert client.post(path, headers=h, content=json.dumps(_mcp_call("add_memories"))).status_code == 429
+        resp = client.post(path, headers=h, content=json.dumps(_mcp_call("add_memories")))
+        assert resp.status_code == 429
+        body = resp.json()
+        assert body["error"] == "rate_limit_exceeded"
+        assert body["retry_after_sec"] == int(resp.headers["Retry-After"])
+        assert body["retry_after_sec"] > 0
+        assert body["detail"] == "rate limit exceeded"
 
 
 def test_shared_filter_never_rate_limited(monkeypatch):

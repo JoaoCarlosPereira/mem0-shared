@@ -19,6 +19,15 @@ class TestWorkerFromEnv:
         monkeypatch.setenv("WRITE_WORKER_MAX_CONCURRENCY", "7")
         worker = worker_from_env()
         assert worker._max_concurrency == 7
+        # batch_size auto-raises so the semaphore can see overlapping jobs
+        assert worker._batch_size == 7
+
+    def test_batch_size_raised_to_match_concurrency(self, monkeypatch):
+        monkeypatch.setenv("WRITE_WORKER_MAX_CONCURRENCY", "2")
+        monkeypatch.setenv("WRITE_WORKER_BATCH_SIZE", "1")
+        worker = worker_from_env()
+        assert worker._max_concurrency == 2
+        assert worker._batch_size == 2
 
     def test_defaults_when_env_missing(self, monkeypatch):
         for key in (
