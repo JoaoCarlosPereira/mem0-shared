@@ -18,4 +18,24 @@ describe('filterBoardsByGroup', () => {
       ['technical', 'same-group', 'legacy'],
     );
   });
+
+  it('fails closed when group visibility cannot be resolved', () => {
+    const result = filterBoardsByGroup(boards, [], [], {
+      restrictUnknownCreators: true,
+    });
+
+    assert.deepStrictEqual(result.map(({ id }) => id), []);
+  });
+
+  it('uses the workspace group when a technical user created the board', () => {
+    const result = filterBoardsByGroup(boards, ['group-a-user'], ['group-a-user', 'group-b-user'], {
+      boardGroupIds: { technical: 'group-b' },
+      currentGroupId: 'group-a',
+    });
+
+    assert.deepStrictEqual(
+      result.map(({ id }) => id),
+      ['same-group', 'legacy'],
+    );
+  });
 });

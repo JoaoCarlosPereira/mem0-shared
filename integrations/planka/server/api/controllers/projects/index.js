@@ -93,40 +93,8 @@
  */
 
 const filterBoardsByGroup = require('../../../utils/filter-boards-by-group');
-
-const getGroupVisibilityUserIds = async (user) => {
-  if (!user || !user.email) {
-    return null;
-  }
-
-  const groupResult = await sails.sendNativeQuery(
-    `SELECT group_id
-       FROM public.users
-      WHERE lower(email) = lower($1)
-        AND group_id IS NOT NULL
-      LIMIT 1`,
-    [user.email],
-  );
-  if (groupResult.rows.length === 0) {
-    return null;
-  }
-
-  const result = await sails.sendNativeQuery(
-    `SELECT ua.id, grouped_user.group_id = $1 AS same_group
-       FROM planka.user_account AS ua
-       JOIN public.users AS grouped_user
-         ON lower(grouped_user.email) = lower(ua.email)
-      WHERE grouped_user.group_id IS NOT NULL`,
-    [groupResult.rows[0].group_id],
-  );
-
-  return {
-    groupedUserIds: result.rows.map(({ id }) => String(id)),
-    sameGroupUserIds: result.rows
-      .filter(({ same_group: sameGroup }) => sameGroup)
-      .map(({ id }) => String(id)),
-  };
-};
+const getBoardGroupIds = require('../../../utils/get-board-group-ids');
+const getGroupVisibilityUserIds = require('../../../utils/get-group-visibility-user-ids');
 
 module.exports = {
   async fn() {
@@ -134,11 +102,19 @@ module.exports = {
 
     let groupVisibilityUserIds;
     try {
-      groupVisibilityUserIds = await getGroupVisibilityUserIds(currentUser);
+      groupVisibilityUserIds = await getGroupVisibilityUserIds(
+        (sql, values) => sails.sendNativeQuery(sql, values),
+        currentUser,
+      );
     } catch (error) {
       sails.log.warn('projects/index: failed to resolve current user group:', error.message);
-      groupVisibilityUserIds = null;
+      groupVisibilityUserIds = {
+        restrictUnknownCreators: true,
+        sameGroupUserIds: [],
+      };
     }
+
+    let boardGroupIds = {};
 
     let sharedProjects;
     let sharedProjectIds;
@@ -180,12 +156,32 @@ module.exports = {
     let boards = [...fullyVisibleBoards, ...membershipBoards];
 
     if (groupVisibilityUserIds) {
+      try {
+        boardGroupIds = await getBoardGroupIds(
+          (sql, values) => sails.sendNativeQuery(sql, values),
+          boards,
+        );
+      } catch (error) {
+        sails.log.warn('projects/index: failed to resolve board groups:', error.message);
+        groupVisibilityUserIds.restrictUnknownCreators = true;
+      }
+
       boards = filterBoardsByGroup(
         boards,
         [...groupVisibilityUserIds.sameGroupUserIds, currentUser.id],
         groupVisibilityUserIds.groupedUserIds,
+        {
+          restrictUnknownCreators: groupVisibilityUserIds.restrictUnknownCreators,
+          boardGroupIds,
+          currentGroupId: groupVisibilityUserIds.currentGroupId,
+        },
       );
     }
+
+    const visibleBoardIds = new Set(boards.map(({ id }) => String(id)));
+    const visibleBoardMemberships = boardMemberships.filter(({ boardId }) =>
+      visibleBoardIds.has(String(boardId)),
+    );
 
     const projectFavorites = await ProjectFavorite.qm.getByProjectIdsAndUserId(
       projectIds,
@@ -235,7 +231,7 @@ module.exports = {
         projectManagers,
         baseCustomFieldGroups,
         boards,
-        boardMemberships,
+        boardMemberships: visibleBoardMemberships,
         customFields,
         notificationServices,
         users: sails.helpers.users.presentMany(users, currentUser),
