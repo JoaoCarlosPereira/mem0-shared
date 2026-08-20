@@ -165,10 +165,10 @@ export function MemoryGraphCanvas({
     }
   }, [payload, canvasReady]);
 
-  if (canvasError) {
+  if (error || canvasError) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
-        <p className="text-red-400 mb-4">{canvasError}</p>
+        <p className="text-red-400 mb-4">{error || canvasError}</p>
       </div>
     );
   }
@@ -178,6 +178,10 @@ export function MemoryGraphCanvas({
       <div className="flex flex-col items-center justify-center py-12 text-center">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-600 border-t-indigo-500" />
         <p className="mt-4 text-sm text-slate-400">Carregando grafo...</p>
+        <p className="mt-2 max-w-md text-xs text-slate-500">
+          A primeira carga (cache frio) com muitas memórias pode levar 1–2 minutos.
+          Depois disso as próximas aberturas ficam rápidas.
+        </p>
       </div>
     );
   }

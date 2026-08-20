@@ -322,9 +322,18 @@ async def get_memory_graph(
     top_k: int = Query(8, ge=1),
     refresh: bool = Query(False),
 ):
-    """Return the cached or freshly materialized shared-memory graph."""
+    """Return the cached or freshly materialized shared-memory graph.
+
+    Cold-path build is CPU/IO heavy (~N Qdrant searches). Run it in a worker
+    thread so the asyncio event loop keeps serving /health and list endpoints;
+    otherwise the single uvicorn worker goes unhealthy and Traefik drops the
+    backend (UI then sees empty shared-filter payloads → ``items`` undefined).
+    """
+    import asyncio
+
     try:
-        payload = get_cached_or_build(
+        payload = await asyncio.to_thread(
+            get_cached_or_build,
             GraphBuildParams(project=project, top_k=top_k),
             refresh=refresh,
         )
@@ -345,7 +354,9 @@ async def get_memory_graph(
         }
         for node in nodes
     ]
-    record_memory_reads(
+    # Audit is best-effort; keep it off the event loop too when the graph is large.
+    await asyncio.to_thread(
+        record_memory_reads,
         project=project,
         memory_ids=[node.get("id") for node in nodes],
         access_type="list",
