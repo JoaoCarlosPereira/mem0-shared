@@ -190,14 +190,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
         }
       );
 
-      const items = response.data?.items;
-      if (!Array.isArray(items)) {
-        throw new Error(
-          "Resposta inválida da API (items ausente). A API pode estar sobrecarregada — tente novamente."
-        );
-      }
-
-      const adaptedMemories: Memory[] = items.map((item: ApiMemoryItem) => ({
+      const adaptedMemories: Memory[] = response.data.items.map((item: ApiMemoryItem) => ({
         id: item.id,
         memory: item.content,
         created_at: new Date(item.created_at).getTime(),
@@ -425,15 +418,9 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
       const params = new URLSearchParams();
       if (projectId) params.set("project", projectId);
       const url = `${getApiUrl()}/api/v1/memories/graph${params.toString() ? `?${params.toString()}` : ""}`;
-      // Cold path com ~10k nós pode passar de 1–2 min na 1ª carga (cache miss).
-      const response = await axios.get<{ nodes: any[]; links: any[]; meta?: any }>(url, {
-        timeout: 180_000,
-      });
+      const response = await axios.get<{ nodes: any[]; links: any[] }>(url);
       setIsLoading(false);
-      return {
-        nodes: Array.isArray(response.data?.nodes) ? response.data.nodes : [],
-        links: Array.isArray(response.data?.links) ? response.data.links : [],
-      };
+      return { nodes: response.data.nodes, links: response.data.links };
     } catch (err: any) {
       const errorMessage = err.message || "Falha ao buscar grafo de memórias";
       setError(errorMessage);
