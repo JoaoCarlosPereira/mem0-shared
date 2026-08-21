@@ -37,7 +37,7 @@ Concrete target: ~200 developers and dozens of MCP agents on self-hosted infra.
 
 ## What you get today
 
-All planned phases in [`.docs/tasks/`](.docs/tasks/) are **done** and covered by
+All planned phases are **done** and covered by
 tests (`openmemory/api`: **375 passed, 2 skipped**).
 
 | Capability | Highlights |

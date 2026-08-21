@@ -10,7 +10,7 @@ Runtime surface: **OpenMemory** (FastAPI MCP/API + Next.js UI) on Qdrant + local
 
 - **Product**: ShareMem — Shared Memory for AI Engineering Agents
 - **License**: Apache-2.0
-- **Primary docs**: [`README.md`](README.md), [`.docs/tasks/`](.docs/tasks/)
+- **Primary docs**: [`README.md`](README.md), [`openmemory/docs/`](openmemory/docs/)
 
 ## CRITICAL — Proteção de memórias (OpenMemory / deploy compartilhado)
 
