@@ -18,7 +18,6 @@ from app.schemas import MemoryResponse
 from app.utils.db import get_or_create_user
 from app.utils.deletion_guard import DeletionBlockedError, assert_bulk_delete_allowed, assert_memory_delete_allowed
 from app.utils.memory import get_memory_client
-from app.utils.memory_graph import GraphBuildParams, get_cached_or_build
 from app.utils.permissions import check_memory_access_permissions
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi_pagination import Page, Params
@@ -286,74 +285,6 @@ class CreateMemoryRequest(BaseModel):
     metadata: dict = {}
     infer: bool = True
     app: str = "openmemory"
-
-
-class GraphNode(BaseModel):
-    id: str
-    name: str
-    project: Optional[str] = None
-    orphan: bool
-    created_at: Optional[str | int] = None
-
-
-class GraphLink(BaseModel):
-    source: str
-    target: str
-    weight: float
-    score: float
-
-
-class MemoryGraphMeta(BaseModel):
-    node_count: int
-    link_count: int
-    orphan_count: int
-    cached: bool
-
-
-class MemoryGraphPayload(BaseModel):
-    nodes: List[GraphNode]
-    links: List[GraphLink]
-    meta: MemoryGraphMeta
-
-
-@router.get("/graph", response_model=MemoryGraphPayload)
-async def get_memory_graph(
-    project: Optional[str] = Query(None),
-    top_k: int = Query(8, ge=1),
-    refresh: bool = Query(False),
-):
-    """Return the cached or freshly materialized shared-memory graph."""
-    try:
-        payload = get_cached_or_build(
-            GraphBuildParams(project=project, top_k=top_k),
-            refresh=refresh,
-        )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except Exception as exc:
-        logging.exception("Failed to build memory graph")
-        raise HTTPException(status_code=500, detail="Failed to build memory graph") from exc
-
-    from app.utils.read_audit import record_memory_reads
-
-    nodes = payload.get("nodes", [])
-    audit_items = [
-        {
-            "id": node.get("id"),
-            "project": node.get("project") or project,
-            "metadata_": {"project": node.get("project") or project},
-        }
-        for node in nodes
-    ]
-    record_memory_reads(
-        project=project,
-        memory_ids=[node.get("id") for node in nodes],
-        access_type="list",
-        source="api",
-        client_name="openmemory",
-        items=audit_items,
-    )
-    return payload
 
 
 # Create new memory

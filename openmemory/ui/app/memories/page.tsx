@@ -1,9 +1,7 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect } from "react";
 import { MemoriesSection } from "@/app/memories/components/MemoriesSection";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { MemoriesGraphSection } from "@/app/memories/MemoriesGraphPage";
 import { MemoryFilters } from "@/app/memories/components/MemoryFilters";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Layers } from "lucide-react";
@@ -17,7 +15,6 @@ function MemoriesPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { updateMemoryDialog, handleCloseUpdateMemoryDialog } = useUI();
-  const [activeTab, setActiveTab] = useState("lista");
 
   useEffect(() => {
     if (!searchParams.has("page") || !searchParams.has("size")) {
@@ -46,45 +43,8 @@ function MemoriesPageContent() {
       <div className="animate-fade-slide-down">
         <MemoryFilters />
       </div>
-      <div className="animate-fade-slide-down">
-        <Tabs
-          defaultValue="lista"
-          className="mb-6"
-          onValueChange={setActiveTab}
-        >
-          <TabsList className="bg-transparent border-b border-slate-800 rounded-none w-full justify-start gap-4 p-0">
-            <TabsTrigger
-              value="lista"
-              className={`px-0 pb-2 rounded-none data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none ${
-                activeTab === "lista" ? "text-white" : "text-slate-400"
-              }`}
-            >
-              Lista
-            </TabsTrigger>
-            <TabsTrigger
-              value="grafo"
-              className={`px-0 pb-2 rounded-none data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none ${
-                activeTab === "grafo" ? "text-white" : "text-slate-400"
-              }`}
-            >
-              Grafo
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent
-            value="lista"
-            className="mt-6 animate-fade-slide-down delay-1"
-          >
-            <MemoriesSection />
-          </TabsContent>
-
-          <TabsContent
-            value="grafo"
-            className="mt-6 animate-fade-slide-down delay-1"
-          >
-            <MemoriesGraphSection />
-          </TabsContent>
-        </Tabs>
+      <div className="animate-fade-slide-down delay-1">
+        <MemoriesSection />
       </div>
       </div>
     </>
