@@ -1,6 +1,6 @@
 ---
 name: cy-execute-task
-description: Executa uma TaskCard do SpecWorkspace Mem0 Shared ponta a ponta com claim, implementação, revisão, testes e atualização do Kanban MCP. Artefatos e comunicação em PT-BR. Use quando houver card no quadro (ou task_id/workspace). Não use para correção de reviews em lote, verificação isolada ou planejamento PRD/TechSpec.
+description: Executa uma TaskCard do SpecWorkspace ShareMem ponta a ponta com claim, implementação, revisão, testes e atualização do Kanban MCP. Artefatos e comunicação em PT-BR. Use quando houver card no quadro (ou task_id/workspace). Não use para correção de reviews em lote, verificação isolada ou planejamento PRD/TechSpec.
 ---
 
 # Executar Task de Spec (Kanban MCP)
@@ -82,7 +82,7 @@ Execute uma `TaskCard` Shared do claim até `concluido`, respeitando o pipeline 
 
 | Artefato | Destino |
 |----------|---------|
-| PRD / TechSpec / tasks | Mem0 Shared via `read_spec_document` |
+| PRD / TechSpec / tasks | ShareMem via `read_spec_document` |
 | Card / coluna / comentários | Kanban MCP (`claim_task`, `update_task_status`, `add_spec_comment`) |
 | Memória durável | mem0 MCP / `cy-workflow-memory` |
 

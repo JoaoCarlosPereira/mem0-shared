@@ -6,7 +6,7 @@ Documentação do fluxo de trabalho Spec-Driven Development (SDD) usando as skil
 
 ## Regra obrigatória — Quadro Kanban Shared
 
-**Iron law:** a cada atividade (criar workspace, gravar PRD/TechSpec/tasks, claim, bloqueio, mudança de coluna, conclusão), o agente **DEVE** atualizar o quadro/workspace no Mem0 Shared via MCP **na mesma interação**. Chat e arquivos locais não substituem o Kanban.
+**Iron law:** a cada atividade (criar workspace, gravar PRD/TechSpec/tasks, claim, bloqueio, mudança de coluna, conclusão), o agente **DEVE** atualizar o quadro/workspace no ShareMem via MCP **na mesma interação**. Chat e arquivos locais não substituem o Kanban.
 
 **Pipeline de card (sem pular):** `tasks` → `em_andamento` → `revisao_codigo` → `fase_teste` → `concluido`. Proibido concluir sem revisão de código e fase de testes no quadro.
 
@@ -66,7 +66,7 @@ IDEIA
 
 **Por que usar primeiro:** Porque é fundamental definir **O QUÊ** e **POR QUÊ** antes de discutir **O COMO**. Isso evita viciar a discussão em implementação prematuramente e garante que a solução resolve o problema real do usuário.
 
-**Artefatos gerados (Mem0 Shared via MCP):**
+**Artefatos gerados (ShareMem via MCP):**
 - Documento `prd` no SpecWorkspace — requisitos + ADRs de produto embutidos (texto completo)
 - *(Legado)* `.docs/tasks/<slug>/_prd.md` / `adrs/*.md` locais — não são fonte de verdade no Shared; links `adrs/*.md` na UI 404
 
@@ -84,7 +84,7 @@ IDEIA
 
 **Por que usar agora:** Porque o TechSpec é o contrato entre o produto (PRD) e a implementação. Define **O COMO** técnico sem entrar na granularidade de tarefas. Serve como referência para decompor em tarefas.
 
-**Artefatos gerados (Mem0 Shared via MCP):**
+**Artefatos gerados (ShareMem via MCP):**
 - Documento `techspec` no SpecWorkspace — especificação técnica + ADRs técnicos embutidos
 - *(Legado)* `.docs/tasks/<name>/adrs/adr-NNN.md` locais — fora do Shared; não gravar no fluxo atual
 
@@ -104,7 +104,7 @@ IDEIA
 
 **Por que usar agora:** Porque tarefas bem estruturadas permitem que cada uma seja implementada de forma independente, com escopo claro e critérios de aceite definidos. A decomposição correta evita tarefas gigantes ("mega-tasks") e dependências circulares.
 
-**Artefatos gerados (Mem0 Shared via MCP):**
+**Artefatos gerados (ShareMem via MCP):**
 - Documento `tasks` no SpecWorkspace — lista mestra em tabela, **com a coluna `Card ID`** preenchida
   após a criação dos cards. Esse documento é o **único índice de cards que existe**: nenhuma
   ferramenta MCP lista os cards do quadro (ver [`kanban-shared-obrigatorio.md`](kanban-shared-obrigatorio.md),
@@ -137,13 +137,13 @@ IDEIA
 **Por que assim:** review e teste são colunas visíveis do contrato da equipe. Concluir direto de `em_andamento` esconde risco e quebra o Kanban.
 
 **Artefatos:**
-- `TaskCard` no Mem0 Shared (coluna e bloqueio atualizados em cada transição)
+- `TaskCard` no ShareMem (coluna e bloqueio atualizados em cada transição)
 - Comentários via `add_spec_comment` (review notes + evidência de teste)
 - Código no repositório; memórias duráveis via mem0 MCP (não substituem o quadro)
 
 ---
 
-### [4a] cy-workflow-memory — Memória (mem0 Shared)
+### [4a] cy-workflow-memory — Memória (ShareMem)
 
 **Quando usar:** Durante a execução, ao tomar decisões duráveis ou aprender algo reutilizável.
 

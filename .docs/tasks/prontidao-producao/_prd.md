@@ -1,8 +1,8 @@
-# PRD — Prontidão para produção do OpenMemory (mem0-shared)
+# PRD — Prontidão para produção do OpenMemory (ShareMem)
 
 ## Visão Geral
 
-O OpenMemory (mem0-shared) é a camada de memória de longo prazo usada por cerca de 200 desenvolvedores e dezenas de agentes MCP dentro da rede corporativa. As Fases 0–3 da arquitetura self-hosted já foram entregues e testadas, mas a auditoria de 2026-06-18 (seção 15 de `self-hosted-scale-architecture.md`) revelou pontos fracos que impedem chamar o sistema de "pronto para produção" com confiança.
+O OpenMemory (ShareMem) é a camada de memória de longo prazo usada por cerca de 200 desenvolvedores e dezenas de agentes MCP dentro da rede corporativa. As Fases 0–3 da arquitetura self-hosted já foram entregues e testadas, mas a auditoria de 2026-06-18 (seção 15 de `self-hosted-scale-architecture.md`) revelou pontos fracos que impedem chamar o sistema de "pronto para produção" com confiança.
 
 Este esforço fecha esses pontos fracos para o cenário-alvo de **equipe interna em rede (LAN) confiável**, equilibrando três garantias: **não regredir/não perder dados**, **qualidade da memória em escala** e **operabilidade/diagnóstico**. Não persegue alta disponibilidade multi-nó nem exposição externa — esses ficam reservados a um esforço futuro, caso o uso ultrapasse a LAN.
 

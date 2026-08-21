@@ -44,7 +44,7 @@ implementador vai atuar — o que é a norma em features multi-repositório.
 PONTEIRO DE SPEC — <TAREFA/FEATURE>. Registrado em <data>.
 
 As specs SDD desta tarefa não estão neste projeto mem0 nem em arquivos locais versionados.
-Estão no SpecWorkspace do Mem0 Shared, sob outro project_id:
+Estão no SpecWorkspace do ShareMem, sob outro project_id:
 
 - project_id = <project_id do workspace>
 - slug = <slug>

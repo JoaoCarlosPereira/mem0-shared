@@ -1,6 +1,6 @@
 # Quadro Kanban Shared — regra obrigatória
 
-O quadro Kanban do **Mem0 Shared** (UI Documentações / SpecWorkspace) é a **única fonte de verdade** do progresso da equipe. Agentes MCP **DEVEM** refletir nele **cada** atividade — nunca só no chat, em arquivos locais ou no final da sessão.
+O quadro Kanban do **ShareMem** (UI Documentações / SpecWorkspace) é a **única fonte de verdade** do progresso da equipe. Agentes MCP **DEVEM** refletir nele **cada** atividade — nunca só no chat, em arquivos locais ou no final da sessão.
 
 ## Iron law
 

@@ -1,4 +1,4 @@
-# TechSpec — Prontidão para produção do OpenMemory (mem0-shared)
+# TechSpec — Prontidão para produção do OpenMemory (ShareMem)
 
 > Baseada no PRD `_prd.md` (Abordagem A — prontidão pragmática para LAN, 3 fases) e nos ADR-001 a ADR-006.
 

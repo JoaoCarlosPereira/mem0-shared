@@ -3,7 +3,7 @@
 **Workspace:** kanban-column-prompts  
 **Status:** rascunho  
 **Data:** 2026-08-09  
-**Projeto:** mem0-shared  
+**Projeto:** sharemem  
 **Baseado no PRD:** document_id `8ec8e3a7-c5d2-4e3b-82a8-630b5da007e2` (v2)
 
 ---

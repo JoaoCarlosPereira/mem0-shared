@@ -1,11 +1,11 @@
-# Apresentação OpenMemory — Tópicos e Funcionalidades Críticas
+# Apresentação ShareMem — Tópicos e Funcionalidades Críticas
 
-Este documento resume as principais características, decisões arquiteturais e funcionalidades da plataforma **OpenMemory (Mem0 Shared)** para a apresentação de 13 de agosto de 2026.
+Este documento resume as principais características, decisões arquiteturais e funcionalidades de **ShareMem** (*Shared Memory for AI Engineering Agents*) — plataforma OpenMemory local-first — para a apresentação de 13 de agosto de 2026.
 
 ---
 
-## 1. Visão Geral do OpenMemory (Mem0 Shared)
-* **O que é**: Uma camada de memória inteligente, persistente e centralizada para agentes de IA e LLMs.
+## 1. Visão Geral do ShareMem
+* **O que é**: Memória compartilhada de time para agentes de engenharia de IA — persistente, centralizada e 100% na LAN (produto: ShareMem; runtime: OpenMemory).
 * **Operação 100% Local (Local-First)**: Projetado para rodar inteiramente dentro da rede local (LAN), utilizando LLMs e embeddings locais (via Ollama ou llama.cpp), eliminando a dependência de serviços externos e assegurando a privacidade dos dados corporativos.
 * **Monorepo Poliglota**: Centraliza o SDK em Python (`mem0`), o SDK em TypeScript (`mem0-ts`), CLIs em Python e Node, além do backend FastAPI e frontend Next.js.
 
