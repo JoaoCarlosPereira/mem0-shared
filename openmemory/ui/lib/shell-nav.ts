@@ -67,7 +67,7 @@ export function getPageTitle(pathname: string): string {
   if (pathname.startsWith("/apps")) return "Projetos";
   if (pathname.startsWith("/store")) return "Store";
   if (pathname.startsWith("/docs")) return "Kanban";
-  return "Mem0-Shared";
+  return "ShareMem";
 }
 
 export function isBareRoute(pathname: string): boolean {

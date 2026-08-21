@@ -56,7 +56,7 @@ from fastapi_pagination import add_pagination
 
 install_structured_logging()
 
-app = FastAPI(title="OpenMemory API")
+app = FastAPI(title="ShareMem API")
 
 # Tracing distribuído (task_08 / ADR-004): no-op se OTel ausente/desativado.
 configure_tracing(service_name="openmemory-api", app=app, engine=engine)

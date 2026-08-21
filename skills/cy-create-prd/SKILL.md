@@ -1,6 +1,6 @@
 ---
 name: cy-create-prd
-description: Cria Documento de Requisitos de Produto (PRD) em PT-BR com brainstorming interativo, pesquisa de código e mercado. Persiste o PRD no Mem0 Shared via MCP (write_spec_document), não em arquivos locais. Sempre atualiza o quadro/workspace Shared a cada etapa. Use ao iniciar feature ou produto, criar PRD ou levantar requisitos. Não use para TechSpec, decomposição de tarefas ou implementação.
+description: Cria Documento de Requisitos de Produto (PRD) em PT-BR com brainstorming interativo, pesquisa de código e mercado. Persiste o PRD no ShareMem via MCP (write_spec_document), não em arquivos locais. Sempre atualiza o quadro/workspace Shared a cada etapa. Use ao iniciar feature ou produto, criar PRD ou levantar requisitos. Não use para TechSpec, decomposição de tarefas ou implementação.
 argument-hint: "[feature-name-or-idea] [idea-file?]"
 ---
 
@@ -14,12 +14,12 @@ NÃO pule a fase de pesquisa — todo PRD DEVE ser enriquecido com contexto de c
 NÃO pule as interações com o usuário — o usuário DEVE participar da construção do PRD em cada ponto de decisão.
 NÃO exija aprovação seção por seção — gere o rascunho completo e deixe o usuário revisá-lo.
 Isso se aplica a TODO PRD, independentemente da simplicidade percebida.
-**KANBAN:** Após cada etapa significativa (criação do workspace, salvamento do PRD, mudança de status), atualize o quadro/workspace Mem0 Shared via MCP na MESMA interação. Nunca deixe o progresso apenas no chat. Consulte `references/kanban-shared-obrigatorio.md`.
+**KANBAN:** Após cada etapa significativa (criação do workspace, salvamento do PRD, mudança de status), atualize o quadro/workspace ShareMem via MCP na MESMA interação. Nunca deixe o progresso apenas no chat. Consulte `references/kanban-shared-obrigatorio.md`.
 </HARD-GATE>
 
 ## Quadro Kanban Shared (obrigatório)
 
-O SpecWorkspace / Documentações no Mem0 Shared é a fonte de verdade da equipe. Em **cada** atividade desta skill:
+O SpecWorkspace / Documentações no ShareMem é a fonte de verdade da equipe. Em **cada** atividade desta skill:
 
 1. Resolver/criar o workspace com `list_spec_workspaces` / `create_spec_workspace`.
 2. Ao gravar o PRD aprovado, usar `write_spec_document` (prd) e, se houver ADRs, **também** `write_spec_document` (document_type="adrs") com o texto completo — confirmar project+slug+versões ao usuário.
@@ -63,7 +63,7 @@ Traduza toda feature de nome técnico na pergunta de experiência do usuário po
 
 Você DEVE criar uma tarefa para cada fase e completá-las em ordem:
 
-1. **Resolver workspace shared** — derivar slug, resolver/criar o `SpecWorkspace` no Mem0 Shared via MCP (`list_spec_workspaces` / `create_spec_workspace`)
+1. **Resolver workspace shared** — derivar slug, resolver/criar o `SpecWorkspace` no ShareMem via MCP (`list_spec_workspaces` / `create_spec_workspace`)
 2. **Descobrir contexto** — exploração paralela da codebase e pesquisa web
 3. **Entender a necessidade** — fazer 3-6 perguntas direcionadas para refinar escopo e intenção
 4. **Apresentar abordagens de produto** — oferecer 2-3 abordagens com trade-offs, capturar a escolhida como ADR (texto completo no documento `adrs` + links no PRD)
@@ -73,7 +73,7 @@ Você DEVE criar uma tarefa para cada fase e completá-las em ordem:
 
 ## Fluxo de Trabalho
 
-1. Resolver o spec workspace shared (Mem0 Shared, via MCP — ADR-002).
+1. Resolver o spec workspace shared (ShareMem, via MCP — ADR-002).
    - Derivar o slug a partir do nome da feature fornecido pelo usuário.
    - Determinar o `project_id` (nome do projeto/repositório atual; use "default" se nenhum estiver claramente definido).
    - Chamar `list_spec_workspaces(slug=<slug>)` para procurar o workspace globalmente antes de filtrar por projeto ou criar.
@@ -163,7 +163,7 @@ Você DEVE criar uma tarefa para cada fase e completá-las em ordem:
      - No modo de atualização, passar o `current_version` retornado pelo `read_spec_document` no passo 1 (ou a leitura mais recente).
    - **OBRIGATÓRIO — documento `adrs`:** na mesma interação, gravar (ou atualizar) o documento de ADRs com `write_spec_document(workspace_id, document_type="adrs", content=<todos os ADRs do workspace em markdown>, expected_version=<versão adrs|null>)`. Incluir o texto completo de cada ADR (`### ADR-NNN: ...`). Alias `adr` também é aceito. ADRs **não** são TaskCards.
    - **Tratamento de conflito:** se a ferramenta retornar `conflict=true`, o documento mudou desde que você o leu. NÃO sobrescrever. Informar o usuário (em PT-BR) que outro autor atualizou o documento, mostrar o `current_version`, reler o conteúdo atual, reconciliar suas alterações sobre ele e só então tentar novamente `write_spec_document` com o novo `current_version`.
-   - **Indisponibilidade do serviço:** se a chamada da ferramenta falhar (MCP/Mem0 Shared fora do ar), PARAR e reportar a falha claramente ao usuário. NÃO escrever um `_prd.md` local como fallback (ADR-002/ADR-007).
+   - **Indisponibilidade do serviço:** se a chamada da ferramenta falhar (MCP/ShareMem fora do ar), PARAR e reportar a falha claramente ao usuário. NÃO escrever um `_prd.md` local como fallback (ADR-002/ADR-007).
    - Em caso de sucesso, confirmar ao usuário (em PT-BR) o workspace shared (project + slug) e as novas versões de `prd` e `adrs`.
    - Garantir que o lifecycle do workspace reflita o planejamento: se ainda houver apenas PRD, `update_spec_workspace_status(workspace_id, "planejamento")` quando ainda não estiver definido.
    - Lembrar o usuário (em PT-BR) que o próximo passo é criar uma TechSpec usando `cy-create-techspec` a partir deste PRD — e que o quadro Shared deve permanecer sincronizado a cada atividade.
@@ -199,7 +199,7 @@ digraph create_prd {
 
 - Se o usuário fornecer contexto insuficiente para completar uma seção, pergunte a ele. NÃO complete informações por conta própria e não deixe dúvidas não resolvidas na seção "Perguntas em Aberto" sem o aval do usuário.
 - Se ferramentas de pesquisa web estiverem indisponíveis, prosseguir apenas com a exploração da codebase e anotar a limitação.
-- Se as ferramentas MCP (Mem0 Shared) estiverem indisponíveis, parar e reportar a falha claramente — NÃO escrever um fallback local `_prd.md` (ADR-002/ADR-007).
+- Se as ferramentas MCP (ShareMem) estiverem indisponíveis, parar e reportar a falha claramente — NÃO escrever um fallback local `_prd.md` (ADR-002/ADR-007).
 - Se `write_spec_document` retornar `conflict=true`, não sobrescrever: reler a versão atual, reconciliar e tentar novamente com a versão atual.
 - Se operando em modo de atualização, preservar seções que o usuário não pediu para alterar.
 
@@ -223,8 +223,8 @@ digraph create_prd {
 | Artefato | Destino |
 |----------|---------|
 | Ideia (se fornecida como entrada) | `_idea.md` (somente leitura de contexto) |
-| PRD | Mem0 Shared via `write_spec_document` (document_type="prd") |
-| ADRs | Mem0 Shared via `write_spec_document` (document_type="adrs"); PRD só com links `adrs/adr-NNN.md` |
+| PRD | ShareMem via `write_spec_document` (document_type="prd") |
+| ADRs | ShareMem via `write_spec_document` (document_type="adrs"); PRD só com links `adrs/adr-NNN.md` |
 
 Regras:
 - Títulos de seção, narrativa, listas e tabelas em português

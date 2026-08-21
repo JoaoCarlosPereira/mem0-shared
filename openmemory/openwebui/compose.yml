@@ -13,11 +13,11 @@ services:
       ENABLE_OPENAI_API: "false"
       DEFAULT_MODELS: gemma4:cloud
       DEFAULT_PINNED_MODELS: gemma4:cloud
-      DEFAULT_MODEL_METADATA: '{"toolIds":["server:mcp:mem0-shared"]}'
-      WEBUI_NAME: Open WebUI - Mem0 Shared
+      DEFAULT_MODEL_METADATA: '{"toolIds":["server:mcp:sharemem"]}'
+      WEBUI_NAME: Open WebUI - ShareMem
       ENABLE_SIGNUP: "true"
       TOOL_SERVER_CONNECTIONS: >-
-        [{"url":"http://openmemory-mcp:8765/mcp/openwebui/http/openwebui","path":"","type":"mcp","auth_type":"none","headers":null,"key":null,"config":{"enable":true},"info":{"id":"mem0-shared","name":"Mem0 Shared","description":"Memórias persistentes compartilhadas: busca e gravação via OpenMemory MCP"}}]
+        [{"url":"http://openmemory-mcp:8765/mcp/openwebui/http/openwebui","path":"","type":"mcp","auth_type":"none","headers":null,"key":null,"config":{"enable":true},"info":{"id":"sharemem","name":"ShareMem","description":"Shared Memory for AI Engineering Agents — busca e gravação via MCP ShareMem"}}]
     volumes:
       - openwebui_data:/app/backend/data
     networks:

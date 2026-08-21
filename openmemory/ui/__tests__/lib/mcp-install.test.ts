@@ -11,8 +11,8 @@ describe("mcp-install", () => {
   const host = "${COMPUTERNAME:-${HOSTNAME:-$(hostname)}}";
 
   it("mcpSseUrl sem grupo não adiciona query string", () => {
-    expect(mcpSseUrl(base, "openmemory", host)).toBe(
-      `${base}/mcp/openmemory/sse/${host}`,
+    expect(mcpSseUrl(base, "sharemem", host)).toBe(
+      `${base}/mcp/sharemem/sse/${host}`,
     );
   });
 

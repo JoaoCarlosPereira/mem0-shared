@@ -1,6 +1,6 @@
 ---
 name: cy-create-tasks
-description: Decompõe PRD e TechSpec em tarefas detalhadas em PT-BR, com enriquecimento via exploração do código. Lê PRD/TechSpec e grava a lista mestra (document_type="tasks") e cada tarefa como TaskCard no Mem0 Shared via MCP. Sempre mantém o quadro Kanban sincronizado a cada criação/mudança. Use quando existir PRD/TechSpec e precisar de tarefas executáveis. Não use para PRD, TechSpec ou execução direta de tarefas.
+description: Decompõe PRD e TechSpec em tarefas detalhadas em PT-BR, com enriquecimento via exploração do código. Lê PRD/TechSpec e grava a lista mestra (document_type="tasks") e cada tarefa como TaskCard no ShareMem via MCP. Sempre mantém o quadro Kanban sincronizado a cada criação/mudança. Use quando existir PRD/TechSpec e precisar de tarefas executáveis. Não use para PRD, TechSpec ou execução direta de tarefas.
 argument-hint: "[feature-name-or-slug] [workspace-id?]"
 ---
 
@@ -107,7 +107,7 @@ Lei de ferro 2: **nunca concluir sem ter passado por revisão de código e fase 
    - Para cada tarefa, construir o corpo enriquecido completo localmente, depois criar o card com `create_task(workspace_id, title=<task title>, description=<full enriched body>, branch_ref=<optional>)`.
      - `create_task` persiste `title`, `description` e `branch_ref` apenas. Codificar os metadados restantes da tarefa **dentro de `description`** como cabeçalho de metadados, preservando os campos do template: `type`, `complexity` e `dependencies` (listar os números das tarefas de dependência, ex.: `Dependências: task_01, task_02`), seguidos do corpo completo da tarefa.
      - O card é criado na coluna `tasks` (backlog) por padrão — correto para um plano recém-gerado.
-   - **Tratamento de falha parcial:** rastrear quais tarefas foram criadas com sucesso. Se um `create_task` (ou a gravação do passo 5) falhar no meio (Mem0 Shared indisponível), PARAR imediatamente e reportar ao usuário **exatamente quais tarefas já foram criadas** e quais restam, para que ele conheça o estado parcial preciso — NÃO inventar um arquivo fallback local.
+   - **Tratamento de falha parcial:** rastrear quais tarefas foram criadas com sucesso. Se um `create_task` (ou a gravação do passo 5) falhar no meio (ShareMem indisponível), PARAR imediatamente e reportar ao usuário **exatamente quais tarefas já foram criadas** e quais restam, para que ele conheça o estado parcial preciso — NÃO inventar um arquivo fallback local.
    - Mapear a tarefa para requisitos do PRD e orientação da TechSpec.
    - Disparar uma chamada Agent tool para descobrir arquivos relevantes, arquivos dependentes, pontos de integração e regras do projeto para esta tarefa específica.
    - Preencher TODAS as seções do template de `references/task-template.md` em **PT-BR** no `description` do card. Todo corpo de tarefa DEVE conter cada uma das seções a seguir — omitir qualquer uma é falha:
@@ -146,7 +146,7 @@ NÃO produza tarefas com estes defeitos:
 - **Mega-tarefas.** Se uma tarefa toca mais de 7 arquivos ou tem mais de 7 subtarefas, é ampla demais. Dividi-la em tarefas menores com dependências explícitas entre elas.
 - **Duplicação da TechSpec.** NÃO copiar definições de interface, trechos de código ou diagramas arquiteturais da TechSpec para arquivos de tarefa. Referenciar a seção da TechSpec pelo nome em PT-BR (ex.: "Ver seção 'Interfaces Principais' do TechSpec") em vez de reproduzir seu conteúdo.
 - **Casos de teste vagos.** NÃO escrever descrições de teste como "testar caminho feliz" sem detalhe. Cada caso de teste deve nomear a entrada, condição ou comportamento específico verificado (ex.: "POST /job/done com job ID inexistente retorna 404").
-- **Quadro silencioso.** NÃO criar ou finalizar trabalho sem o card Kanban refletir o novo estado no Mem0 Shared na mesma interação.
+- **Quadro silencioso.** NÃO criar ou finalizar trabalho sem o card Kanban refletir o novo estado no ShareMem na mesma interação.
 - **Pular pipeline.** NÃO mover um card para `concluido` sem tê-lo movido explicitamente por `revisao_codigo` e depois `fase_teste` (atualizações MCP separadas, com evidência de review + testes).
 
 ## Política de Idioma — PT-BR
@@ -155,8 +155,8 @@ NÃO produza tarefas com estes defeitos:
 
 | Artefato | Destino |
 |----------|---------|
-| PRD/TechSpec (entrada) | Mem0 Shared via `read_spec_document` |
-| Lista mestra | Mem0 Shared via `write_spec_document` (document_type="tasks") |
+| PRD/TechSpec (entrada) | ShareMem via `read_spec_document` |
+| Lista mestra | ShareMem via `write_spec_document` (document_type="tasks") |
 | Tarefas | `TaskCard` no quadro via `create_task` (metadados no `description`) |
 
 Regras:
@@ -168,7 +168,7 @@ Regras:
 ## Tratamento de Erros
 
 - Se nem o PRD nem a TechSpec forem encontrados no workspace, parar e pedir ao usuário para criar pelo menos um primeiro.
-- Se as ferramentas MCP (Mem0 Shared) estiverem indisponíveis, parar e reportar claramente — incluindo, durante a criação de cards, exatamente quais tarefas já foram criadas (estado parcial). Nunca escrever um arquivo fallback local (ADR-002/ADR-007).
+- Se as ferramentas MCP (ShareMem) estiverem indisponíveis, parar e reportar claramente — incluindo, durante a criação de cards, exatamente quais tarefas já foram criadas (estado parcial). Nunca escrever um arquivo fallback local (ADR-002/ADR-007).
 - Se `write_spec_document` (documento mestre `tasks`) retornar `conflict=true`, reler e reconciliar antes de tentar novamente.
 - Se o usuário rejeitar a decomposição de tarefas, incorporar todo o feedback antes de apresentar novamente.
 - Se a exploração da codebase revelar limites de tarefa que não correspondem à TechSpec, anotar a discrepância e perguntar ao usuário como proceder.

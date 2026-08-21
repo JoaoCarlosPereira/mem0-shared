@@ -1,5 +1,5 @@
 /**
- * Base URL for OpenMemory API calls from the browser.
+ * Base URL for ShareMem API calls from the browser.
  *
  * In the browser we always use the same-origin relative ``/api-proxy`` path so
  * LAN clients never depend on a hard-coded IP or ``localhost`` baked into the

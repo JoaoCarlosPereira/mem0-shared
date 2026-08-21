@@ -1,6 +1,6 @@
-# PLANKA no Mem0 Shared
+# PLANKA no ShareMem
 
-Código do [PLANKA](https://github.com/plankanban/planka) incorporado em `mem0-shared` para a feature **kanban-planka** (ADR-004 / TechSpec).
+Código do [PLANKA](https://github.com/plankanban/planka) incorporado em `sharemem` para a feature **kanban-planka** (ADR-004 / TechSpec).
 
 ## Origem / pin
 

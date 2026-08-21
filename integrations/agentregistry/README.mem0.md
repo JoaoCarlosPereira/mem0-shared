@@ -1,6 +1,6 @@
-# AgentRegistry no Mem0 Shared
+# AgentRegistry no ShareMem
 
-Código do [AgentRegistry](https://github.com/agentregistry-dev/agentregistry) incorporado em `mem0-shared` para a feature **loja-interna-skills** (ADR-003 / ADR-007).
+Código do [AgentRegistry](https://github.com/agentregistry-dev/agentregistry) incorporado em `sharemem` para a feature **loja-interna-skills** (ADR-003 / ADR-007).
 
 ## Origem
 
@@ -42,7 +42,7 @@ Definido em `openmemory/docker-compose.scale.yml`:
 | Variável | Obrigatória | Descrição |
 |----------|-------------|-----------|
 | `AGENT_REGISTRY_DATABASE_URL` / `DATABASE_URL` | sim | DSN Postgres (migrações + schema `agentregistry`) |
-| `AUTH_JWT_SECRET` | sim | Segredo HS256 Mem0 Shared (pode espelhar `NEXTAUTH_SECRET`) |
+| `AUTH_JWT_SECRET` | sim | Segredo HS256 ShareMem (pode espelhar `NEXTAUTH_SECRET`) |
 | `AUTH_ADMIN_EMAILS` | não | E-mails admin (CSV) |
 | `MEM0_AUTH_ALLOW_LEGACY` | não | `1` aceita `Authorization: Bearer local` (dev/LAN) |
 | `AGENT_REGISTRY_SERVER_ADDRESS` | não | Default `:8080` |

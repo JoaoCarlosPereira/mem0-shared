@@ -1,4 +1,4 @@
-# Instalação — Memória Central Compartilhada (local-first)
+# Instalação ShareMem — Memória compartilhada local-first
 
 Instalação única na rede local que sobe o servidor **MCP/API**, o **Qdrant**
 (vector store, coleção única) e usa um **Ollama** local para LLM e embeddings.

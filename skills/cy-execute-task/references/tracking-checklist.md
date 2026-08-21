@@ -1,6 +1,6 @@
 # Checklist de Rastreamento (Kanban MCP)
 
-> **Idioma:** PT-BR. Fonte de verdade = quadro Mem0 Shared, não arquivos locais.
+> **Idioma:** PT-BR. Fonte de verdade = quadro ShareMem, não arquivos locais.
 
 Aplique este checklist ao avançar um `TaskCard`:
 

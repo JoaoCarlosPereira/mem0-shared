@@ -23,7 +23,7 @@ Se o comando de verificação não foi executado na mensagem atual, o resultado 
 
 ## Kanban Shared (obrigatório)
 
-Esta skill é o gate da coluna **`fase_teste`**. Integração com o quadro Mem0 Shared:
+Esta skill é o gate da coluna **`fase_teste`**. Integração com o quadro ShareMem:
 
 1. O card **deve** já estar em `fase_teste` (`update_task_status`) antes de rodar a verificação de "tarefa concluída".
 2. Com veredito **APROVADO**: chamar `update_task_status(task_id, "concluido", expected_version=...)` na mesma interação, usando a versão atual do card.

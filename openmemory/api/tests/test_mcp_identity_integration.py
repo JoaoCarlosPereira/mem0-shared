@@ -233,7 +233,7 @@ class TestEndToEndBackend:
         recipe = http.get(
             f"/provision?host=claude-code&token={raw_token}"
         ).json()
-        mcp_url_template = recipe["mcp_config"]["content"]["mcpServers"]["mem0"]["url"]
+        mcp_url_template = recipe["mcp_config"]["content"]["mcpServers"]["sharemem"]["url"]
         assert f"token={raw_token}" in mcp_url_template
         mcp_path = mcp_url_template.split("http://testserver")[-1].replace(
             "{hostname}", "S0100"

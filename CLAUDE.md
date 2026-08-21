@@ -1,18 +1,20 @@
 # AGENTS.md
 
-This file provides context for AI coding assistants (Claude Code, Cursor, GitHub Copilot, Codex, etc.) working with the Mem0 repository.
+This file provides context for AI coding assistants (Claude Code, Cursor, GitHub Copilot, Codex, etc.) working with the **ShareMem** repository.
 
 ## Project Overview
 
-**Mem0** ("mem-zero") is an intelligent memory layer for AI agents and assistants. It provides persistent, personalized memory via both a hosted platform API and self-hosted open-source SDKs.
+**ShareMem** (*Shared Memory for AI Engineering Agents*) is a local-first, team-shared memory layer for AI engineering agents. One LAN install gives every agent the same long-lived project memory — without sending content to the cloud.
 
-- **Repository**: https://github.com/mem0ai/mem0
-- **Documentation**: https://docs.mem0.ai
+Runtime surface: **OpenMemory** (FastAPI MCP/API + Next.js UI) on Qdrant + local LLM (Ollama / llama.cpp). The open-source **mem0** SDK packages in this monorepo remain the library foundation under that product surface.
+
+- **Product**: ShareMem — Shared Memory for AI Engineering Agents
 - **License**: Apache-2.0
+- **Primary docs**: [`README.md`](README.md), [`openmemory/docs/`](openmemory/docs/)
 
 ## CRITICAL — Proteção de memórias (OpenMemory / deploy compartilhado)
 
-Este fork roda **OpenMemory em produção na LAN** (`openmemory/docker-compose.scale.yml`).
+Este repositório roda **OpenMemory em produção na LAN** (`openmemory/docker-compose.scale.yml`).
 As memórias da equipe vivem no **volume Docker `mem0_storage` (Qdrant)** e na fila
 durável **`write_queue` (PostgreSQL)**. Perda do volume Qdrant já causou perda de
 **1000+ memórias**; a recuperação depende da fila PostgreSQL.

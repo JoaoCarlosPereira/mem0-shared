@@ -192,7 +192,7 @@ export const Install = () => {
                 label={defaultShell.label}
                 command={mcpSseUrl(
                   mcpBase,
-                  "openmemory",
+                  "sharemem",
                   defaultShell.hostnameExpr,
                   effectiveGroup,
                   tokenForCommands,
@@ -205,7 +205,7 @@ export const Install = () => {
                 label={installShellVariants[1].label}
                 command={mcpSseUrl(
                   mcpBase,
-                  "openmemory",
+                  "sharemem",
                   installShellVariants[1].hostnameExpr,
                   effectiveGroup,
                   tokenForCommands,

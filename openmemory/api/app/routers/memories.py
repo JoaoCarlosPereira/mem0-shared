@@ -387,7 +387,7 @@ async def create_memory(
 
     # Check if app is active
     if not app_obj.is_active:
-        raise HTTPException(status_code=403, detail=f"App {request.app} is currently paused on OpenMemory. Cannot create new memories.")
+        raise HTTPException(status_code=403, detail=f"App {request.app} is currently paused on ShareMem. Cannot create new memories.")
 
     # Log what we're about to do
     logging.info(f"Creating memory for user_id: {request.user_id} with app: {request.app}")

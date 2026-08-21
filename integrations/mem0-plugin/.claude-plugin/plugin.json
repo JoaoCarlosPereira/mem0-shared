@@ -1,9 +1,9 @@
 {
   "name": "mem0",
   "version": "0.2.10",
-  "description": "Persistent memory for Claude Code. Remembers decisions, patterns, and preferences across sessions.",
+  "description": "ShareMem — Shared Memory for AI Engineering Agents. Persistent team memory for Claude Code via local MCP.",
   "author": {
-    "name": "Mem0",
+    "name": "ShareMem",
     "email": "support@mem0.ai"
   },
   "homepage": "https://mem0.ai",

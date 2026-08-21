@@ -1,6 +1,6 @@
 ---
 name: cy-create-techspec
-description: Cria Especificação Técnica (TechSpec) em PT-BR a partir do PRD, com esclarecimentos técnicos interativos. Lê o PRD e grava a TechSpec e o documento de ADRs (document_type=adrs) no Mem0 Shared via MCP. Sempre atualiza o quadro/workspace Shared a cada etapa. Use quando existir PRD e precisar de plano técnico. Não use para PRD, tarefas ou implementação direta.
+description: Cria Especificação Técnica (TechSpec) em PT-BR a partir do PRD, com esclarecimentos técnicos interativos. Lê o PRD e grava a TechSpec e o documento de ADRs (document_type=adrs) no ShareMem via MCP. Sempre atualiza o quadro/workspace Shared a cada etapa. Use quando existir PRD e precisar de plano técnico. Não use para PRD, tarefas ou implementação direta.
 argument-hint: "[feature-name-or-slug] [workspace-id?]"
 ---
 
@@ -14,12 +14,12 @@ NÃO pule a exploração da codebase — toda TechSpec DEVE ser informada pela a
 NÃO pule as interações com o usuário — o usuário DEVE participar da construção da TechSpec em cada ponto de decisão.
 NÃO exija aprovação seção por seção — gere o rascunho completo e deixe o usuário revisá-lo.
 Isso se aplica a TODA TechSpec, independentemente da simplicidade percebida.
-**KANBAN:** Após cada etapa significativa (resolução do workspace, salvamento da TechSpec, status do workspace), atualize o quadro Mem0 Shared via MCP na MESMA interação. Nunca deixe o progresso apenas no chat. Consulte `../cy-create-prd/references/kanban-shared-obrigatorio.md`.
+**KANBAN:** Após cada etapa significativa (resolução do workspace, salvamento da TechSpec, status do workspace), atualize o quadro ShareMem via MCP na MESMA interação. Nunca deixe o progresso apenas no chat. Consulte `../cy-create-prd/references/kanban-shared-obrigatorio.md`.
 </HARD-GATE>
 
 ## Quadro Kanban Shared (obrigatório)
 
-O SpecWorkspace no Mem0 Shared é a fonte de verdade. Em **cada** atividade desta skill:
+O SpecWorkspace no ShareMem é a fonte de verdade. Em **cada** atividade desta skill:
 
 1. Resolver o workspace via MCP antes de redigir.
 2. Ao gravar a TechSpec aprovada (`write_spec_document` techspec **e** `write_spec_document` adrs), atualizar o lifecycle: `update_spec_workspace_status(workspace_id, "ativo")` quando o design técnico estiver aprovado e o trabalho seguir (ou confirmar se já estiver `ativo`).
@@ -120,7 +120,7 @@ Você DEVE criar uma tarefa para cada fase e completá-las em ordem:
      - No modo de atualização, passar o `current_version` retornado por `read_spec_document` no passo 1.
    - **OBRIGATÓRIO — documento `adrs`:** na mesma interação, mesclar os ADRs novos/atualizados no conteúdo completo do workspace e gravar com `write_spec_document(workspace_id, document_type="adrs", content=<ADRs>, expected_version=<versão adrs|null>)`. Alias `adr` aceito. Sem isso, os links nos specs não têm destino no servidor.
    - **Tratamento de conflito:** se a ferramenta retornar `conflict=true`, NÃO sobrescrever. Informar o usuário (PT-BR), mostrar `current_version`, reler o conteúdo atual, reconciliar e tentar novamente com o novo `current_version`.
-   - **Indisponibilidade do serviço:** se a chamada da ferramenta falhar (Mem0 Shared fora do ar), PARAR e reportar claramente. NÃO escrever um `_techspec.md` local como fallback (ADR-002/ADR-007).
+   - **Indisponibilidade do serviço:** se a chamada da ferramenta falhar (ShareMem fora do ar), PARAR e reportar claramente. NÃO escrever um `_techspec.md` local como fallback (ADR-002/ADR-007).
    - Em caso de sucesso, confirmar ao usuário (PT-BR) o workspace shared (project + slug) e as novas versões de `techspec` e `adrs`.
    - Sincronizar o quadro: chamar `update_spec_workspace_status(workspace_id, "ativo")` para que a lista Kanban/workspace mostre trabalho técnico em andamento (idempotente se já estiver `ativo`).
    - Lembrar o usuário (PT-BR) que o próximo passo é criar tarefas usando `cy-create-tasks` a partir desta TechSpec — e que **cada** atividade seguinte deve atualizar o quadro Shared.
@@ -148,7 +148,7 @@ digraph create_techspec {
 ## Tratamento de Erros
 
 - Se nenhum PRD for encontrado via `read_spec_document` (modo standalone), prosseguir com contexto fornecido pelo usuário e anotar a ausência no Resumo Executivo — NÃO falhar.
-- Se as ferramentas MCP (Mem0 Shared) estiverem indisponíveis, parar e reportar claramente — NÃO ler/escrever fallback local `_prd.md`/`_techspec.md` (ADR-002/ADR-007).
+- Se as ferramentas MCP (ShareMem) estiverem indisponíveis, parar e reportar claramente — NÃO ler/escrever fallback local `_prd.md`/`_techspec.md` (ADR-002/ADR-007).
 - Se `write_spec_document` retornar `conflict=true`, não sobrescrever: reler a versão atual, reconciliar e tentar novamente com a versão atual.
 - Se a exploração da codebase revelar padrões arquiteturais conflitantes, documentar ambos e recomendar um com justificativa.
 - Se o usuário rejeitar a proposta de design, incorporar todo o feedback e apresentar uma proposta revisada.
@@ -174,9 +174,9 @@ digraph create_techspec {
 
 | Artefato | Destino |
 |----------|---------|
-| PRD (entrada) | Mem0 Shared via `read_spec_document` (document_type="prd") |
-| TechSpec | Mem0 Shared via `write_spec_document` (document_type="techspec") |
-| ADRs técnicos | Mem0 Shared via `write_spec_document` (document_type="adrs"); TechSpec com links `adrs/adr-NNN.md` |
+| PRD (entrada) | ShareMem via `read_spec_document` (document_type="prd") |
+| TechSpec | ShareMem via `write_spec_document` (document_type="techspec") |
+| ADRs técnicos | ShareMem via `write_spec_document` (document_type="adrs"); TechSpec com links `adrs/adr-NNN.md` |
 
 Regras:
 - Perguntas técnicas ao usuário, rascunhos e prompts de revisão em PT-BR
