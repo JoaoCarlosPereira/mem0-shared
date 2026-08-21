@@ -1,117 +1,156 @@
 # ShareMem — Shared Memory for AI Engineering Agents
 
-**ShareMem** is a local-first, team-shared memory layer for AI engineering agents
-(Claude Code, Cursor, Codex, and MCP clients). One install on your LAN gives every
-agent the same long-lived project memory — decisions, conventions, bugs fixed,
-and durable learnings — without sending content to the cloud.
+**ShareMem** is a local-first platform for teams that ship software with AI agents
+(Claude Code, Cursor, Codex, and other MCP clients). One LAN install gives the
+whole team:
 
-> Product name: **ShareMem** · Tagline: *Shared Memory for AI Engineering Agents*  
-> Runtime surface: OpenMemory (API/MCP + UI) · Vector store: Qdrant · LLM: Ollama / llama.cpp
+1. **Shared long-term memory** — decisions, conventions, bugs, and learnings
+2. **Spec-Driven Development (SDD)** — PRD → TechSpec → Tasks → Kanban, with the
+   spec as source of truth over MCP
+3. **Internal Skills Store** — discover, publish, and install team skills / MCP
+   servers from a private catalog
+
+Nothing leaves your network. LLM and embeddings run on Ollama or llama.cpp.
+
+> Product: **ShareMem** · *Shared Memory for AI Engineering Agents*  
+> Runtime: API/MCP + UI · Vectors: Qdrant · Catalog: AgentRegistry · Board: Kanban
 
 ## Why ShareMem exists
 
-Engineering teams that run AI agents lose context constantly: every session starts
-cold, every machine has its own scratchpad, and team knowledge never accumulates.
-Cloud memory products solve the sharing problem by sending proprietary code,
-business rules, and secrets off-network — which is a non-starter for many orgs.
+AI engineering agents are powerful in a single session and weak across a team:
+context resets, every machine has its own notes, specs live in chat paste, and
+skills don’t circulate. Cloud “memory” products fix sharing by sending proprietary
+code and business rules off-network — unacceptable for many orgs.
 
-ShareMem’s objective is simple:
+ShareMem’s objective:
 
-**One shared, private memory for the whole team — scoped by `project`, readable and
-writable by any agent on any host, running 100% on your LAN, and ready to scale
-from a laptop to hundreds of millions of memories.**
+**Give every agent on the LAN the same durable memory, the same Spec-Driven
+workflow, and the same internal skill catalog — private, shared by `project`,
+and operable at team scale.**
 
-Concrete target: ~200 developers and dozens of MCP agents on self-hosted infra.
+Target: ~200 developers and dozens of MCP agents on self-hosted infra.
+
+## What ShareMem is (three pillars)
+
+### 1. Shared memory
+
+Memories are scoped by **`project`** (not by machine). Any agent on any host
+reads and writes the same store. Writes are **async** (durable queue → worker →
+LLM extract); reads are **sync and fast** (semantic search + cache). Governance
+(TTL, dedup, quarantine, quota, cold tier) keeps quality as volume grows.
+
+| Piece | Role |
+|-------|------|
+| MCP `add_memories` / `search_memory` / `list_memories` | Agent read/write |
+| Fail-closed local LLM (`MEM0_LOCAL_ONLY=1`) | Privacy enforced in code |
+| Write queue + write worker | Agents never block on extraction |
+| Deletion guard (default off) | Prevent accidental mass delete |
+
+### 2. Spec-Driven Development (SDD)
+
+ShareMem is built for **Spec-Driven Development**: agents don’t invent work from
+chat — they create and follow shared specs, mirrored on a team Kanban.
+
+```
+Idea → PRD → TechSpec (+ ADRs) → Tasks → claim → code → review → test → done
+         │         │                │
+         └─────────┴── Spec SoT (MCP/REST) ── mirrored to Kanban UI ─┘
+```
+
+| Surface | What it does |
+|---------|----------------|
+| **SpecWorkspace** | Shared workspace per feature (`project_id` + slug) |
+| **Spec documents** | Versioned `prd` / `techspec` / `tasks` / `adrs` (optimistic concurrency) |
+| **Task cards** | Kanban pipeline: `tasks` → `em_andamento` → `revisao_codigo` → `fase_teste` → `concluido` (no skipping) |
+| **Kanban UI** (`/docs`) | Full-bleed board for humans; agents drive status via MCP |
+| **SDD column** | Spec artifacts (PRD, TechSpec, ADRs, task list) stay visible on the board |
+| **Skills `cy-*`** | `cy-create-prd`, `cy-create-techspec`, `cy-create-tasks`, `cy-execute-task`, `cy-review-round`, `cy-final-verify`, … |
+
+Iron rule: every meaningful agent action updates the Shared Kanban/workspace in
+the **same** turn. Chat and local files are not the source of truth.
+
+### 3. Skills Store (internal catalog)
+
+The **Store** (`/store` in the UI) is a private catalog of skills, MCP servers,
+prompts, agents, and plugins — backed by **AgentRegistry** on the LAN.
+
+| Capability | How |
+|------------|-----|
+| Browse / search | UI Store + MCP `search_catalog` / `get_catalog_resource` |
+| Publish skills | MCP publish tools or `integrations/agentregistry/scripts/seed-mem0-skills.py` from `skills/` |
+| Install on a host | Install recipes (MCP) so agents apply catalog entries locally |
+| Auth | Same ShareMem session as the rest of the UI |
+
+Team-written skills under `skills/` (including the SDD `cy-*` pipeline) are meant
+to be published here so every developer and agent can install the same playbooks.
+
+## Also in the product
+
+| Area | Highlights |
+|------|------------|
+| **Identity** | Google Workspace login on the UI; person / machine / agent layers; agent tokens (`omtk_`); legacy hostname agents still work |
+| **Scale** | PostgreSQL + PgBouncer, Redis cache, Traefik, separate write workers, Qdrant partitioning / promote |
+| **Governance** | Quarantine, TTL, dedup, semantic consolidate, per-project caps, cold tier |
+| **Ops** | CI gate, MinIO/S3 backup+restore, OpenTelemetry, rate limit per `(project, hostname)`, team auth modes |
+| **Protection** | Never `docker compose down -v`; deletion fail-closed; see [`AGENTS.md`](AGENTS.md) |
 
 ## Design principles
 
 | Principle | What we do | Why |
 |-----------|------------|-----|
-| **Local-first, fail-closed** | Server **refuses to start** if LLM/embedder points at a non-local host (`MEM0_LOCAL_ONLY=1`); telemetry off. | Privacy is enforced in code, not convention. |
-| **Scope by `project`, not machine** | Memories are keyed by `project`; hostname is for attribution/audit only. | Any agent on any host sees the same project store. |
-| **Async writes, immediate ack** | `add_memories` enqueues and returns `{queued, job_id}`; a worker extracts via LLM later. | Agents must not block on slow extraction. |
-| **Separate read and write paths** | Search/embedding on the API path; LLM extraction on dedicated workers. | Fast, frequent reads don’t fight heavy batch writes. |
-| **Partition by tenant** | Collection/shard routing by `project`; huge projects can get a dedicated collection. | Keeps each index small and search fast at scale. |
-| **Quality governance** | Reversible quarantine, TTL, dedup, semantic consolidation, per-project caps, cold tier. | Volume without lifecycle pollutes retrieval. |
-| **Operate with confidence** | CI gate, backup/restore, end-to-end tracing, rate limits, team auth. | Demo-ready ≠ production-ready. |
+| **Local-first, fail-closed** | Refuse non-local LLM/embedder; telemetry off | Privacy in code, not convention |
+| **Scope by `project`** | Shared memory + specs keyed by project | Same acervo for every host |
+| **Spec as SoT** | Agents write specs/tasks via MCP; UI mirrors | Humans and agents see one board |
+| **Async writes** | Queue + worker for memory extraction | Agents stay responsive |
+| **Catalog on the LAN** | AgentRegistry Store for skills/MCP | Reuse playbooks without the public internet |
+| **Operate with confidence** | CI, backup, tracing, rate limits, auth | Production on a trusted LAN |
 
-## What you get today
+## Architecture (sketch)
 
-All planned phases are **done** and covered by
-tests (`openmemory/api`: **375 passed, 2 skipped**).
+```
+Agents (Claude Code, Cursor, Codex, …)
+        │  MCP  /mcp/{client_name}/sse/{hostname}   (server name: sharemem)
+        ▼
+┌──────────────────────────────────────────────┐
+│ openmemory-mcp  (ShareMem API/MCP)  :8765    │
+│  memory queue · specs · kanban · store proxy │
+└───────┬──────────────┬──────────────┬────────┘
+        ▼              ▼              ▼
+     Qdrant      PostgreSQL      AgentRegistry
+   (memories)   (queue, specs,    (skills store)
+                 kanban mirror)
+        │
+   Local LLM (Ollama / llama.cpp)
+```
 
-| Capability | Highlights |
-|------------|------------|
-| **Shared memory** | `project`-scoped store; MCP tools; discovery + provision; local model detection (Ollama / llama.cpp) |
-| **Async write path** | Durable queue (SQLite or PostgreSQL); write worker with retries; fire-and-forget ack |
-| **Scale stack** | PostgreSQL + PgBouncer, Redis cache, Traefik edge, separate write workers, `/health` + `/metrics` |
-| **Qdrant partitioning** | Tenant routing; promote large projects; blue/green migration admin |
-| **Governance** | `active` / `quarantined` / `purged`; TTL; dedup; consolidate; quota; cold tier |
-| **Production readiness (LAN)** | CI gate, MinIO/S3 backup+restore, OpenTelemetry, per-`(project, hostname)` rate limit, team auth |
+UI (`:3000`): memories, projects, **Kanban** (`/docs`), **Store** (`/store`), admin.
+Scale mode adds Traefik, Redis, PgBouncer, write/governance/migration workers.
+Details: [`openmemory/docs/self-hosted-scale-architecture.md`](openmemory/docs/self-hosted-scale-architecture.md).
 
-**Out of scope (by design for LAN):** multi-node Qdrant cluster, HPA/K8s migration,
-one collection per project by default, dedicated GPU TEI/vLLM, mTLS between
-services, optional hybrid search. Resilience without a cluster is covered by
-**backup/restore** (single-node). See
-[`openmemory/docs/self-hosted-scale-architecture.md`](openmemory/docs/self-hosted-scale-architecture.md).
+### Critical data protection
+
+Team memories live in Docker volume **`mem0_storage` (Qdrant)** and durable
+**`write_queue` (PostgreSQL)**. Losing Qdrant has already cost 1000+ memories;
+recovery depends on the Postgres queue. Use `openmemory/scripts/safe-stack-down.sh`
+— never `docker compose down -v`.
 
 ## Deploy profiles
 
 | Profile | When | Compose / script | DB | Workers |
 |---------|------|------------------|----|---------|
-| **Local-first** | Dev / small team / one machine | `python install.py` → `openmemory/docker-compose.yml` | SQLite | Embedded write worker |
-| **Scale (Compose)** | LAN, dozens of agents | `openmemory/scripts/bootstrap-scale.sh` → `docker-compose.scale.yml` | PostgreSQL + PgBouncer | API replicas + write-worker; migration via `--profile migration` |
-| **Scale (Swarm)** | Explicit replicas | `docker stack deploy -c docker-stack.yml mem0` | PostgreSQL + PgBouncer | API ×4, write-worker ×8, governance-worker ×1 |
-
-> Governance worker ships in `docker-stack.yml`. On Compose scale, run manually:
-> `python -m app.workers.governance_worker` with the same env as the API.
-
-## Architecture (one sentence)
-
-Shared memory **per `project`**: each fact becomes a **vector** in Qdrant; **writes
-are async** (durable queue → worker → LLM extract); **reads are sync and fast**
-(semantic search + cache); **governance** runs off-peak to keep quality. Nothing
-leaves the LAN.
-
-```
-Agents (Claude Code, Cursor, Codex, …)
-        │  MCP  /mcp/{client_name}/sse/{hostname}
-        ▼
-┌─────────────────────────────┐
-│ openmemory-mcp  (API/MCP)   │  :8765
-│  write queue + fail-closed  │
-└──────────┬──────────────────┘
-           │
-   ┌───────┴────────┐
-   ▼                ▼
-Qdrant          Local LLM
-(:6333)         Ollama / llama.cpp
-```
-
-Scale mode adds Traefik, Redis, PostgreSQL/PgBouncer, and dedicated write /
-governance / migration workers. Full diagrams and data-flow:
-[`openmemory/docs/self-hosted-scale-architecture.md`](openmemory/docs/self-hosted-scale-architecture.md).
-
-### Critical data protection
-
-Team memories live in Docker volume **`mem0_storage` (Qdrant)** and the durable
-**`write_queue` (PostgreSQL)**. Losing the Qdrant volume has already cost 1000+
-memories; recovery depends on the Postgres queue.
-
-- Never `docker compose down -v` — use `openmemory/scripts/safe-stack-down.sh`
-- Deletion is fail-closed (`MEM0_ALLOW_MEMORY_DELETE` / `MEM0_ALLOW_BULK_DELETE` default `0`)
-- Details: [`AGENTS.md`](AGENTS.md) (CRITICAL section)
+| **Local-first** | Dev / small team | `python install.py` | SQLite | Embedded write worker |
+| **Scale (Compose)** | LAN, dozens of agents | `openmemory/scripts/bootstrap-scale.sh` → `docker-compose.scale.yml` | PostgreSQL + PgBouncer | API + write-worker |
+| **Scale (Swarm)** | Explicit replicas | `docker stack deploy -c docker-stack.yml mem0` | PostgreSQL + PgBouncer | API ×4, write-worker ×8, governance ×1 |
 
 ## Quick start (local-first)
 
-**Prerequisites:** Docker + Compose v2, Python 3.8+, and a local LLM
-(Ollama and/or llama.cpp) reachable on the network.
+**Prerequisites:** Docker + Compose v2, Python 3.8+, local LLM (Ollama and/or llama.cpp).
 
 ```bash
 python install.py
+# optional UI:
+python install.py --with-ui
 ```
-
-Useful flags:
 
 ```bash
 python install.py --ollama-url http://192.168.0.10:11434
@@ -122,33 +161,25 @@ python install.py --data-dir /srv/mem0-data --with-ui
 
 Services: `mem0_store` (Qdrant `:6333`), `openmemory-mcp` (`:8765`), optional UI (`:3000`).
 
-> Do **not** use upstream `openmemory/run.sh` — it expects `OPENAI_API_KEY`.
+> Do **not** use upstream `openmemory/run.sh` (expects `OPENAI_API_KEY`).
 > Use `install.py` / `openmemory/install-local-first.sh`.
 
 Guide: [`openmemory/INSTALL-memoria-compartilhada.md`](openmemory/INSTALL-memoria-compartilhada.md).
 
-### Scale bootstrap
+### Scale + smoke
 
 ```bash
 cd openmemory
 ./scripts/bootstrap-scale.sh
 docker compose -f docker-compose.scale.yml up -d
-```
-
-### Smoke test
-
-```bash
-cd openmemory
 ./scripts/smoke-memoria-compartilhada.sh
-KEEP_UP=1 ./scripts/smoke-memoria-compartilhada.sh
 ```
 
 ## Connect an agent
 
-With the server up (`:8765`), point an agent at `/provision` so it can install MCP
-config and memory mode settings.
+Point the agent at `/provision` (MCP server key: **`sharemem`**).
 
-**Cursor example** (replace `SERVIDOR`):
+**Cursor** (replace `SERVIDOR`):
 
 ```
 Leia http://SERVIDOR:8765/provision?host=cursor e execute a receita retornada:
@@ -157,45 +188,42 @@ campo "env", apresente as 3 opções de modo de memória e grave a escolha em
 ~/.mem0/settings.json. Confirme cada ação com o usuário antes de executar.
 ```
 
-Same pattern for `host=claude-code` and `host=codex`.
+Same for `host=claude-code` and `host=codex`.
 
-### MCP tools
+### MCP tool groups
 
-| Tool | Role |
-|------|------|
-| `add_memories(text, project)` | Async enqueue; immediate accept ack |
-| `search_memory(query, project)` | Semantic search over **active** project memories |
-| `list_memories(project)` | List (includes quarantined — ops/admin) |
-| `delete_memories(memory_ids)` | Delete by ID (blocked unless delete guard enabled) |
-| `delete_all_memories()` | Bulk delete (blocked unless bulk guard enabled) |
+| Group | Examples | Purpose |
+|-------|----------|---------|
+| **Memory** | `add_memories`, `search_memory`, `list_memories`, `mark_obsolete` | Shared project memory |
+| **SDD / Specs** | `create_spec_workspace`, `write_spec_document`, `read_spec_document`, `search_specs` | PRD / TechSpec / Tasks / ADRs |
+| **Kanban tasks** | `create_task`, `claim_task`, `update_task_status`, `list_tasks`, `add_spec_comment` | Pipeline without skipping columns |
+| **Store** | `search_catalog`, `get_catalog_resource`, `publish_skill_package`, `get_install_recipe` | Internal skills / MCP catalog |
 
-`project` is **required** on read/write tools. It defines the shared space.
+`project` is required on memory tools. Spec/Kanban tools use `project_id` + workspace.
 
 ### Agent memory modes (`~/.mem0/settings.json`)
 
 | Mode | Behavior |
 |------|----------|
 | **1. Read + write** | Auto search + capture |
-| **2. Read; manual write** | Auto context; write on request (recommended default) |
-| **3. Manual** | Everything via `/mem0:*` and MCP |
+| **2. Read; manual write** | Auto context; write on request (recommended) |
+| **3. Manual** | Everything via slash commands and MCP |
 
 ## Ops cheat sheet
 
 | Endpoint | Use |
 |----------|-----|
 | `GET /discovery` | MCP auto-config |
-| `GET /provision` | Agent install recipe |
+| `GET /provision` | Agent install recipe (`sharemem` MCP block) |
 | `GET /health` / `GET /metrics` | Health + Prometheus |
-| `POST /admin/backup/{run,restore}` | Backup / restore (Qdrant + Postgres → MinIO/S3) |
-| `GET/PUT /admin/governance/policies` | Global governance policy |
-| `POST /admin/governance/jobs/{job_type}` | Enqueue governance job |
-| `POST /admin/migration/*` | Partition migration control |
-| `POST /admin/projects/{name}/promote` | Promote project to dedicated collection |
+| `POST /admin/backup/{run,restore}` | Qdrant + Postgres → MinIO/S3 |
+| `GET/PUT /admin/governance/policies` | Governance policy |
+| `POST /admin/migration/*` | Partition migration |
 | `GET /admin/deletion-guard` | Deletion guard status |
 
 Essential env: `MEM0_LOCAL_ONLY=1`, `MEM0_TELEMETRY=false`, LLM/embedder URLs,
-`DATABASE_URL`, `REDIS_URL` (scale), `AUTH_MODE`, backup S3 settings.
-See `openmemory/api/.env.example`.
+`DATABASE_URL`, `REDIS_URL` (scale), `AUTH_MODE`, backup S3. See
+`openmemory/api/.env.example`.
 
 ## Tests
 
@@ -204,24 +232,25 @@ cd openmemory/api && pytest tests/
 pytest tests/memory/test_project_scope.py tests/vector_stores/test_qdrant.py
 ```
 
-Same suite runs in CI (`ci-gate.yml` → `openmemory-api-ci.yml`).
+CI: `ci-gate.yml` → `openmemory-api-ci.yml`.
 
-## Internal docs
+## Docs in this repo
 
 | Path | Content |
 |------|---------|
+| [`skills/cy-create-prd/references/fluxo-sdd.md`](skills/cy-create-prd/references/fluxo-sdd.md) | SDD flow (PRD → TechSpec → Tasks → execute) |
 | [`openmemory/docs/runbooks/`](openmemory/docs/runbooks/) | Backup, auth, governance, incident |
 | [`openmemory/INSTALL-memoria-compartilhada.md`](openmemory/INSTALL-memoria-compartilhada.md) | Local-first install |
-| [`openmemory/docs/self-hosted-scale-architecture.md`](openmemory/docs/self-hosted-scale-architecture.md) | Target architecture + implementation status |
-| [`AGENTS.md`](AGENTS.md) | Contributor / agent guide for this monorepo |
+| [`openmemory/docs/self-hosted-scale-architecture.md`](openmemory/docs/self-hosted-scale-architecture.md) | Scale architecture + status |
+| [`apresentacao-openmemory.md`](apresentacao-openmemory.md) | Product walkthrough (PT-BR) |
+| [`AGENTS.md`](AGENTS.md) | Contributor / agent guide |
 
 ## Technology foundation
 
-ShareMem’s product and ops surface are the OpenMemory platform and the local-first
-shared-memory stack in this repo. Under the hood it still uses the open-source
-**mem0** SDK packages (`mem0/`, vector stores, etc.) as a library foundation —
-extended with `project` scope, governance filters, durable queues, and LAN
-fail-closed guards.
+ShareMem’s product surface is this repo’s API/MCP, UI, Spec/Kanban, and Store.
+Under the hood it still uses open-source **mem0** SDK packages as a library
+foundation — extended with `project` scope, durable queues, governance, SDD, and
+LAN fail-closed guards.
 
 Upstream mem0 docs (SDK reference only): https://docs.mem0.ai
 
