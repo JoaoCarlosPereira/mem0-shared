@@ -52,7 +52,8 @@ tests (`openmemory/api`: **375 passed, 2 skipped**).
 **Out of scope (by design for LAN):** multi-node Qdrant cluster, HPA/K8s migration,
 one collection per project by default, dedicated GPU TEI/vLLM, mTLS between
 services, optional hybrid search. Resilience without a cluster is covered by
-**backup/restore** (single-node). See [ADR-001](.docs/tasks/prontidao-producao/adrs/adr-001.md).
+**backup/restore** (single-node). See
+[`openmemory/docs/self-hosted-scale-architecture.md`](openmemory/docs/self-hosted-scale-architecture.md).
 
 ## Deploy profiles
 
@@ -209,7 +210,6 @@ Same suite runs in CI (`ci-gate.yml` → `openmemory-api-ci.yml`).
 
 | Path | Content |
 |------|---------|
-| [`.docs/tasks/`](.docs/tasks/) | PRD / TechSpec / ADRs for all phases |
 | [`openmemory/docs/runbooks/`](openmemory/docs/runbooks/) | Backup, auth, governance, incident |
 | [`openmemory/INSTALL-memoria-compartilhada.md`](openmemory/INSTALL-memoria-compartilhada.md) | Local-first install |
 | [`openmemory/docs/self-hosted-scale-architecture.md`](openmemory/docs/self-hosted-scale-architecture.md) | Target architecture + implementation status |
