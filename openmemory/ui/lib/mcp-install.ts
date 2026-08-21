@@ -1,5 +1,5 @@
 /**
- * MCP install URLs/commands for agent machines (not the OpenMemory server).
+ * MCP install URLs/commands for agent machines (not the ShareMem server).
  *
  * The last path segment is the client hostname (ADR-003 attribution). Commands
  * use shell env vars so each machine resolves its own name at install time.
@@ -95,7 +95,7 @@ export function claudeMcpAddCommand(
   token?: string,
 ): string {
   const url = mcpHttpUrl(baseUrl, "claude-code", hostnameExpr, group, token);
-  return `claude mcp add --transport http mem0 "${url}" --scope user`;
+  return `claude mcp add --transport http sharemem "${url}" --scope user`;
 }
 
 /** Prompt para o agente executar a receita de provisionamento via curl. */

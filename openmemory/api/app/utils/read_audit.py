@@ -207,7 +207,7 @@ def audit_log_display_label(
     if src == "api":
         return "Interface Web"
     if src in {"mcp", "admin", "compat_v3"}:
-        return "Mem0-Shared"
+        return "ShareMem"
     return src or "Desconhecido"
 
 

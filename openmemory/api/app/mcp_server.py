@@ -1,8 +1,8 @@
 """
-MCP Server for OpenMemory with resilient memory client handling.
+MCP Server for ShareMem with resilient memory client handling.
 
 This module implements an MCP (Model Context Protocol) server that provides
-memory operations for OpenMemory. The memory client is initialized lazily
+memory operations for ShareMem. The memory client is initialized lazily
 to prevent server crashes when external dependencies (like Ollama) are
 unavailable. If the memory client cannot be initialized, the server will
 continue running with limited functionality and appropriate error messages.
@@ -69,7 +69,7 @@ from starlette.responses import Response
 safe_load_dotenv()
 
 # Initialize MCP
-mcp = FastMCP("mem0-mcp-server")
+mcp = FastMCP("sharemem")
 
 # get_memory_client_safe is imported from app.utils.memory (canonical location).
 
@@ -1167,7 +1167,7 @@ def _current_mcp_actor_id() -> str:
     return hostname or "mcp"
 
 
-@mcp.tool(description="Search the internal Mem0 catalog across skills, MCP servers, prompts, agents and plugins via AgentRegistry. Safe read-only operation. `query` may be empty to list recent resources; `kind` optionally narrows to skill|mcpserver|prompt|agent|plugin. Returns JSON results with summaries and raw resources.")
+@mcp.tool(description="Search the internal ShareMem catalog across skills, MCP servers, prompts, agents and plugins via AgentRegistry. Safe read-only operation. `query` may be empty to list recent resources; `kind` optionally narrows to skill|mcpserver|prompt|agent|plugin. Returns JSON results with summaries and raw resources.")
 async def search_catalog(
     query: str = "",
     kind: str | None = None,
@@ -1351,7 +1351,7 @@ async def delete_skill_package(
         return f"Error: {e}"
 
 
-@mcp.tool(description="Build a host-applied install recipe for a catalog resource using OpenMemory InstallRecipeService. This does not write files itself, but it starts an install workflow; only call after an explicit developer request to install and pass confirm_user_requested=true.")
+@mcp.tool(description="Build a host-applied install recipe for a catalog resource using ShareMem InstallRecipeService. This does not write files itself, but it starts an install workflow; only call after an explicit developer request to install and pass confirm_user_requested=true.")
 async def get_install_recipe(
     kind: str,
     name: str,

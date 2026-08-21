@@ -93,7 +93,7 @@ class TestPerHostMcpConfig:
     async def test_claude_code_writes_mcp_json(self, client):
         cfg = (await client.get("/provision?host=claude-code")).json()["mcp_config"]
         assert cfg["target_file"] == ".mcp.json"
-        url = cfg["content"]["mcpServers"]["mem0"]["url"]
+        url = cfg["content"]["mcpServers"]["sharemem"]["url"]
         assert url.startswith(f"{_LAN_BASE}/mcp/claude-code/http/")
 
     @pytest.mark.asyncio
@@ -101,7 +101,7 @@ class TestPerHostMcpConfig:
         cfg = (await client.get("/provision?host=codex")).json()["mcp_config"]
         assert cfg["format"] == "toml"
         assert cfg["target_file"] == "~/.codex/config.toml"
-        assert "[mcp_servers.mem0]" in cfg["content"]
+        assert "[mcp_servers.sharemem]" in cfg["content"]
 
     @pytest.mark.asyncio
     async def test_cursor_writes_cursor_mcp_json(self, client):
@@ -120,30 +120,30 @@ class TestAgentTokenInRecipe:
     @pytest.mark.asyncio
     async def test_sem_token_urls_identicas_ao_legado(self, client):
         data = (await client.get("/provision?host=claude-code")).json()
-        mem0 = data["mcp_config"]["content"]["mcpServers"]["mem0"]
-        url = mem0["url"]
+        sharemem = data["mcp_config"]["content"]["mcpServers"]["sharemem"]
+        url = sharemem["url"]
         assert "token=" not in url
-        assert mem0["headers"] == {"Authorization": "Bearer local"}
+        assert sharemem["headers"] == {"Authorization": "Bearer local"}
         assert data["env"]["MEM0_API_KEY"] == "local"
 
     @pytest.mark.asyncio
     async def test_sem_token_cursor_inclui_header_legado(self, client):
-        mem0 = (await client.get("/provision?host=cursor")).json()["mcp_config"]["content"][
+        sharemem = (await client.get("/provision?host=cursor")).json()["mcp_config"]["content"][
             "mcpServers"
-        ]["mem0"]
-        assert mem0["headers"] == {"Authorization": "Bearer local"}
+        ]["sharemem"]
+        assert sharemem["headers"] == {"Authorization": "Bearer local"}
 
     @pytest.mark.asyncio
     async def test_com_token_nao_inclui_header_legado(self, client):
-        mem0 = (
+        sharemem = (
             await client.get("/provision?host=claude-code&token=omtk_abc123")
-        ).json()["mcp_config"]["content"]["mcpServers"]["mem0"]
-        assert "headers" not in mem0
+        ).json()["mcp_config"]["content"]["mcpServers"]["sharemem"]
+        assert "headers" not in sharemem
 
     @pytest.mark.asyncio
     async def test_token_embutido_na_url_e_no_env(self, client):
         data = (await client.get("/provision?host=claude-code&token=omtk_abc123")).json()
-        url = data["mcp_config"]["content"]["mcpServers"]["mem0"]["url"]
+        url = data["mcp_config"]["content"]["mcpServers"]["sharemem"]["url"]
         assert url.endswith("/mcp/claude-code/http/{hostname}?token=omtk_abc123")
         assert data["mcp_config"]["sse_url"].endswith("?token=omtk_abc123")
         assert data["env"]["MEM0_API_KEY"] == "omtk_abc123"
@@ -155,7 +155,7 @@ class TestAgentTokenInRecipe:
                 "/provision?host=cursor&token=omtk_abc123&group=Equipe Fiscal"
             )
         ).json()
-        url = data["mcp_config"]["content"]["mcpServers"]["mem0"]["url"]
+        url = data["mcp_config"]["content"]["mcpServers"]["sharemem"]["url"]
         assert "?token=omtk_abc123&group=Equipe%20Fiscal" in url
 
     @pytest.mark.asyncio
@@ -169,12 +169,12 @@ class TestAgentTokenInRecipe:
             await client.get("/provision?host=codex&token=omtk_abc123")
         ).json()["mcp_config"]
         parsed = tomllib.loads(cfg["content"])
-        assert parsed["mcp_servers"]["mem0"]["url"].endswith("?token=omtk_abc123")
+        assert parsed["mcp_servers"]["sharemem"]["url"].endswith("?token=omtk_abc123")
 
     @pytest.mark.asyncio
     async def test_token_vazio_equivale_a_ausente(self, client):
         data = (await client.get("/provision?host=claude-code&token=")).json()
-        url = data["mcp_config"]["content"]["mcpServers"]["mem0"]["url"]
+        url = data["mcp_config"]["content"]["mcpServers"]["sharemem"]["url"]
         assert "token=" not in url
         assert data["env"]["MEM0_API_KEY"] == "local"
 

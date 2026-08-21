@@ -99,7 +99,7 @@ def assert_write_allowed(
     if not _hostname_user_exists(resolved):
         raise WriteBlockedError(
             f"memory write blocked — user '{resolved}' is not registered. "
-            "Connect once to OpenMemory (MCP install) or ask an admin to add the hostname."
+            "Connect once to ShareMem (MCP install) or ask an admin to add the hostname."
         )
 
 

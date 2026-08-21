@@ -74,7 +74,7 @@ This installs the full plugin including the MCP server, lifecycle hooks (automat
 Codex reads MCP servers from `~/.codex/config.toml` as TOML. Add:
 
 ```toml
-[mcp_servers.mem0]
+[mcp_servers.sharemem]
 url = "https://mcp.mem0.ai/mcp"
 bearer_token_env_var = "MEM0_API_KEY"
 ```
@@ -90,9 +90,9 @@ git clone https://github.com/mem0ai/mem0.git ~/codex-plugins/mem0-source
 codex plugin marketplace add ~/codex-plugins/mem0-source
 ```
 
-This points Codex at the repo's `.agents/plugins/marketplace.json`, which references `integrations/mem0-plugin/` as the local source. Restart Codex, run `/plugins`, and install **Mem0** from the **Mem0 Plugins** marketplace.
+This points Codex at the repo's `.agents/plugins/marketplace.json`, which references `integrations/mem0-plugin/` as the local source. Restart Codex, run `/plugins`, and install **ShareMem** from the **ShareMem Plugins** marketplace.
 
-> **Don't combine with Option A.** The plugin manifest auto-registers `mem0` as an MCP server via `integrations/mem0-plugin/.codex-mcp.json` — adding a manual `[mcp_servers.mem0]` block would duplicate the registration.
+> **Don't combine with Option A.** The plugin manifest auto-registers `sharemem` as an MCP server via `integrations/mem0-plugin/.codex-mcp.json` — adding a manual `[mcp_servers.sharemem]` block would duplicate the registration.
 
 **Optional — enable lifecycle hooks.** Codex doesn't auto-wire hooks from plugin manifests; it only reads `~/.codex/hooks.json` (or `<repo>/.codex/hooks.json`) ([docs](https://developers.openai.com/codex/hooks)). Run the bundled installer once to merge Mem0's entries:
 
@@ -141,7 +141,7 @@ Add the following to your `.cursor/mcp.json`:
 ```json
 {
   "mcpServers": {
-    "mem0": {
+    "sharemem": {
       "url": "https://mcp.mem0.ai/mcp/",
       "headers": {
         "Authorization": "Token ${env:MEM0_API_KEY}"
@@ -168,7 +168,7 @@ Then add the MCP server to your `opencode.json` (project or global at `~/.config
 ```json
 {
   "mcp": {
-    "mem0": {
+    "sharemem": {
       "type": "remote",
       "url": "https://mcp.mem0.ai/mcp/",
       "headers": {

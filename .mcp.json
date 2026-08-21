@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "mem0": {
+    "sharemem": {
       "type": "http",
       "url": "http://localhost:8765/mcp/claude-code/http/ubuntu"
     }

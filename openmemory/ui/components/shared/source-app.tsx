@@ -21,6 +21,11 @@ export const constants = {
     icon: <Icon source="/logo.svg" />,
     iconImage: "/logo.svg",
   },
+  sharemem: {
+    name: "ShareMem",
+    icon: <Icon source="/logo.svg" />,
+    iconImage: "/logo.svg",
+  },
   cursor: {
     name: "Cursor",
     icon: <Icon source="/images/cursor.png" />,

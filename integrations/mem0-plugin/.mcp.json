@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "mem0": {
+    "sharemem": {
       "type": "http",
       "url": "https://mcp.mem0.ai/mcp/",
       "headers": {

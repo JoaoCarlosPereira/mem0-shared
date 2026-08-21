@@ -2,7 +2,7 @@ import "next-auth";
 
 declare module "next-auth" {
   interface Session {
-    /** JWT de sessão emitido pela API OpenMemory (ADR-002). */
+    /** JWT de sessão emitido pela API ShareMem (ADR-002). */
     apiAccessToken?: string | null;
     /** Sem máquina vinculada — dispara o wizard de onboarding. */
     firstLogin?: boolean;

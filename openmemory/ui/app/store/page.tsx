@@ -242,7 +242,7 @@ export default function StorePage() {
 
       {!apiSessionReady ? (
         <div role="alert" className="rounded-2xl border border-amber-500/30 bg-amber-950/30 p-4 text-sm text-amber-200">
-          A Store usa a mesma sessão autenticada do OpenMemory. Aguarde a sessão
+          A Store usa a mesma sessão autenticada do ShareMem. Aguarde a sessão
           ser validada para carregar o catálogo.
         </div>
       ) : null}

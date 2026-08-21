@@ -17,7 +17,7 @@ services:
       WEBUI_NAME: Open WebUI - ShareMem
       ENABLE_SIGNUP: "true"
       TOOL_SERVER_CONNECTIONS: >-
-        [{"url":"http://openmemory-mcp:8765/mcp/openwebui/http/openwebui","path":"","type":"mcp","auth_type":"none","headers":null,"key":null,"config":{"enable":true},"info":{"id":"sharemem","name":"ShareMem","description":"Shared Memory for AI Engineering Agents — busca e gravação via OpenMemory MCP"}}]
+        [{"url":"http://openmemory-mcp:8765/mcp/openwebui/http/openwebui","path":"","type":"mcp","auth_type":"none","headers":null,"key":null,"config":{"enable":true},"info":{"id":"sharemem","name":"ShareMem","description":"Shared Memory for AI Engineering Agents — busca e gravação via MCP ShareMem"}}]
     volumes:
       - openwebui_data:/app/backend/data
     networks:

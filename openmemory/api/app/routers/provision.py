@@ -1,10 +1,10 @@
-"""Agent-driven provisioning endpoint for the local-only mem0 plugin.
+"""Agent-driven provisioning endpoint for the local-only ShareMem plugin.
 
 An agent (Claude Code / Cursor / Codex) reads ``GET /provision?host=<host>`` and
-executes the returned, self-contained recipe to wire the official mem0 plugin to
-THIS local server with zero cloud egress:
+executes the returned, self-contained recipe to wire the plugin to THIS local
+ShareMem server with zero cloud egress:
 
-  1. write the MCP config block pointing at this server,
+  1. write the MCP config block pointing at this server (server key ``sharemem``),
   2. set the env (``OPENMEMORY_API_BASE``, ``MEM0_LOCAL_ONLY=1``, ``MEM0_API_KEY``,
      ``MEM0_TELEMETRY=false``),
   3. present the 3 memory modes to the user and persist the choice to
@@ -12,8 +12,9 @@ THIS local server with zero cloud egress:
   4. verify (``GET /discovery`` + a test search).
 
 The recipe is deterministic — exact file targets and exact JSON to merge — and
-idempotent (replace mem0 entries, never append). ``GET /provision/protocol``
-returns a plain-text behavioral protocol for clients without lifecycle hooks.
+idempotent (replace ``sharemem`` / legacy ``mem0`` entries, never append).
+``GET /provision/protocol`` returns a plain-text behavioral protocol for clients
+without lifecycle hooks.
 """
 
 from typing import Optional
@@ -27,6 +28,8 @@ router = APIRouter(prefix="/provision", tags=["provision"])
 
 PROVISION_VERSION = "1"
 SUPPORTED_HOSTS = ("claude-code", "cursor", "codex")
+# Nome do servidor MCP nos clientes (Cursor / Claude / Codex).
+MCP_SERVER_NAME = "sharemem"
 # Bearer fixo do shim OAuth legado (``mcp_oauth_compat``) e ``MEM0_API_KEY`` sem token.
 LEGACY_MCP_AUTH_HEADER = "Bearer local"
 
@@ -111,7 +114,7 @@ def _mcp_config(
             "format": "toml",
             "target_file": "~/.codex/config.toml",
             "content": (
-                "[mcp_servers.mem0]\n"
+                f"[mcp_servers.{MCP_SERVER_NAME}]\n"
                 f'url = "{http_url}"\n'
             ),
         }
@@ -119,7 +122,7 @@ def _mcp_config(
         return {
             "format": "json",
             "target_file": ".cursor/mcp.json",
-            "content": {"mcpServers": {"mem0": _mcp_http_entry(http_url, token)}},
+            "content": {"mcpServers": {MCP_SERVER_NAME: _mcp_http_entry(http_url, token)}},
         }
     # claude-code (and default)
     http_entry = _mcp_http_entry(http_url, token)
@@ -127,7 +130,7 @@ def _mcp_config(
     return {
         "format": "json",
         "target_file": ".mcp.json",
-        "content": {"mcpServers": {"mem0": http_entry}},
+        "content": {"mcpServers": {MCP_SERVER_NAME: http_entry}},
         "sse_url": sse_url,
     }
 
@@ -146,7 +149,8 @@ def _recipe(host: str) -> list:
                       "Substituir o placeholder {hostname} pelo hostname da máquina. "
                       "Preservar ``?token=`` (credencial do usuário — tratar como "
                       "segredo, não exibir em logs) e ``?group=`` na URL se presentes. "
-                      "Idempotente: substituir a entrada 'mem0' existente, nunca anexar.",
+                      "Idempotente: substituir a entrada 'sharemem' (ou legado 'mem0') "
+                      "existente, nunca anexar.",
         },
         {
             "step": "env",
