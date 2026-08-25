@@ -5,13 +5,12 @@ module.exports = async (query, boards) => {
   }
 
   const result = await query(
-    `SELECT mapping.planka_id AS board_id, app_user.group_id::text AS group_id
+    `SELECT mapping.planka_id AS board_id, workspace.group_id::text AS group_id
        FROM public.spec_planka_id_map AS mapping
        JOIN public.spec_workspaces AS workspace
          ON workspace.id = mapping.spec_id
-       JOIN public.users AS app_user
-         ON lower(app_user.user_id) = lower(workspace.created_by)
       WHERE mapping.entity_type = 'board'
+        AND workspace.group_id IS NOT NULL
         AND mapping.planka_id = ANY($1::text[])`,
     [boardIds],
   );

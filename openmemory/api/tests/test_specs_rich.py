@@ -35,19 +35,42 @@ def client(factory, monkeypatch, tmp_path: Path):
     monkeypatch.setenv("PLANKA_MIRROR_SYNC", "0")
     monkeypatch.setenv("SPEC_ATTACHMENTS_DIR", str(tmp_path / "attachments"))
 
+    import uuid
+    from app.models import DEFAULT_GROUP_NAME, Group, User
+    from app.utils.logging_context import auth_method_var, auth_user_var
+
+    s = factory()
+    person_id = uuid.uuid4()
+    try:
+        g = Group(name=DEFAULT_GROUP_NAME)
+        s.add(g)
+        s.flush()
+        s.add(User(id=person_id, user_id="ui-user-rich", email="rich@test.com", group_id=g.id))
+        s.commit()
+    finally:
+        s.close()
+
     app = FastAPI()
     app.include_router(specs_router)
     app.include_router(specs_rich_router)
 
     def _override():
-        s = factory()
+        sess = factory()
         try:
-            yield s
+            yield sess
         finally:
-            s.close()
+            sess.close()
 
     app.dependency_overrides[get_db] = _override
-    return TestClient(app)
+
+    tok_u = auth_user_var.set(str(person_id))
+    tok_m = auth_method_var.set("session")
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
+        auth_user_var.reset(tok_u)
+        auth_method_var.reset(tok_m)
 
 
 def _ws_and_task(client):

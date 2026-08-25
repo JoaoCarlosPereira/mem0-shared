@@ -442,9 +442,84 @@ class TestSearch:
 
 
 class TestSearchEndpoint:
+    """Busca semântica com isolamento por grupo (kanban-board-group-isolation).
+
+    O endpoint devolve apenas hits cujo ``workspace_id`` pertence a um workspace
+    do grupo do usuário autenticado (fail-closed: sem grupo => vazio).
+    """
+
     @pytest.fixture
     def client(self, factory, monkeypatch):
+        import uuid
+        from app.models import DEFAULT_GROUP_NAME, Group, User, SpecWorkspace
         from app.routers.specs import router
+        from app.utils.logging_context import auth_method_var, auth_user_var
+
+        app = FastAPI()
+        app.include_router(router)
+
+        # Usuário autenticado no Default group + 2 workspaces do mesmo grupo.
+        s = factory()
+        try:
+            g = s.query(Group).filter(Group.name == DEFAULT_GROUP_NAME).first()
+            if not g:
+                g = Group(name=DEFAULT_GROUP_NAME)
+                s.add(g)
+                s.flush()
+            user = User(id=uuid.uuid4(), user_id="search-user", group_id=g.id, user_type="person")
+            ws_a = SpecWorkspace(project_id="mem0-shared", slug="ws-a", name="A", group_id=g.id)
+            ws_b = SpecWorkspace(project_id="outro", slug="ws-b", name="B", group_id=g.id)
+            s.add_all([user, ws_a, ws_b])
+            s.commit()
+            s.refresh(ws_a)
+            s.refresh(ws_b)
+            ws_a_id, ws_b_id, user_id = str(ws_a.id), str(ws_b.id), str(user.id)
+        finally:
+            s.close()
+
+        def _override():
+            s = factory()
+            try:
+                yield s
+            finally:
+                s.close()
+
+        app.dependency_overrides[get_db] = _override
+        tok_m = auth_method_var.set("session")
+        tok_u = auth_user_var.set(user_id)
+
+        hits = [
+            FakeHit("1", 0.9, {"data": "spec A", "project": "mem0-shared", "document_type": "prd", "workspace_id": ws_a_id}),
+            FakeHit("2", 0.8, {"data": "spec B", "project": "outro", "document_type": "prd", "workspace_id": ws_b_id}),
+        ]
+
+        class FakeClient:
+            embedding_model = FakeEmbedder()
+
+        monkeypatch.setattr(spec_search, "get_memory_client_safe", lambda: FakeClient())
+        monkeypatch.setattr(spec_search, "get_specs_vector_store", lambda base=None: FakeVectorStore(hits))
+        try:
+            yield TestClient(app)
+        finally:
+            auth_user_var.reset(tok_u)
+            auth_method_var.reset(tok_m)
+
+    def test_search_filtra_por_projeto(self, client):
+        r = client.get("/api/v1/specs/search", params={"q": "spec", "project_id": "mem0-shared"})
+        assert r.status_code == 200
+        body = r.json()
+        assert [x["id"] for x in body] == ["1"]
+        assert body[0]["content"] == "spec A"
+
+    def test_search_sem_filtro_retorna_todos(self, client):
+        r = client.get("/api/v1/specs/search", params={"q": "spec"})
+        assert r.status_code == 200
+        assert len(r.json()) == 2
+
+    def test_search_sem_grupo_retorna_vazio(self, factory, monkeypatch):
+        """Fail-closed: ator sem grupo não vê nenhuma spec (mesmo hits sem workspace_id)."""
+        from app.routers.specs import router
+        from app.utils.logging_context import auth_method_var, auth_user_var
 
         app = FastAPI()
         app.include_router(router)
@@ -460,7 +535,6 @@ class TestSearchEndpoint:
 
         hits = [
             FakeHit("1", 0.9, {"data": "spec A", "project": "mem0-shared", "document_type": "prd"}),
-            FakeHit("2", 0.8, {"data": "spec B", "project": "outro", "document_type": "prd"}),
         ]
 
         class FakeClient:
@@ -468,16 +542,13 @@ class TestSearchEndpoint:
 
         monkeypatch.setattr(spec_search, "get_memory_client_safe", lambda: FakeClient())
         monkeypatch.setattr(spec_search, "get_specs_vector_store", lambda base=None: FakeVectorStore(hits))
-        return TestClient(app)
 
-    def test_search_filtra_por_projeto(self, client):
-        r = client.get("/api/v1/specs/search", params={"q": "spec", "project_id": "mem0-shared"})
-        assert r.status_code == 200
-        body = r.json()
-        assert [x["id"] for x in body] == ["1"]
-        assert body[0]["content"] == "spec A"
-
-    def test_search_sem_filtro_retorna_todos(self, client):
-        r = client.get("/api/v1/specs/search", params={"q": "spec"})
-        assert r.status_code == 200
-        assert len(r.json()) == 2
+        tok_m = auth_method_var.set("legacy")
+        tok_u = auth_user_var.set("")
+        try:
+            r = TestClient(app).get("/api/v1/specs/search", params={"q": "spec"})
+            assert r.status_code == 200
+            assert r.json() == []
+        finally:
+            auth_user_var.reset(tok_u)
+            auth_method_var.reset(tok_m)

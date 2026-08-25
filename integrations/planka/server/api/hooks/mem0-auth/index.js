@@ -18,6 +18,7 @@
 const { Client } = require('pg');
 
 const { authenticateMem0Request, authenticateOmtk } = require('./lib/validate-auth');
+const getBoardGroupIds = require('../../../utils/get-board-group-ids');
 
 module.exports = function defineMem0AuthHook(sails) {
   let pgClient = null;
@@ -84,9 +85,32 @@ module.exports = function defineMem0AuthHook(sails) {
     return `${sub || 'mem0-user'}@mem0.local`;
   };
 
-  const ensureSharedAccess = async (user) => {
-    if (!user || !user.id) return;
+  const reconcileBoardMembership = async (board, project, boardGroupId, userGroupId) => {
+    const existingBm = await BoardMembership.qm.getOneByBoardIdAndUserId(board.id, user.id);
+    const isOwnGroup = String(boardGroupId) === String(userGroupId);
+    if (isOwnGroup) {
+      if (!existingBm) {
+        await BoardMembership.qm.createOne({
+          projectId: project.id,
+          boardId: board.id,
+          userId: user.id,
+          role: BoardMembership.Roles.EDITOR,
+        });
+      } else if (existingBm.role !== BoardMembership.Roles.EDITOR) {
+        await BoardMembership.qm.updateOne(existingBm.id, { role: BoardMembership.Roles.EDITOR });
+      }
+    } else if (existingBm) {
+      // Revoke membership left over from the old all-shared behavior.
+      await BoardMembership.qm.destroyOne(existingBm.id);
+    }
+  };
+
+  const ensureSharedAccess = async (user, userGroupId) => {
+    if (!user || !user.id || !userGroupId) return;
     if (typeof Project === 'undefined' || !Project.qm || typeof ProjectManager === 'undefined') {
+      return;
+    }
+    if (typeof Board === 'undefined' || !Board.qm || typeof BoardMembership === 'undefined') {
       return;
     }
     const now = Date.now();
@@ -94,41 +118,30 @@ module.exports = function defineMem0AuthHook(sails) {
     if (now - last < MEMBERSHIP_TTL_MS) return;
 
     try {
-      // Ambiente compartilhado Mem0: todos veem/editam todos os projetos shared.
-      const projects = await Project.qm.getShared();
-      // eslint-disable-next-line no-restricted-syntax
-      for (const project of projects || []) {
-        // eslint-disable-next-line no-await-in-loop
-        const existingPm = await ProjectManager.qm.getOneByProjectIdAndUserId(project.id, user.id);
-        if (!existingPm) {
-          // eslint-disable-next-line no-await-in-loop
-          await ProjectManager.qm.createOne({
-            projectId: project.id,
-            userId: user.id,
-          });
-        }
+      const projects = (await Project.qm.getShared()) || [];
+      const runQuery = (sql, values) => sails.sendNativeQuery(sql, values);
 
-        if (typeof Board !== 'undefined' && Board.qm && typeof BoardMembership !== 'undefined') {
+      // Remove project-manager grants from the old all-shared behavior (shared
+      // projects can span multiple groups; board memberships are the only path).
+      const projectManagers = (await ProjectManager.qm.getByUserId(user.id)) || [];
+      await Promise.all(projectManagers.map((pm) => ProjectManager.qm.destroyOne(pm.id)));
+
+      // eslint-disable-next-line no-restricted-syntax
+      for (const project of projects) {
+        // eslint-disable-next-line no-await-in-loop
+        const boards = (await Board.qm.getByProjectIds([project.id])) || [];
+        if (boards.length > 0) {
           // eslint-disable-next-line no-await-in-loop
-          const boards = await Board.qm.getByProjectIds([project.id]);
+          const boardGroupIds = await getBoardGroupIds(runQuery, boards);
           // eslint-disable-next-line no-restricted-syntax
-          for (const board of boards || []) {
+          for (const board of boards) {
             // eslint-disable-next-line no-await-in-loop
-            const existingBm = await BoardMembership.qm.getOneByBoardIdAndUserId(board.id, user.id);
-            if (!existingBm) {
-              // eslint-disable-next-line no-await-in-loop
-              await BoardMembership.qm.createOne({
-                projectId: project.id,
-                boardId: board.id,
-                userId: user.id,
-                role: BoardMembership.Roles.EDITOR,
-              });
-            } else if (existingBm.role !== BoardMembership.Roles.EDITOR) {
-              // eslint-disable-next-line no-await-in-loop
-              await BoardMembership.qm.updateOne(existingBm.id, {
-                role: BoardMembership.Roles.EDITOR,
-              });
-            }
+            await reconcileBoardMembership(
+              board,
+              project,
+              boardGroupIds[String(board.id)],
+              userGroupId,
+            );
           }
         }
       }
@@ -161,7 +174,31 @@ module.exports = function defineMem0AuthHook(sails) {
       return null;
     }
 
-    await ensureSharedAccess(user);
+    let userGroupId = auth.group;
+    if (!userGroupId) {
+      try {
+        const client = await getPgClient();
+        if (client) {
+          const res = await client.query(
+            'SELECT group_id FROM public.users WHERE lower(email) = lower($1) LIMIT 1',
+            [email],
+          );
+          if (res.rows.length > 0) {
+            userGroupId = res.rows[0].group_id;
+          }
+        }
+      } catch (err) {
+        sails.log.warn('mem0-auth: failed to look up user group:', err.message);
+      }
+    }
+
+    if (!userGroupId) {
+      // Fail closed: without a resolvable group the request is denied.
+      sails.log.warn('mem0-auth: user has no group, skipping access grant', email);
+      return null;
+    }
+
+    await ensureSharedAccess(user, userGroupId);
     return user;
   };
 

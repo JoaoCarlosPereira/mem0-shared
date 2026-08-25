@@ -42,7 +42,8 @@ def resolve_spec_actor(
     ``body_actor`` (UI legada) → None.
     """
     bound = (machine_var.get() or "").strip()
-    if auth_method_var.get() == "agent_token" and bound:
+    am = auth_method_var.get()
+    if am in ("agent_token", "legacy") and bound:
         return resolve_hostname(bound)
     if auth_method_var.get() == "session":
         raw_user_id = (auth_user_var.get() or "").strip()

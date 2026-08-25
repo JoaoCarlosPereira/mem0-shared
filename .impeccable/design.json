@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-22T15:15:00Z",
+  "title": "Design System: OpenMemory",
+  "extensions": {
+    "colorMeta": {
+      "primary": { "role": "primary", "displayName": "Agent Blue", "canonical": "hsl(217, 91%, 60%)" },
+      "background": { "role": "neutral", "displayName": "Background Dark", "canonical": "hsl(222, 47%, 4%)" },
+      "surface": { "role": "neutral", "displayName": "Surface Card", "canonical": "hsl(222, 47%, 6%)" }
+    }
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Primary call to action.",
+      "html": "<button class=\"ds-btn-primary\">Execute</button>",
+      "css": ".ds-btn-primary { background-color: hsl(217, 91%, 60%); color: hsl(210, 40%, 98%); border-radius: calc(0.75rem - 2px); padding: 0.5rem 1rem; font-family: var(--font-space-grotesk), system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; border: none; transition: opacity 0.2s, outline 0.2s; outline: 2px solid transparent; outline-offset: 2px; } .ds-btn-primary:hover { opacity: 0.9; } .ds-btn-primary:focus-visible { outline-color: hsl(217, 91%, 60%); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Agent Control Center",
+    "overview": "OpenMemory is a precision instrument designed for observability and control. The aesthetic philosophy is technical, authoritative, and clean, reflecting its role as a local-LAN hub for AI agents. It prioritizes information density and instant responsiveness over decorative fluff. We explicitly reject bloated enterprise UI patterns and bubbly, playful colors in favor of a crisp, terminal-native environment.",
+    "keyCharacteristics": [
+      "High information density",
+      "Crisp, technical contrast",
+      "Native, local-first responsiveness",
+      "Utilitarian structure"
+    ],
+    "rules": [
+      { "name": "The Precision Rule", "body": "Do not dilute the interface with multiple accent colors. The primary blue carries the hierarchy; the rest of the interface relies on shade and contrast.", "section": "colors" }
+    ],
+    "dos": [
+      "Do maintain high information density for developer clarity.",
+      "Do use JetBrains Mono for IDs, tokens, and code snippets.",
+      "Do respect `prefers-reduced-motion` for all transitions."
+    ],
+    "donts": [
+      "Don't use bloated enterprise UI patterns.",
+      "Don't use bright, playful, or \"bubbly\" colors.",
+      "Don't use the saturated AI-app \"cream/sand\" default; keep it crisp and dark."
+    ]
+  }
+}

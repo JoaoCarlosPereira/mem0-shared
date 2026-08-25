@@ -91,6 +91,37 @@ describe('mem0-auth validate-auth', () => {
     assert.strictEqual(r.mem0, true);
   });
 
+  it('propagates the trusted group claim from JWT (kanban-board-group-isolation)', () => {
+    const token = jwt.sign(
+      {
+        sub: 'u1@example.com',
+        email: 'u1@example.com',
+        group: '11111111-2222-3333-4444-555555555555',
+      },
+      SECRET,
+      { algorithm: 'HS256' },
+    );
+    const r = authenticateMem0Request({
+      authorizationHeader: `Bearer ${token}`,
+      env: { AUTH_JWT_SECRET: SECRET },
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.method, 'jwt');
+    assert.strictEqual(r.group, '11111111-2222-3333-4444-555555555555');
+  });
+
+  it('leaves group undefined when the JWT carries no group (fail-closed downstream)', () => {
+    const token = jwt.sign({ sub: 'u2@example.com', email: 'u2@example.com' }, SECRET, {
+      algorithm: 'HS256',
+    });
+    const r = authenticateMem0Request({
+      authorizationHeader: `Bearer ${token}`,
+      env: { AUTH_JWT_SECRET: SECRET },
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.group, undefined);
+  });
+
   it('rejects JWT signed with wrong secret', () => {
     const token = jwt.sign({ sub: 'user-1' }, 'other-secret-other-secret-xxxx', {
       algorithm: 'HS256',

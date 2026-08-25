@@ -15,7 +15,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
-from app.models import AccessControl, KanbanColumnPrompt, TaskCard, TaskCardStatus, SpecWorkspace
+from app.models import (AccessControl, Group, KanbanColumnPrompt, TaskCard, TaskCardStatus, User, SpecWorkspace, DEFAULT_GROUP_NAME)
 from app.routers.specs import router
 
 
@@ -48,18 +48,49 @@ def factory():
 
 @pytest.fixture
 def client(factory):
+    """TestClient com banco isolado e identidade de sessao padrao (ui-user / grupo Default).
+
+    A identidade padrao (auth_user_var + auth_method_var=session) garante que os testes
+    antigos, que nao setam contexto de auth, continuem passando no modelo de isolamento
+    por grupo: workspaces criados por ``ui-user`` ficam no grupo Default e sao acessiveis
+    pelo proprio ``ui-user``. Testes de isolamento setam/resolvem as tokens por conta propria.
+    """
+    import uuid
+
+    from app.models import DEFAULT_GROUP_NAME, Group, User
+    from app.utils.logging_context import auth_method_var, auth_user_var
+
+    s = factory()
+    person_id = uuid.uuid4()
+    try:
+        g = Group(name=DEFAULT_GROUP_NAME)
+        s.add(g)
+        s.flush()
+        s.add(User(id=person_id, user_id="ui-user", email="test@test.com", group_id=g.id))
+        s.commit()
+    finally:
+        s.close()
+
     app = FastAPI()
     app.include_router(router)
 
     def _override():
-        s = factory()
+        sess = factory()
         try:
-            yield s
+            yield sess
         finally:
-            s.close()
+            sess.close()
 
     app.dependency_overrides[get_db] = _override
-    return TestClient(app)
+
+    tok_u = auth_user_var.set(str(person_id))
+    tok_m = auth_method_var.set("session")
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
+        auth_user_var.reset(tok_u)
+        auth_method_var.reset(tok_m)
 
 
 def _create_ws(client, project_id="mem0-shared", slug="ws-1", name="WS 1"):
@@ -226,10 +257,25 @@ class TestDocumentVersioning:
 
 
 class TestAccessControl:
-    def _as_subject(self, subject):
+    def _register_group_user(self, factory, subject):
+        """Garante um User real no grupo Default para o subject (isolamento por grupo)."""
+        s = factory()
+        try:
+            existing = s.query(Group).filter(Group.name == DEFAULT_GROUP_NAME).first()
+            if existing is None:
+                existing = Group(name=DEFAULT_GROUP_NAME)
+                s.add(existing)
+                s.flush()
+            s.add(User(id=subject, user_id=f"acl-{subject}", group_id=existing.id))
+            s.commit()
+        finally:
+            s.close()
+
+    def _as_subject(self, subject, factory):
         """Bind auth identity for the request (ACL no longer trusts query params)."""
         from app.utils.logging_context import auth_user_var
 
+        self._register_group_user(factory, subject)
         return auth_user_var.set(str(subject))
 
     def test_sem_allow_recebe_403(self, client, factory):
@@ -252,7 +298,7 @@ class TestAccessControl:
         finally:
             s.close()
 
-        tok = self._as_subject(subject)
+        tok = self._as_subject(subject, factory)
         try:
             r = client.get(f"/api/v1/specs/workspaces/{ws_id}")
             assert r.status_code == 403
@@ -266,7 +312,7 @@ class TestAccessControl:
         ws_id = _create_ws(client).json()["id"]
         subject = uuid.uuid4()
         self._add_rule(factory, subject, "deny", None)  # deny-all
-        tok = self._as_subject(subject)
+        tok = self._as_subject(subject, factory)
         try:
             # Mesmo passando outro UUID (ou omitindo), a ACL do auth user vale.
             r = client.get(
@@ -299,7 +345,7 @@ class TestAccessControl:
         ws_id = _create_ws(client).json()["id"]
         subject = uuid.uuid4()
         self._add_rule(factory, subject, "allow", None)  # allow-all
-        tok = self._as_subject(subject)
+        tok = self._as_subject(subject, factory)
         try:
             r = client.get(f"/api/v1/specs/workspaces/{ws_id}")
             assert r.status_code == 200
@@ -312,7 +358,7 @@ class TestAccessControl:
         ws_id = _create_ws(client).json()["id"]
         subject = uuid.uuid4()
         self._add_rule(factory, subject, "deny", None)  # deny-all
-        tok = self._as_subject(subject)
+        tok = self._as_subject(subject, factory)
         try:
             r = client.get(f"/api/v1/specs/workspaces/{ws_id}")
             assert r.status_code == 403
@@ -326,7 +372,7 @@ class TestAccessControl:
         subject = uuid.uuid4()
         self._add_rule(factory, subject, "allow", uuid.UUID(ws_id))
         self._add_rule(factory, subject, "deny", uuid.UUID(ws_id))
-        tok = self._as_subject(subject)
+        tok = self._as_subject(subject, factory)
         try:
             r = client.get(f"/api/v1/specs/workspaces/{ws_id}")
             assert r.status_code == 403
@@ -354,7 +400,7 @@ class TestAccessControl:
         finally:
             s.close()
 
-        tok = self._as_subject(subject)
+        tok = self._as_subject(subject, factory)
         try:
             r = client.get(f"/api/v1/specs/workspaces/{ws_id}")
             assert r.status_code == 200
@@ -696,6 +742,8 @@ class TestAllWorkspacesIndex:
         s = factory()
         try:
             # allow apenas para ws de proj-a -> índice só deve trazer esse.
+            g = s.query(Group).filter(Group.name == DEFAULT_GROUP_NAME).first()
+            s.add(User(id=subject, user_id=f"idx-{subject}", group_id=g.id if g else None))
             s.add(
                 AccessControl(
                     subject_type="user",
@@ -734,6 +782,9 @@ class TestKanbanHomeIdentity:
         person_id = uuid.uuid4()
         s = factory()
         try:
+            g = Group(name="G1")
+            s.add(g)
+            s.flush()
             s.add(
                 User(
                     id=person_id,
@@ -742,6 +793,7 @@ class TestKanbanHomeIdentity:
                     name="João",
                     display_name="João Silva",
                     avatar_url="https://lh3.example/photo.jpg",
+                    group_id=g.id,
                 )
             )
             s.commit()
@@ -785,12 +837,16 @@ class TestKanbanHomeIdentity:
         person_id = uuid.uuid4()
         s = factory()
         try:
+            g = Group(name="G2")
+            s.add(g)
+            s.flush()
             s.add(
                 User(
                     id=person_id,
                     user_id=f"google-{person_id}",
                     email="joao2@example.com",
                     name="João",
+                    group_id=g.id,
                 )
             )
             s.commit()
@@ -834,6 +890,9 @@ class TestKanbanHomeIdentity:
         person_id = uuid.uuid4()
         s = factory()
         try:
+            g = Group(name="G3")
+            s.add(g)
+            s.flush()
             s.add(
                 User(
                     id=person_id,
@@ -841,6 +900,7 @@ class TestKanbanHomeIdentity:
                     email="pessoa@sysmo.com.br",
                     name="Pessoa",
                     display_name="Pessoa Real",
+                    group_id=g.id,
                 )
             )
             s.commit()
@@ -885,9 +945,14 @@ class TestKanbanHomeIdentity:
         monkeypatch.setenv("PLANKA_PUBLIC_URL", "/planka")
         monkeypatch.delenv("NEXTAUTH_SECRET", raising=False)
 
+        from app.models import SpecPlankaIdMap, SpecWorkspace
         person_id = uuid.uuid4()
+        ws_id = uuid.uuid4()
         s = factory()
         try:
+            g = Group(name="G4")
+            s.add(g)
+            s.flush()
             s.add(
                 User(
                     id=person_id,
@@ -895,8 +960,11 @@ class TestKanbanHomeIdentity:
                     email="joao@example.com",
                     name="João",
                     display_name="João Silva",
+                    group_id=g.id,
                 )
             )
+            s.add(SpecWorkspace(id=ws_id, project_id="p1", slug="ws-dl", name="WS", group_id=g.id))
+            s.add(SpecPlankaIdMap(entity_type="board", spec_id=ws_id, planka_id="1833672064557385241"))
             s.commit()
         finally:
             s.close()
@@ -1099,3 +1167,143 @@ class TestWorkspaceStatusAndIndex:
             json={"status": "concluido"},
         )
         assert len(calls) == 1
+
+
+class TestGroupIsolation:
+    def test_kanban_home_fails_without_group(self, client, factory, monkeypatch):
+        import uuid
+        from app.models import User
+        from app.utils.logging_context import auth_email_var, auth_user_var
+
+        monkeypatch.setenv("AUTH_JWT_SECRET", "secret-32bytes!!")
+        
+        s = factory()
+        person_id = uuid.uuid4()
+        try:
+            s.add(User(id=person_id, user_id=f"google-{person_id}", email="nogroup@test.com", group_id=None))
+            s.commit()
+        finally:
+            s.close()
+            
+        tok_u = auth_user_var.set(str(person_id))
+        tok_e = auth_email_var.set("nogroup@test.com")
+        try:
+            r = client.get("/api/v1/specs/kanban-home")
+            assert r.status_code == 403
+            assert "Usuário sem grupo" in r.json()["detail"]
+        finally:
+            auth_email_var.reset(tok_e)
+            auth_user_var.reset(tok_u)
+
+    def test_kanban_board_deep_link_fails_across_group(self, client, factory, monkeypatch):
+        import uuid
+        from app.models import User, Group, SpecWorkspace, SpecPlankaIdMap
+        from app.utils.logging_context import auth_email_var, auth_user_var
+
+        monkeypatch.setenv("AUTH_JWT_SECRET", "secret-32bytes!!")
+        
+        group1_id = uuid.uuid4()
+        group2_id = uuid.uuid4()
+        user1_id = uuid.uuid4()
+        user2_id = uuid.uuid4()
+        ws_id = uuid.uuid4()
+        
+        s = factory()
+        try:
+            s.add(Group(id=group1_id, name="Group 1"))
+            s.add(Group(id=group2_id, name="Group 2"))
+            s.add(User(id=user1_id, user_id="u1", email="u1@test.com", group_id=group1_id))
+            s.add(User(id=user2_id, user_id="u2", email="u2@test.com", group_id=group2_id))
+            s.add(SpecWorkspace(id=ws_id, project_id="p1", slug="ws1", name="W", group_id=group1_id))
+            s.add(SpecPlankaIdMap(entity_type="board", spec_id=ws_id, planka_id="12345"))
+            s.commit()
+        finally:
+            s.close()
+            
+        tok_u = auth_user_var.set(str(user2_id))
+        tok_e = auth_email_var.set("u2@test.com")
+        try:
+            r = client.get("/api/v1/specs/kanban-boards/12345")
+            assert r.status_code == 403
+            assert "Sem permissão" in r.json()["detail"]
+        finally:
+            auth_email_var.reset(tok_e)
+            auth_user_var.reset(tok_u)
+
+    def test_create_workspace_inherits_group(self, client, factory, monkeypatch):
+        import uuid
+        from app.models import User, Group, SpecWorkspace
+        from app.utils.logging_context import auth_email_var, auth_user_var
+
+        group1_id = uuid.uuid4()
+        user1_id = uuid.uuid4()
+        
+        s = factory()
+        try:
+            s.add(Group(id=group1_id, name="Group 1"))
+            s.add(User(id=user1_id, user_id="u1", email="u1@test.com", group_id=group1_id))
+            s.commit()
+        finally:
+            s.close()
+            
+        tok_u = auth_user_var.set(str(user1_id))
+        tok_e = auth_email_var.set("u1@test.com")
+        try:
+            r = client.post("/api/v1/specs/workspaces", json={
+                "project_id": "test", "slug": "new-ws", "name": "Test"
+            })
+            assert r.status_code == 201
+            ws_id = r.json()["id"]
+            
+            s = factory()
+            try:
+                ws = s.query(SpecWorkspace).filter(SpecWorkspace.id == uuid.UUID(ws_id)).first()
+                assert ws.group_id == group1_id
+            finally:
+                s.close()
+        finally:
+            auth_email_var.reset(tok_e)
+            auth_user_var.reset(tok_u)
+            
+    def test_search_specs_filters_by_group(self, client, factory, monkeypatch):
+        import uuid
+        from app.models import User, Group, SpecWorkspace
+        from app.utils.logging_context import auth_email_var, auth_user_var
+        from app.utils.spec_search import index_spec_document, get_specs_vector_store
+        
+        class FakeEmbedder:
+            def embed(self, text, mode): return [0.1]
+        
+        class FakeVectorStore:
+            def insert(self, **kwargs): pass
+            def search(self, **kwargs):
+                return [
+                    type('Hit', (), {"id": "1", "score": 1.0, "payload": {"workspace_id": str(ws_id)}})
+                ]
+                
+        group1_id = uuid.uuid4()
+        user1_id = uuid.uuid4()
+        ws_id = uuid.uuid4()
+        
+        s = factory()
+        try:
+            s.add(Group(id=group1_id, name="Group 1"))
+            s.add(User(id=user1_id, user_id="u1", email="u1@test.com", group_id=group1_id))
+            # Put workspace in a different group! group2_id
+            s.add(SpecWorkspace(id=ws_id, project_id="p1", slug="ws1", name="W", group_id=uuid.uuid4()))
+            s.commit()
+        finally:
+            s.close()
+            
+        tok_u = auth_user_var.set(str(user1_id))
+        tok_e = auth_email_var.set("u1@test.com")
+        try:
+            import app.routers.specs as sr
+            monkeypatch.setattr(sr, "search_specs", lambda *a, **k: [])
+            
+            r = client.get("/api/v1/specs/search?q=test")
+            # Should be empty because valid_workspaces intersection will be empty
+            assert r.json() == []
+        finally:
+            auth_email_var.reset(tok_e)
+            auth_user_var.reset(tok_u)

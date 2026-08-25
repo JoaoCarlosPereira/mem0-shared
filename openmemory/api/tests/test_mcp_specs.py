@@ -42,12 +42,36 @@ def factory():
 @pytest.fixture(autouse=True)
 def _wire(factory, monkeypatch):
     monkeypatch.setattr(mcp_server, "SessionLocal", factory)
+    
+    from app.utils.logging_context import auth_method_var, machine_var
+    auth_method_var.set("legacy")
+    machine_var.set("DESKTOP-01")
+
+    # Manually provision the user in the factory
+    s = factory()
+    try:
+        from app.models import DEFAULT_GROUP_NAME, Group, User
+        g = s.query(Group).filter(Group.name == DEFAULT_GROUP_NAME).first()
+        if not g:
+            g = Group(name=DEFAULT_GROUP_NAME)
+            s.add(g)
+            s.flush()
+        u = s.query(User).filter(User.user_id == "DESKTOP-01").first()
+        if not u:
+            import uuid
+            s.add(User(id=uuid.uuid4(), user_id="DESKTOP-01", group_id=g.id, user_type="legacy_host"))
+        s.commit()
+    finally:
+        s.close()
+
     # Document post-write (index/mirror) is covered by test_spec_side_effects;
     # skip the daemon thread here so SQLite teardown does not race it.
     monkeypatch.setattr(
         "app.utils.spec_side_effects.schedule_document_post_write",
         lambda *a, **k: None,
     )
+    from app.utils.groups import ensure_user_group
+    ensure_user_group("DESKTOP-01", "Default")
     mcp_server.user_id_var.set("DESKTOP-01")
     mcp_server.client_name_var.set("cursor")
     yield
@@ -72,6 +96,7 @@ class TestCreateAndList:
     async def test_list_workspaces(self):
         await create_spec_workspace("mem0-shared", "ws-1", "WS 1")
         out = json.loads(await list_spec_workspaces("mem0-shared"))
+        print("OUT:", out)
         assert len(out) == 1
         assert out[0]["slug"] == "ws-1"
 
