@@ -43,20 +43,26 @@ def merge_app_sources(
         if name in project_by_name:
             continue
 
-        created = int(sql_app.get("total_memories_created") or 0)
-        accessed = int(sql_app.get("total_memories_accessed") or 0)
-        if created == 0 and accessed == 0:
-            continue
-
         if name in merged:
             existing = merged[name]
             existing_score = int(existing.get("total_memories_created") or 0) + int(
                 existing.get("total_memories_accessed") or 0
             )
+            created = int(sql_app.get("total_memories_created") or 0)
+            accessed = int(sql_app.get("total_memories_accessed") or 0)
             if created + accessed > existing_score:
                 merged[name] = sql_app
             continue
 
         merged[name] = sql_app
 
-    return list(merged.values())
+    # Drop empty projects (both SQL and MCP)
+    final_list = []
+    for app in merged.values():
+        created = int(app.get("total_memories_created") or 0)
+        accessed = int(app.get("total_memories_accessed") or 0)
+        if created == 0 and accessed == 0:
+            continue
+        final_list.append(app)
+
+    return final_list

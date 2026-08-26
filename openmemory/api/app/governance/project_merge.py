@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 from uuid import UUID
@@ -20,6 +21,7 @@ from app.models import (
     WriteAuditLog,
     WriteQueueJob,
 )
+from app.read_audit_log_model import ReadAuditLog
 from app.utils.projects import upsert_project
 from app.utils.read_cache import read_cache
 from app.utils.vector_stats import count_project_memories, list_shared_memories
@@ -149,7 +151,14 @@ def detect_duplicate_groups_with_llm(
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
         )
-        data = json.loads(response)
+        
+        cleaned_response = response.strip()
+        if cleaned_response.startswith("```"):
+            cleaned_response = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned_response)
+            cleaned_response = re.sub(r"\n?```$", "", cleaned_response)
+            cleaned_response = cleaned_response.strip()
+            
+        data = json.loads(cleaned_response)
     except Exception as exc:  # noqa: BLE001
         logger.warning("LLM project-merge detection failed: %s", exc)
         return []
@@ -228,6 +237,10 @@ def _merge_sql_references(db: Session, *, canonical: str, alias: str) -> None:
     )
     db.query(GovernanceJob).filter(GovernanceJob.project == alias).update(
         {GovernanceJob.project: canonical},
+        synchronize_session=False,
+    )
+    db.query(ReadAuditLog).filter(ReadAuditLog.project == alias).update(
+        {ReadAuditLog.project: canonical},
         synchronize_session=False,
     )
     _merge_governance_schedules(db, canonical=canonical, alias=alias)

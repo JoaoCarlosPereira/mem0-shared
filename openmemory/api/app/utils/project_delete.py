@@ -21,6 +21,7 @@ from app.models import (
     WriteAuditLog,
     WriteQueueJob,
 )
+from app.read_audit_log_model import ReadAuditLog
 from app.utils.deletion_guard import DeletionBlockedError, assert_bulk_delete_allowed
 from app.utils.memory import get_memory_client_safe
 from app.utils.partitioning import bind_active_collection
@@ -76,6 +77,9 @@ def cleanup_project_sql_references(db: Session, project: str) -> None:
         synchronize_session=False,
     )
     db.query(GovernanceSchedule).filter(GovernanceSchedule.scope == project).delete(
+        synchronize_session=False,
+    )
+    db.query(ReadAuditLog).filter(ReadAuditLog.project == project).delete(
         synchronize_session=False,
     )
     policy = db.query(GovernancePolicy).filter(GovernancePolicy.project_name == project).first()
