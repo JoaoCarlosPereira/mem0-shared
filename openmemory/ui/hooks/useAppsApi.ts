@@ -60,6 +60,7 @@ interface UseAppsApiReturn {
   fetchAppMemories: (appId: string, page?: number, pageSize?: number) => Promise<void>;
   fetchAppAccessedMemories: (appId: string, page?: number, pageSize?: number) => Promise<void>;
   updateAppDetails: (appId: string, details: { is_active: boolean }) => Promise<void>;
+  renameApp: (appId: string, newName: string) => Promise<{ moved_memories: number; new_name: string }>;
   deleteApp: (appId: string, confirmName: string) => Promise<{ deleted_memories: number; project: string }>;
   isLoading: boolean;
   error: string | null;
@@ -199,6 +200,26 @@ export const useAppsApi = (): UseAppsApiReturn => {
     }
   };
 
+  const renameApp = async (appId: string, newName: string) => {
+    setIsLoading(true);
+    try {
+      const response = await axios.post<{
+        moved_memories: number;
+        new_name: string;
+      }>(`${getApiUrl()}/api/v1/apps/${appId}/rename`, {
+        new_name: newName,
+      });
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        throw new Error(error.response?.data?.detail || "Failed to rename project");
+      }
+      throw error;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const deleteApp = async (appId: string, confirmName: string) => {
     setIsLoading(true);
     try {
@@ -229,6 +250,7 @@ export const useAppsApi = (): UseAppsApiReturn => {
     fetchAppMemories,
     fetchAppAccessedMemories,
     updateAppDetails,
+    renameApp,
     deleteApp,
     isLoading,
     error

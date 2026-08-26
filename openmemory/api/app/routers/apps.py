@@ -13,11 +13,47 @@ from app.utils.read_audit import (
 from app.utils.vector_stats import count_project_memories, list_shared_memories
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from app.governance.project_merge import apply_project_merge
+from app.utils.memory import get_memory_client_safe
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session, joinedload
 
 router = APIRouter(prefix="/api/v1/apps", tags=["apps"])
 
+
+
+class RenameProjectRequest(BaseModel):
+    new_name: str = Field(..., min_length=1)
+
+@router.post("/{app_id}/rename")
+async def rename_project(
+    app_id: UUID,
+    request: RenameProjectRequest,
+    db: Session = Depends(get_db),
+):
+    """Rename a project. If the new name already exists, memories are merged."""
+    old_name = resolve_project_name(db, app_id)
+    if not old_name:
+        raise HTTPException(status_code=400, detail="Cannot rename legacy SQL apps, only projects")
+    
+    new_name = request.new_name.strip()
+    if not new_name or new_name == old_name:
+        return {"status": "success", "message": "Nothing to do"}
+        
+    client = get_memory_client_safe()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Memory client is not available")
+        
+    vs = client.vector_store
+    moved = apply_project_merge(
+        db,
+        vs,
+        canonical=new_name,
+        aliases=[old_name],
+        job_id="manual-rename"
+    )
+    
+    return {"status": "success", "moved_memories": moved, "new_name": new_name}
 
 class DeleteProjectRequest(BaseModel):
     """Strong confirmation: user must type the exact project name."""

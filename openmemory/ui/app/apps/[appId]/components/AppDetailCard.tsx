@@ -10,6 +10,7 @@ import { constants } from "@/components/shared/source-app";
 import { RootState } from "@/store/store";
 import { appStatusLabel, formatDateTime } from "@/lib/i18n/pt-BR";
 import { StrongDeleteProjectDialog } from "@/components/shared/ConfirmDeleteDialog";
+import { RenameProjectDialog } from "@/components/shared/RenameProjectDialog";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
@@ -24,10 +25,12 @@ const AppDetailCard = ({
   appId: string;
   selectedApp: any;
 }) => {
-  const { updateAppDetails, deleteApp } = useAppsApi();
+  const { updateAppDetails, deleteApp, renameApp } = useAppsApi();
   const [isLoading, setIsLoading] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
   const dispatch = useDispatch();
   const router = useRouter();
   const apps = useSelector((state: RootState) => state.apps.apps);
@@ -53,6 +56,20 @@ const AppDetailCard = ({
       console.error("Failed to toggle app pause state:", error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleRenameProject = async (newName: string) => {
+    setRenaming(true);
+    try {
+      const result = await renameApp(appId, newName);
+      toast.success(`Projeto renomeado/mesclado com sucesso para "${result.new_name}" (${result.moved_memories} memórias atualizadas).`);
+      setRenameOpen(false);
+      router.push("/apps");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Falha ao renomear projeto");
+    } finally {
+      setRenaming(false);
     }
   };
 
@@ -174,6 +191,16 @@ const AppDetailCard = ({
               type="button"
               variant="outline"
               size="sm"
+              className="w-full border-emerald-900/60 text-emerald-400 hover:bg-emerald-950/40 hover:text-emerald-300"
+              onClick={() => setRenameOpen(true)}
+            >
+              <BiEdit className="h-4 w-4 mr-2" />
+              Renomear projeto
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
               className="w-full border-red-900/60 text-red-400 hover:bg-red-950/40 hover:text-red-300"
               onClick={() => setDeleteOpen(true)}
             >
@@ -184,6 +211,13 @@ const AppDetailCard = ({
         </div>
       </div>
 
+      <RenameProjectDialog
+        open={renameOpen}
+        onOpenChange={setRenameOpen}
+        currentName={projectName}
+        loading={renaming}
+        onConfirm={handleRenameProject}
+      />
       <StrongDeleteProjectDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
