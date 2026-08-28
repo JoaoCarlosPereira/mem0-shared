@@ -1,3 +1,4 @@
+import threading
 """
 Memory client utilities for OpenMemory.
 
@@ -171,6 +172,8 @@ def _peek_config_updated_at():
 
 # Last initialization failure (surfaced in /health for debugging).
 _last_init_error: str | None = None
+
+_client_lock = threading.Lock()
 
 # Provider-specific config keys that break Memory.from_config if left over after a provider switch.
 _LLM_DROP_FOR_OPENAI = frozenset({"ollama_base_url"})
@@ -859,8 +862,15 @@ def get_memory_client(custom_instructions: str = None):
         # Check if config has changed by comparing hashes
         current_config_hash = _get_config_hash(config)
         
-        # Only reinitialize if config changed or client doesn't exist
-        if _memory_client is None or _config_hash != current_config_hash:
+        # Fast path before locking
+        if _memory_client is not None and _config_hash == current_config_hash:
+            return _memory_client
+            
+        with _client_lock:
+            # Double check after acquiring lock
+            if _memory_client is not None and _config_hash == current_config_hash:
+                return _memory_client
+                
             print(f"Initializing memory client with config hash: {current_config_hash}")
             try:
                 _memory_client = Memory.from_config(config_dict=config)

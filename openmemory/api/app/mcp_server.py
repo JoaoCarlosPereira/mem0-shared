@@ -164,6 +164,15 @@ async def _run_search_operation(operation, *, timeout: float):
         return await anyio.to_thread.run_sync(operation, abandon_on_cancel=True)
 
 
+MCP_BLOCKING_TIMEOUT_SEC = float(os.getenv("MEM0_MCP_BLOCKING_TIMEOUT_SEC", "15"))
+MCP_CLIENT_BUILD_TIMEOUT_SEC = float(os.getenv("MEM0_MCP_CLIENT_BUILD_TIMEOUT_SEC", "60"))
+
+async def _run_blocking(operation, *, timeout: float = MCP_BLOCKING_TIMEOUT_SEC):
+    """I/O bloqueante (DB/Redis) fora do event loop, com teto de espera."""
+    with anyio.fail_after(timeout):
+        return await anyio.to_thread.run_sync(operation, abandon_on_cancel=True)
+
+
 # Write-path default (task_07): the MCP route always provides a client_name, but
 # a direct tool call may not — fall back to an explicit sentinel for attribution.
 DEFAULT_CLIENT_NAME = "unknown-client"
@@ -183,7 +192,6 @@ async def add_memories(
     # task_07 / ADR-004: fire-and-forget enqueue only. No embed/search/LLM on
     # the request path — MCP clients must always get a fast accepted ack when
     # connected (conflict detection is a separate read tool).
-    hostname = _mcp_attribution_hostname()
     client_name = client_name_var.get(None) or DEFAULT_CLIENT_NAME
 
     if not text or not text.strip():
@@ -191,11 +199,20 @@ async def add_memories(
     if not project or not project.strip():
         return "Error: project not provided"
 
-    blocked = check_write_allowed(
-        hostname,
-        auth_method=auth_method_var.get(),
-        auth_user=auth_user_var.get(),
-    )
+    def _sync_checks():
+        hostname_val = _mcp_attribution_hostname()
+        blocked_val = check_write_allowed(
+            hostname_val,
+            auth_method=auth_method_var.get(),
+            auth_user=auth_user_var.get(),
+        )
+        if blocked_val:
+            return hostname_val, blocked_val
+        ensure_user_registered(hostname_val)
+        return hostname_val, None
+
+    hostname, blocked = await _run_blocking(_sync_checks)
+
     if blocked:
         logging.warning(
             "write rejected hostname=%s client=%s auth_method=%s auth_user=%s",
@@ -205,8 +222,6 @@ async def add_memories(
             auth_user_var.get() or "-",
         )
         return blocked
-
-    ensure_user_registered(hostname)
 
     project = project.strip()
     supersede_ids: list[str] = []
@@ -220,8 +235,8 @@ async def add_memories(
 
     extras = {"supersedes": supersede_ids} if supersede_ids else None
 
-    try:
-        job_id = write_queue.enqueue(
+    def _sync_enqueue():
+        job_id_val = write_queue.enqueue(
             WriteJob(
                 id="",
                 project=project,
@@ -232,12 +247,20 @@ async def add_memories(
                 extras=extras,
             )
         )
+        _record_write_audit(job_id=job_id_val, project=project, hostname=hostname,
+                             client_name=client_name)
+        q_depth = 0
+        try:
+            q_depth = int(write_queue.depth())
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("write_queue.depth() failed after enqueue: %s", exc)
+        return job_id_val, q_depth
+
+    try:
+        job_id, queue_depth = await _run_blocking(_sync_enqueue)
     except Exception as e:
         logging.exception(f"Error enqueuing memory write: {e}")
         return f"Error enqueuing memory write: {e}"
-
-    _record_write_audit(job_id=job_id, project=project, hostname=hostname,
-                         client_name=client_name)
 
     logging.info(
         "write enqueued job_id=%s project=%s hostname=%s client=%s auth_method=%s auth_user=%s supersedes=%s",
@@ -249,12 +272,6 @@ async def add_memories(
         auth_user_var.get() or "-",
         supersede_ids or None,
     )
-
-    queue_depth = 0
-    try:
-        queue_depth = int(write_queue.depth())
-    except Exception as exc:  # noqa: BLE001
-        logging.warning("write_queue.depth() failed after enqueue: %s", exc)
 
     estimated_wait_sec = estimate_write_wait_sec(queue_depth)
 
@@ -460,19 +477,26 @@ async def search_memory(
         return "Error: project not provided"
 
     started = time.perf_counter()
-    # Grupo do solicitante (ADR-003): hostname da conexão → users.group_id (Admin).
-    requester_group = requester_group_for_mcp(user_id_var.get(None))
     try:
-        memory_client = get_memory_client_safe()
+        def _sync_search_setup():
+            # Grupo do solicitante (ADR-003): hostname da conexão → users.group_id (Admin).
+            req_group = requester_group_for_mcp(user_id_var.get(None))
+            mem_client = get_memory_client_safe()
+            if not mem_client:
+                return req_group, mem_client, None
+            bind_active_collection(mem_client)
+            # strict_project narrows to the project's configured family when there is
+            # one: asking to stay "in this project" means the subject, not the single
+            # repository the session happens to be rooted at.
+            scope = projects_in_group(project) if strict_project else []
+            return req_group, mem_client, scope
+
+        requester_group, memory_client, strict_scope = await _run_blocking(
+            _sync_search_setup, timeout=MCP_CLIENT_BUILD_TIMEOUT_SEC
+        )
         if not memory_client:
             return "Error: Memory system is currently unavailable. Please try again later."
 
-        bind_active_collection(memory_client)
-
-        # strict_project narrows to the project's configured family when there is
-        # one: asking to stay "in this project" means the subject, not the single
-        # repository the session happens to be rooted at.
-        strict_scope = projects_in_group(project) if strict_project else []
         if strict_project:
             search_filters = (
                 {"project": {"in": strict_scope}}
@@ -497,8 +521,10 @@ async def search_memory(
 
         # The cache holds the unranked CANDIDATE pool (not the final page), so the
         # ranking below stays group-specific while the expensive retrieval is shared.
-        cached_hits = read_cache.get_search(
-            project, query, DEFAULT_SEARCH_CANDIDATE_K, filter_hash
+        cached_hits = await _run_blocking(
+            lambda: read_cache.get_search(
+                project, query, DEFAULT_SEARCH_CANDIDATE_K, filter_hash
+            )
         )
         if cached_hits is not None:
             SEARCH_CACHE_HIT.inc()
@@ -510,23 +536,31 @@ async def search_memory(
         else:
             SEARCH_CACHE_MISS.inc()
             embed_model = getattr(memory_client.embedding_model, "model", "default")
-            embeddings = read_cache.get_embedding(embed_model, query)
+            embeddings = await _run_blocking(
+                lambda: read_cache.get_embedding(embed_model, query)
+            )
             if embeddings is not None:
                 EMBED_CACHE_HIT.inc()
             else:
                 EMBED_CACHE_MISS.inc()
                 try:
+                    # usage_attribution can be sync, but _usage_user_id calls resolve_hostname which is safe or we can wrap.
+                    # Since we are already inside a try block, let's keep the usage_attribution
+                    # But _usage_user_id might do sync calls, so we wrap it.
+                    u_id = await _run_blocking(_usage_user_id)
                     with usage_attribution(
                         project=project,
                         agent=client_name_var.get(None) or DEFAULT_CLIENT_NAME,
-                        user_id=_usage_user_id(),
+                        user_id=u_id,
                         operation_type="search",
                     ):
                         embeddings = await _run_search_operation(
                             lambda: memory_client.embedding_model.embed(query, "search"),
                             timeout=SEARCH_EMBED_TIMEOUT_SECONDS,
                         )
-                    read_cache.set_embedding(embed_model, query, embeddings)
+                    await _run_blocking(
+                        lambda: read_cache.set_embedding(embed_model, query, embeddings)
+                    )
                 except Exception as embed_err:  # noqa: BLE001
                     logging.warning(
                         "Semantic search unavailable (%s); falling back to %s list",
@@ -544,11 +578,13 @@ async def search_memory(
                         timeout=SEARCH_SCROLL_TIMEOUT_SECONDS,
                     )
                     results = [_point_to_memory_result(p) for p in points]
-                    rank_search_results(
-                        results,
-                        preferred_project=project,
-                        requester_group=requester_group,
-                        annotate=True,
+                    await _run_blocking(
+                        lambda: rank_search_results(
+                            results,
+                            preferred_project=project,
+                            requester_group=requester_group,
+                            annotate=True,
+                        )
                     )
                     return json.dumps(
                         {
@@ -584,24 +620,29 @@ async def search_memory(
                     "score": score,
                     "state": payload.get("state"),
                 })
-            read_cache.set_search(
-                project, query, DEFAULT_SEARCH_CANDIDATE_K, filter_hash, results
+            await _run_blocking(
+                lambda: read_cache.set_search(
+                    project, query, DEFAULT_SEARCH_CANDIDATE_K, filter_hash, results
+                )
             )
 
         # Reranking (opt-in) refines relevance over the candidate pool before the
         # boosts are applied, so recency/project/group still have the final say.
-        rerank_status = None
-        if rerank:
-            rerank_status = apply_rerank(query, results)
+        def _sync_rerank_and_rank():
+            r_status = None
+            if rerank:
+                r_status = apply_rerank(query, results)
+            # Rank the whole candidate pool, THEN cut the page: recency/project/group
+            # boosts must be able to promote a candidate that missed the raw top-K.
+            rank_search_results(
+                results,
+                preferred_project=project,
+                requester_group=requester_group,
+                annotate=True,
+            )
+            return r_status
 
-        # Rank the whole candidate pool, THEN cut the page: recency/project/group
-        # boosts must be able to promote a candidate that missed the raw top-K.
-        rank_search_results(
-            results,
-            preferred_project=project,
-            requester_group=requester_group,
-            annotate=True,
-        )
+        rerank_status = await _run_blocking(_sync_rerank_and_rank)
 
         payload = {"results": results[:DEFAULT_SEARCH_TOP_K]}
         if rerank_status is not None:
@@ -632,9 +673,14 @@ async def list_memories(
         limit = DEFAULT_LIST_TOP_K
     limit = max(1, min(limit, 1000))
 
-    requester_group = requester_group_for_mcp(user_id_var.get(None))
+    def _sync_list_setup():
+        req_group = requester_group_for_mcp(user_id_var.get(None))
+        mem_client = get_memory_client_safe()
+        return req_group, mem_client
 
-    memory_client = get_memory_client_safe()
+    requester_group, memory_client = await _run_blocking(
+        _sync_list_setup, timeout=MCP_CLIENT_BUILD_TIMEOUT_SEC
+    )
     if not memory_client:
         return "Error: Memory system is currently unavailable. Please try again later."
 
@@ -650,8 +696,10 @@ async def list_memories(
         )
         results = [_point_to_memory_result(p) for p in points]
 
-        rank_search_results(
-            results, preferred_project=project, requester_group=requester_group
+        await _run_blocking(
+            lambda: rank_search_results(
+                results, preferred_project=project, requester_group=requester_group
+            )
         )
 
         return json.dumps(
@@ -673,7 +721,9 @@ async def mark_obsolete(
     if not memory_ids:
         return "Error: memory_ids not provided"
 
-    memory_client = get_memory_client_safe()
+    memory_client = await _run_blocking(
+        get_memory_client_safe, timeout=MCP_CLIENT_BUILD_TIMEOUT_SEC
+    )
     if not memory_client:
         return "Error: Memory system is currently unavailable. Please try again later."
 
@@ -712,19 +762,28 @@ async def delete_memories(memory_ids: list[str]) -> str:
     if not memory_ids:
         return "Error: memory_ids not provided"
 
-    if len(memory_ids) > 1:
-        blocked = check_bulk_delete_allowed("bulk_delete")
-    else:
-        blocked = check_memory_delete_allowed("delete")
+    def _sync_del_setup():
+        if len(memory_ids) > 1:
+            blocked_val = check_bulk_delete_allowed("bulk_delete")
+        else:
+            blocked_val = check_memory_delete_allowed("delete")
+        if blocked_val:
+            return blocked_val, None, None
+
+        u_id = resolve_hostname(user_id_var.get(None))
+        mem_client = get_memory_client_safe()
+        return None, u_id, mem_client
+
+    blocked, uid, memory_client = await _run_blocking(
+        _sync_del_setup, timeout=MCP_CLIENT_BUILD_TIMEOUT_SEC
+    )
+
     if blocked:
         return f"Error: {blocked}"
-
-    uid = resolve_hostname(user_id_var.get(None))
-    client_name = client_name_var.get(None) or DEFAULT_CLIENT_NAME
-
-    memory_client = get_memory_client_safe()
     if not memory_client:
         return "Error: Memory system is currently unavailable. Please try again later."
+
+    client_name = client_name_var.get(None) or DEFAULT_CLIENT_NAME
 
     # Normalize IDs; reject obviously invalid values early.
     requested: list[str] = []
@@ -738,7 +797,7 @@ async def delete_memories(memory_ids: list[str]) -> str:
         return "Error: memory_ids not provided"
 
     try:
-        _bind(memory_client)
+        await _run_blocking(lambda: _bind(memory_client))
         deleted_ids: list[str] = []
         missing_ids: list[str] = []
         vs = memory_client.vector_store
@@ -781,42 +840,44 @@ async def delete_memories(memory_ids: list[str]) -> str:
 
         # Best-effort SQL catalog sync when a UI/API row exists for the same ID.
         if deleted_ids:
-            db = SessionLocal()
-            try:
-                user, app = get_user_and_app(db, user_id=uid, app_id=client_name)
-                now = datetime.datetime.now(datetime.UTC)
-                for memory_id in deleted_ids:
-                    try:
-                        mem_uuid = uuid.UUID(memory_id)
-                    except ValueError:
-                        continue
-                    memory = db.query(Memory).filter(Memory.id == mem_uuid).first()
-                    if not memory:
-                        continue
-                    memory.state = MemoryState.deleted
-                    memory.deleted_at = now
-                    db.add(
-                        MemoryStatusHistory(
-                            memory_id=mem_uuid,
-                            changed_by=user.id,
-                            old_state=MemoryState.active,
-                            new_state=MemoryState.deleted,
+            def _sync_sql_sync():
+                db = SessionLocal()
+                try:
+                    user, app = get_user_and_app(db, user_id=uid, app_id=client_name)
+                    now = datetime.datetime.now(datetime.UTC)
+                    for memory_id in deleted_ids:
+                        try:
+                            mem_uuid = uuid.UUID(memory_id)
+                        except ValueError:
+                            continue
+                        memory = db.query(Memory).filter(Memory.id == mem_uuid).first()
+                        if not memory:
+                            continue
+                        memory.state = MemoryState.deleted
+                        memory.deleted_at = now
+                        db.add(
+                            MemoryStatusHistory(
+                                memory_id=mem_uuid,
+                                changed_by=user.id,
+                                old_state=MemoryState.active,
+                                new_state=MemoryState.deleted,
+                            )
                         )
-                    )
-                    db.add(
-                        MemoryAccessLog(
-                            memory_id=mem_uuid,
-                            app_id=app.id,
-                            access_type="delete",
-                            metadata_={"operation": "delete_by_id", "source": "mcp"},
+                        db.add(
+                            MemoryAccessLog(
+                                memory_id=mem_uuid,
+                                app_id=app.id,
+                                access_type="delete",
+                                metadata_={"operation": "delete_by_id", "source": "mcp"},
+                            )
                         )
-                    )
-                db.commit()
-            except Exception:  # noqa: BLE001
-                logging.exception("SQL catalog sync after MCP delete failed")
-                db.rollback()
-            finally:
-                db.close()
+                    db.commit()
+                except Exception:  # noqa: BLE001
+                    logging.exception("SQL catalog sync after MCP delete failed")
+                    db.rollback()
+                finally:
+                    db.close()
+            await _run_blocking(_sync_sql_sync)
 
         if not deleted_ids:
             return (
@@ -836,8 +897,17 @@ async def delete_memories(memory_ids: list[str]) -> str:
 @mcp.tool(description="Delete all memories in the user's memory")
 async def delete_all_memories() -> str:
     from app.utils.deletion_guard import check_bulk_delete_allowed
+    def _sync_del_all_setup():
+        blocked_val = check_bulk_delete_allowed("delete_all")
+        if blocked_val:
+            return blocked_val, None
+        mem_client = get_memory_client_safe()
+        return None, mem_client
 
-    blocked = check_bulk_delete_allowed("delete_all")
+    blocked, memory_client = await _run_blocking(
+        _sync_del_all_setup, timeout=MCP_CLIENT_BUILD_TIMEOUT_SEC
+    )
+
     if blocked:
         return f"Error: {blocked}"
 
@@ -848,12 +918,10 @@ async def delete_all_memories() -> str:
     if not client_name:
         return "Error: client_name not provided"
 
-    # Get memory client safely
-    memory_client = get_memory_client_safe()
     if not memory_client:
         return "Error: Memory system is currently unavailable. Please try again later."
 
-    try:
+    def _sync_delete_all():
         db = SessionLocal()
         try:
             # Get or create user and app
@@ -899,10 +967,12 @@ async def delete_all_memories() -> str:
             return "Successfully deleted all memories"
         finally:
             db.close()
+
+    try:
+        return await _run_blocking(_sync_delete_all)
     except Exception as e:
         logging.exception(f"Error deleting memories: {e}")
         return f"Error deleting memories: {e}"
-
 
 # --------------------------------------------------------------------------- #
 # Tools de specs (Tarefa 7) — wrappers finos sobre os utilitários/router das
@@ -912,19 +982,21 @@ async def delete_all_memories() -> str:
 @mcp.tool(description="Create (idempotently) or return a shared spec workspace for a project's task. Call this before writing PRD/TechSpec/Tasks documents. Idempotent by (project_id, slug) — calling twice with the same slug returns the existing workspace. Returns JSON with the workspace id, slug and status.")
 async def create_spec_workspace(project_id: str, slug: str, name: str) -> str:
     try:
-        from app.routers.specs import WorkspaceResponse, get_or_create_workspace
-
-        hostname = resolve_hostname(user_id_var.get(None))
-        db = SessionLocal()
-        try:
-            ws, created = get_or_create_workspace(
-                db, project_id=project_id, slug=slug, name=name, created_by=hostname
-            )
-            out = WorkspaceResponse.model_validate(ws).model_dump(mode="json")
-            out["created"] = created
-            return json.dumps(out, default=str)
-        finally:
-            db.close()
+        def _sync_op():
+            from app.routers.specs import WorkspaceResponse, get_or_create_workspace
+        
+            hostname = resolve_hostname(user_id_var.get(None))
+            db = SessionLocal()
+            try:
+                ws, created = get_or_create_workspace(
+                    db, project_id=project_id, slug=slug, name=name, created_by=hostname
+                )
+                out = WorkspaceResponse.model_validate(ws).model_dump(mode="json")
+                out["created"] = created
+                return json.dumps(out, default=str)
+            finally:
+                db.close()
+        return await _run_blocking(_sync_op)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
         return f"Error: {e}"
@@ -935,22 +1007,24 @@ async def list_spec_workspaces(
     project_id: str | None = None, slug: str | None = None
 ) -> str:
     try:
-        from app.routers.specs import list_all_workspaces, list_project_workspaces
-
-        db = SessionLocal()
-        try:
-            if project_id:
-                items = list_project_workspaces(project_id, db=db)
-                if slug:
-                    items = [i for i in items if i.slug == slug]
-            else:
-                # Sem project_id: índice global (opcionalmente por slug). É o
-                # caminho de descoberta de quem está noutro repositório da mesma
-                # feature e não sabe sob qual project_id a spec foi criada.
-                items = list_all_workspaces(slug=slug, db=db)
-            return json.dumps([i.model_dump(mode="json") for i in items], default=str)
-        finally:
-            db.close()
+        def _sync_op():
+            from app.routers.specs import list_all_workspaces, list_project_workspaces
+        
+            db = SessionLocal()
+            try:
+                if project_id:
+                    items = list_project_workspaces(project_id, db=db)
+                    if slug:
+                        items = [i for i in items if i.slug == slug]
+                else:
+                    # Sem project_id: índice global (opcionalmente por slug). É o
+                    # caminho de descoberta de quem está noutro repositório da mesma
+                    # feature e não sabe sob qual project_id a spec foi criada.
+                    items = list_all_workspaces(slug=slug, db=db)
+                return json.dumps([i.model_dump(mode="json") for i in items], default=str)
+            finally:
+                db.close()
+        return await _run_blocking(_sync_op)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
         return f"Error: {e}"
@@ -959,36 +1033,38 @@ async def list_spec_workspaces(
 @mcp.tool(description="Update the lifecycle status of a spec workspace (planejamento/ativo/concluido/arquivado). Transitioning to concluido indexes PRD/TechSpec/Tasks for semantic search. Returns JSON with the workspace.")
 async def update_spec_workspace_status(workspace_id: str, status: str) -> str:
     try:
-        from fastapi import HTTPException
-
-        from app.models import SpecWorkspaceStatus
-        from app.routers.specs import WorkspaceResponse, WorkspaceStatusUpdate
-        from app.routers.specs import update_workspace_status as _update_ws
-
-        db = SessionLocal()
-        try:
+        def _sync_op():
+            from fastapi import HTTPException
+        
+            from app.models import SpecWorkspaceStatus
+            from app.routers.specs import WorkspaceResponse, WorkspaceStatusUpdate
+            from app.routers.specs import update_workspace_status as _update_ws
+        
+            db = SessionLocal()
             try:
-                status_enum = SpecWorkspaceStatus(status)
-            except ValueError:
+                try:
+                    status_enum = SpecWorkspaceStatus(status)
+                except ValueError:
+                    return json.dumps(
+                        {
+                            "error": f"status inválido: {status}",
+                            "valid": [s.value for s in SpecWorkspaceStatus],
+                        }
+                    )
+                try:
+                    ws = _update_ws(
+                        uuid.UUID(workspace_id),
+                        WorkspaceStatusUpdate(status=status_enum),
+                        db=db,
+                    )
+                except HTTPException as he:
+                    return f"Error: {he.detail}"
                 return json.dumps(
-                    {
-                        "error": f"status inválido: {status}",
-                        "valid": [s.value for s in SpecWorkspaceStatus],
-                    }
+                    WorkspaceResponse.model_validate(ws).model_dump(mode="json"), default=str
                 )
-            try:
-                ws = _update_ws(
-                    uuid.UUID(workspace_id),
-                    WorkspaceStatusUpdate(status=status_enum),
-                    db=db,
-                )
-            except HTTPException as he:
-                return f"Error: {he.detail}"
-            return json.dumps(
-                WorkspaceResponse.model_validate(ws).model_dump(mode="json"), default=str
-            )
-        finally:
-            db.close()
+            finally:
+                db.close()
+        return await _run_blocking(_sync_op)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
         return f"Error: {e}"
@@ -999,56 +1075,58 @@ async def write_spec_document(
     workspace_id: str, document_type: str, content: str, expected_version: int | None = None
 ) -> str:
     try:
-        from fastapi import HTTPException
-
-        from app.models import DocumentOrigin, SpecWorkspace, parse_document_type
-        from app.routers.specs import _assert_access, get_or_create_document
-        from app.utils.spec_versioning import write_document_version
-
-        hostname = resolve_hostname(user_id_var.get(None))
-        db = SessionLocal()
-        try:
-            ws_uuid = uuid.UUID(workspace_id)
-            dtype = parse_document_type(document_type)
-            if db.query(SpecWorkspace).filter(SpecWorkspace.id == ws_uuid).first() is None:
-                return f"Error: workspace {workspace_id} não encontrado"
+        def _sync_op():
+            from fastapi import HTTPException
+        
+            from app.models import DocumentOrigin, SpecWorkspace, parse_document_type
+            from app.routers.specs import _assert_access, get_or_create_document
+            from app.utils.spec_versioning import write_document_version
+        
+            hostname = resolve_hostname(user_id_var.get(None))
+            db = SessionLocal()
             try:
-                _assert_access(db, ws_uuid)
-            except HTTPException as he:
-                return f"Error: {he.detail}"
-
-            doc = get_or_create_document(db, ws_uuid, dtype)
-            result = write_document_version(
-                db, doc.id, content, expected_version, hostname, DocumentOrigin.mcp
-            )
-            if not result.conflict:
-                # Index + PLANKA mirror off the critical path: Ollama embed of a
-                # techspec routinely exceeds the MCP client ~30s timeout and would
-                # block the SSE loop even though Postgres already has the version.
-                from app.utils.spec_side_effects import schedule_document_post_write
-
-                schedule_document_post_write(
-                    ws_uuid, dtype.value, mirror=True
+                ws_uuid = uuid.UUID(workspace_id)
+                dtype = parse_document_type(document_type)
+                if db.query(SpecWorkspace).filter(SpecWorkspace.id == ws_uuid).first() is None:
+                    return f"Error: workspace {workspace_id} não encontrado"
+                try:
+                    _assert_access(db, ws_uuid)
+                except HTTPException as he:
+                    return f"Error: {he.detail}"
+        
+                doc = get_or_create_document(db, ws_uuid, dtype)
+                result = write_document_version(
+                    db, doc.id, content, expected_version, hostname, DocumentOrigin.mcp
                 )
-            if result.conflict:
+                if not result.conflict:
+                    # Index + PLANKA mirror off the critical path: Ollama embed of a
+                    # techspec routinely exceeds the MCP client ~30s timeout and would
+                    # block the SSE loop even though Postgres already has the version.
+                    from app.utils.spec_side_effects import schedule_document_post_write
+        
+                    schedule_document_post_write(
+                        ws_uuid, dtype.value, mirror=True
+                    )
+                if result.conflict:
+                    return json.dumps(
+                        {
+                            "conflict": True,
+                            "expected_version": expected_version,
+                            "current_version": result.version,
+                            "current_content": result.current_content,
+                        },
+                        default=str,
+                    )
                 return json.dumps(
                     {
-                        "conflict": True,
-                        "expected_version": expected_version,
-                        "current_version": result.version,
-                        "current_content": result.current_content,
-                    },
-                    default=str,
+                        "conflict": False,
+                        "document_id": str(result.document_id),
+                        "version": result.version,
+                    }
                 )
-            return json.dumps(
-                {
-                    "conflict": False,
-                    "document_id": str(result.document_id),
-                    "version": result.version,
-                }
-            )
-        finally:
-            db.close()
+            finally:
+                db.close()
+        return await _run_blocking(_sync_op)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
         return f"Error: {e}"
@@ -1057,43 +1135,45 @@ async def write_spec_document(
 @mcp.tool(description="Read the current version and content of a spec document (document_type = prd/techspec/tasks/adrs; alias adr→adrs) in a workspace. Call this to load the latest content and version BEFORE writing an update (pass that version as write_spec_document's expected_version). For Architecture Decision Records, use document_type=adrs.")
 async def read_spec_document(workspace_id: str, document_type: str) -> str:
     try:
-        from fastapi import HTTPException
-
-        from app.models import SpecDocument, parse_document_type
-        from app.routers.specs import _assert_access
-
-        db = SessionLocal()
-        try:
-            ws_uuid = uuid.UUID(workspace_id)
+        def _sync_op():
+            from fastapi import HTTPException
+        
+            from app.models import SpecDocument, parse_document_type
+            from app.routers.specs import _assert_access
+        
+            db = SessionLocal()
             try:
-                _assert_access(db, ws_uuid)
-            except HTTPException as he:
-                return f"Error: {he.detail}"
-            dtype = parse_document_type(document_type)
-            doc = (
-                db.query(SpecDocument)
-                .filter(
-                    SpecDocument.workspace_id == ws_uuid,
-                    SpecDocument.document_type == dtype,
+                ws_uuid = uuid.UUID(workspace_id)
+                try:
+                    _assert_access(db, ws_uuid)
+                except HTTPException as he:
+                    return f"Error: {he.detail}"
+                dtype = parse_document_type(document_type)
+                doc = (
+                    db.query(SpecDocument)
+                    .filter(
+                        SpecDocument.workspace_id == ws_uuid,
+                        SpecDocument.document_type == dtype,
+                    )
+                    .first()
                 )
-                .first()
-            )
-            if doc is None:
+                if doc is None:
+                    return json.dumps(
+                        {"found": False, "workspace_id": workspace_id, "document_type": dtype.value}
+                    )
                 return json.dumps(
-                    {"found": False, "workspace_id": workspace_id, "document_type": dtype.value}
+                    {
+                        "found": True,
+                        "document_id": str(doc.id),
+                        "document_type": dtype.value,
+                        "current_version": doc.current_version,
+                        "current_content": doc.current_content,
+                    },
+                    default=str,
                 )
-            return json.dumps(
-                {
-                    "found": True,
-                    "document_id": str(doc.id),
-                    "document_type": dtype.value,
-                    "current_version": doc.current_version,
-                    "current_content": doc.current_content,
-                },
-                default=str,
-            )
-        finally:
-            db.close()
+            finally:
+                db.close()
+        return await _run_blocking(_sync_op)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
         return f"Error: {e}"
@@ -1104,25 +1184,27 @@ async def search_specs(
     query: str, project: str | None = None, statuses: list[str] | None = None
 ) -> str:
     try:
-        from app.utils.permissions import get_accessible_spec_workspace_ids
-        from app.utils.spec_auth import resolve_spec_subject
-        from app.utils.spec_search import search_specs as _search_specs
-
-        requester_group = requester_group_for_mcp(user_id_var.get(None))
-        subject_type, subject_id = resolve_spec_subject()
-        db = SessionLocal()
-        try:
-            accessible = get_accessible_spec_workspace_ids(db, subject_type, subject_id)
-        finally:
-            db.close()
-        results = _search_specs(
-            query,
-            project_id=project,
-            requester_group=requester_group,
-            accessible_workspace_ids=accessible,
-            statuses=statuses,
-        )
-        return json.dumps({"results": results}, default=str)
+        def _sync_op():
+            from app.utils.permissions import get_accessible_spec_workspace_ids
+            from app.utils.spec_auth import resolve_spec_subject
+            from app.utils.spec_search import search_specs as _search_specs
+        
+            requester_group = requester_group_for_mcp(user_id_var.get(None))
+            subject_type, subject_id = resolve_spec_subject()
+            db = SessionLocal()
+            try:
+                accessible = get_accessible_spec_workspace_ids(db, subject_type, subject_id)
+            finally:
+                db.close()
+            results = _search_specs(
+                query,
+                project_id=project,
+                requester_group=requester_group,
+                accessible_workspace_ids=accessible,
+                statuses=statuses,
+            )
+            return json.dumps({"results": results}, default=str)
+        return await _run_blocking(_sync_op)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
         return f"Error: {e}"
@@ -1390,26 +1472,28 @@ async def create_task(
     workspace_id: str, title: str, description: str | None = None, branch_ref: str | None = None
 ) -> str:
     try:
-        from app.routers.specs import TaskCreate, TaskResponse
-        from app.routers.specs import create_task as _create_task_endpoint
-        from app.utils.kanban_pipeline import enrich_status_payload
-
-        db = SessionLocal()
-        try:
-            payload = TaskCreate(
-                workspace_id=uuid.UUID(workspace_id),
-                title=title,
-                description=description,
-                branch_ref=branch_ref,
-            )
-            task = _create_task_endpoint(payload, db=db)
-            data = TaskResponse.model_validate(task).model_dump(mode="json")
-            return json.dumps(
-                enrich_status_payload(data, data.get("status") or "tasks", db=db),
-                default=str,
-            )
-        finally:
-            db.close()
+        def _sync_op():
+            from app.routers.specs import TaskCreate, TaskResponse
+            from app.routers.specs import create_task as _create_task_endpoint
+            from app.utils.kanban_pipeline import enrich_status_payload
+        
+            db = SessionLocal()
+            try:
+                payload = TaskCreate(
+                    workspace_id=uuid.UUID(workspace_id),
+                    title=title,
+                    description=description,
+                    branch_ref=branch_ref,
+                )
+                task = _create_task_endpoint(payload, db=db)
+                data = TaskResponse.model_validate(task).model_dump(mode="json")
+                return json.dumps(
+                    enrich_status_payload(data, data.get("status") or "tasks", db=db),
+                    default=str,
+                )
+            finally:
+                db.close()
+        return await _run_blocking(_sync_op)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
         return f"Error: {e}"
@@ -1418,55 +1502,57 @@ async def create_task(
 @mcp.tool(description="Claim a task so you become its assignee and it moves to 'em_andamento'. On success the JSON includes kanban={column,label,means,do_now,next_column,next_action,pipeline,pipeline_rule} — you MUST follow do_now before advancing. IDEMPOTENT FOR YOU: if you are already the assignee, calling this again re-claims the card from ANY column and renews the lease — that is how you send a card back from revisao_codigo/fase_teste to em_andamento when a check failed, and how you renew a claim before it expires. It only fails by exclusivity when the card is active with a DIFFERENT assignee (claimed=false) — do NOT retry blindly. LEASE: a claim expires after a window of inactivity (SPEC_TASK_TIMEOUT_HOURS, default 24h) and the card returns to the backlog; the response carries claim_expires_at, and any action on the card (status change, edit, re-claim) renews it. Pipeline: em_andamento → revisao_codigo → fase_teste → concluido (never skip).")
 async def claim_task(task_id: str) -> str:
     try:
-        from fastapi import HTTPException
-
-        from app.models import TaskCard
-        from app.routers.specs import _assert_access
-        from app.utils.kanban_pipeline import enrich_status_payload
-        from app.utils.task_lock import claim_task as _claim_task
-
-        claimant = resolve_hostname(user_id_var.get(None))
-        db = SessionLocal()
-        try:
-            tid = uuid.UUID(task_id)
-            task = db.query(TaskCard).filter(TaskCard.id == tid).first()
-            if task is None:
-                return f"Error: task {task_id} não encontrada"
+        def _sync_op():
+            from fastapi import HTTPException
+        
+            from app.models import TaskCard
+            from app.routers.specs import _assert_access
+            from app.utils.kanban_pipeline import enrich_status_payload
+            from app.utils.task_lock import claim_task as _claim_task
+        
+            claimant = resolve_hostname(user_id_var.get(None))
+            db = SessionLocal()
             try:
-                _assert_access(db, task.workspace_id)
-            except HTTPException as he:
-                return f"Error: {he.detail}"
-            result = _claim_task(db, tid, claimant)
-            if result.claimed:
+                tid = uuid.UUID(task_id)
+                task = db.query(TaskCard).filter(TaskCard.id == tid).first()
+                if task is None:
+                    return f"Error: task {task_id} não encontrada"
+                try:
+                    _assert_access(db, task.workspace_id)
+                except HTTPException as he:
+                    return f"Error: {he.detail}"
+                result = _claim_task(db, tid, claimant)
+                if result.claimed:
+                    return json.dumps(
+                        enrich_status_payload(
+                            {
+                                "claimed": True,
+                                "assignee": claimant,
+                                "version": result.version,
+                                "status": "em_andamento",
+                                # Prazo do lease: passado este ponto sem atividade, o
+                                # card volta ao backlog sozinho.
+                                "claim_expires_at": result.expires_at,
+                            },
+                            "em_andamento",
+                            db=db,
+                        ),
+                        default=str,
+                    )
                 return json.dumps(
-                    enrich_status_payload(
-                        {
-                            "claimed": True,
-                            "assignee": claimant,
-                            "version": result.version,
-                            "status": "em_andamento",
-                            # Prazo do lease: passado este ponto sem atividade, o
-                            # card volta ao backlog sozinho.
-                            "claim_expires_at": result.expires_at,
-                        },
-                        "em_andamento",
-                        db=db,
-                    ),
-                    default=str,
+                    {
+                        "claimed": False,
+                        "current_assignee": result.current_assignee,
+                        "version": result.version,
+                        "message": (
+                            "Task já está ativa com OUTRO responsável — escolha outra. "
+                            "Consulte o quadro (list_tasks) antes de tentar de novo."
+                        ),
+                    }
                 )
-            return json.dumps(
-                {
-                    "claimed": False,
-                    "current_assignee": result.current_assignee,
-                    "version": result.version,
-                    "message": (
-                        "Task já está ativa com OUTRO responsável — escolha outra. "
-                        "Consulte o quadro (list_tasks) antes de tentar de novo."
-                    ),
-                }
-            )
-        finally:
-            db.close()
+            finally:
+                db.close()
+        return await _run_blocking(_sync_op)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
         return f"Error: {e}"
@@ -1475,34 +1561,36 @@ async def claim_task(task_id: str) -> str:
 @mcp.tool(description="Release a task you no longer work on: it returns to the 'tasks' column, unassigned, and its block marker is cleared. JSON includes kanban guidance for the backlog column. Returns JSON with the new version.")
 async def release_task(task_id: str) -> str:
     try:
-        from fastapi import HTTPException
-
-        from app.models import TaskCard
-        from app.routers.specs import _assert_access
-        from app.utils.kanban_pipeline import enrich_status_payload
-        from app.utils.task_lock import release_task as _release_task
-
-        actor = resolve_hostname(user_id_var.get(None))
-        db = SessionLocal()
-        try:
-            tid = uuid.UUID(task_id)
-            task = db.query(TaskCard).filter(TaskCard.id == tid).first()
-            if task is None:
-                return f"Error: task {task_id} não encontrada"
+        def _sync_op():
+            from fastapi import HTTPException
+        
+            from app.models import TaskCard
+            from app.routers.specs import _assert_access
+            from app.utils.kanban_pipeline import enrich_status_payload
+            from app.utils.task_lock import release_task as _release_task
+        
+            actor = resolve_hostname(user_id_var.get(None))
+            db = SessionLocal()
             try:
-                _assert_access(db, task.workspace_id)
-            except HTTPException as he:
-                return f"Error: {he.detail}"
-            result = _release_task(db, tid, actor, reason="release via MCP")
-            return json.dumps(
-                enrich_status_payload(
-                    {"released": True, "version": result.version, "status": "tasks"},
-                    "tasks",
-                    db=db,
+                tid = uuid.UUID(task_id)
+                task = db.query(TaskCard).filter(TaskCard.id == tid).first()
+                if task is None:
+                    return f"Error: task {task_id} não encontrada"
+                try:
+                    _assert_access(db, task.workspace_id)
+                except HTTPException as he:
+                    return f"Error: {he.detail}"
+                result = _release_task(db, tid, actor, reason="release via MCP")
+                return json.dumps(
+                    enrich_status_payload(
+                        {"released": True, "version": result.version, "status": "tasks"},
+                        "tasks",
+                        db=db,
+                    )
                 )
-            )
-        finally:
-            db.close()
+            finally:
+                db.close()
+        return await _run_blocking(_sync_op)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
         return f"Error: {e}"
@@ -1517,69 +1605,71 @@ async def update_task_status(
     block_reason: str | None = None,
 ) -> str:
     try:
-        from fastapi import HTTPException
-
-        from app.models import TaskCard, TaskCardStatus
-        from app.routers.specs import _assert_access
-        from app.utils.kanban_pipeline import enrich_status_payload
-        from app.utils.task_lock import TaskStatusPolicyError
-        from app.utils.task_lock import update_task_status as _update_task_status
-
-        actor = resolve_hostname(user_id_var.get(None))
-        try:
-            status_enum = TaskCardStatus(new_status)
-        except ValueError:
-            return json.dumps(
-                {
-                    "error": f"status inválido: {new_status}",
-                    "valid": [s.value for s in TaskCardStatus],
-                }
-            )
-        db = SessionLocal()
-        try:
-            tid = uuid.UUID(task_id)
-            task = db.query(TaskCard).filter(TaskCard.id == tid).first()
-            if task is None:
-                return f"Error: task {task_id} não encontrada"
+        def _sync_op():
+            from fastapi import HTTPException
+        
+            from app.models import TaskCard, TaskCardStatus
+            from app.routers.specs import _assert_access
+            from app.utils.kanban_pipeline import enrich_status_payload
+            from app.utils.task_lock import TaskStatusPolicyError
+            from app.utils.task_lock import update_task_status as _update_task_status
+        
+            actor = resolve_hostname(user_id_var.get(None))
             try:
-                _assert_access(db, task.workspace_id)
-            except HTTPException as he:
-                return f"Error: {he.detail}"
-            try:
-                result = _update_task_status(
-                    db,
-                    tid,
-                    status_enum,
-                    expected_version,
-                    actor,
-                    is_blocked=is_blocked,
-                    block_reason=block_reason,
-                )
-            except TaskStatusPolicyError as exc:
-                return json.dumps(
-                    {"policy": True, "code": exc.code, "message": exc.message}
-                )
-            if result.conflict:
+                status_enum = TaskCardStatus(new_status)
+            except ValueError:
                 return json.dumps(
                     {
-                        "conflict": True,
-                        "current_version": result.version,
-                        "current_status": result.status,
+                        "error": f"status inválido: {new_status}",
+                        "valid": [s.value for s in TaskCardStatus],
                     }
                 )
-            return json.dumps(
-                enrich_status_payload(
-                    {
-                        "updated": True,
-                        "status": result.status,
-                        "version": result.version,
-                    },
-                    result.status,
-                    db=db,
+            db = SessionLocal()
+            try:
+                tid = uuid.UUID(task_id)
+                task = db.query(TaskCard).filter(TaskCard.id == tid).first()
+                if task is None:
+                    return f"Error: task {task_id} não encontrada"
+                try:
+                    _assert_access(db, task.workspace_id)
+                except HTTPException as he:
+                    return f"Error: {he.detail}"
+                try:
+                    result = _update_task_status(
+                        db,
+                        tid,
+                        status_enum,
+                        expected_version,
+                        actor,
+                        is_blocked=is_blocked,
+                        block_reason=block_reason,
+                    )
+                except TaskStatusPolicyError as exc:
+                    return json.dumps(
+                        {"policy": True, "code": exc.code, "message": exc.message}
+                    )
+                if result.conflict:
+                    return json.dumps(
+                        {
+                            "conflict": True,
+                            "current_version": result.version,
+                            "current_status": result.status,
+                        }
+                    )
+                return json.dumps(
+                    enrich_status_payload(
+                        {
+                            "updated": True,
+                            "status": result.status,
+                            "version": result.version,
+                        },
+                        result.status,
+                        db=db,
+                    )
                 )
-            )
-        finally:
-            db.close()
+            finally:
+                db.close()
+        return await _run_blocking(_sync_op)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
         return f"Error: {e}"
@@ -1588,34 +1678,36 @@ async def update_task_status(
 @mcp.tool(description="Add a comment to a workspace, document or task. target_type must be one of: workspace, document, task; target_id is that object's id. Returns JSON with the comment id.")
 async def add_spec_comment(target_type: str, target_id: str, body: str) -> str:
     try:
-        from fastapi import HTTPException
-
-        from app.models import CommentTargetType
-        from app.routers.specs import CommentCreate, CommentResponse
-        from app.routers.specs import create_comment as _create_comment_endpoint
-
-        author = (
-            (auth_user_var.get() or "").strip()
-            if auth_method_var.get() == "agent_token"
-            else ""
-        ) or resolve_hostname(user_id_var.get(None))
-        db = SessionLocal()
-        try:
-            payload = CommentCreate(
-                target_type=CommentTargetType(target_type),
-                target_id=uuid.UUID(target_id),
-                body=body,
-                author=author,
-            )
+        def _sync_op():
+            from fastapi import HTTPException
+        
+            from app.models import CommentTargetType
+            from app.routers.specs import CommentCreate, CommentResponse
+            from app.routers.specs import create_comment as _create_comment_endpoint
+        
+            author = (
+                (auth_user_var.get() or "").strip()
+                if auth_method_var.get() == "agent_token"
+                else ""
+            ) or resolve_hostname(user_id_var.get(None))
+            db = SessionLocal()
             try:
-                comment = _create_comment_endpoint(payload, db=db)
-            except HTTPException as he:
-                return f"Error: {he.detail}"
-            return json.dumps(
-                CommentResponse.model_validate(comment).model_dump(mode="json"), default=str
-            )
-        finally:
-            db.close()
+                payload = CommentCreate(
+                    target_type=CommentTargetType(target_type),
+                    target_id=uuid.UUID(target_id),
+                    body=body,
+                    author=author,
+                )
+                try:
+                    comment = _create_comment_endpoint(payload, db=db)
+                except HTTPException as he:
+                    return f"Error: {he.detail}"
+                return json.dumps(
+                    CommentResponse.model_validate(comment).model_dump(mode="json"), default=str
+                )
+            finally:
+                db.close()
+        return await _run_blocking(_sync_op)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
         return f"Error: {e}"
@@ -1624,38 +1716,40 @@ async def add_spec_comment(target_type: str, target_id: str, body: str) -> str:
 @mcp.tool(description="List the comments of a workspace, document or task, oldest first. target_type must be one of: workspace, document, task; target_id is that object's id. Use it to read back code-review notes and test evidence recorded on a card — including ones written in an earlier session. Returns a JSON list; empty when there are none (never an error).")
 async def list_spec_comments(target_type: str, target_id: str) -> str:
     try:
-        from fastapi import HTTPException
-
-        from app.models import CommentTargetType
-        from app.routers.specs import CommentResponse
-        from app.routers.specs import list_comments as _list_comments_endpoint
-
-        db = SessionLocal()
-        try:
+        def _sync_op():
+            from fastapi import HTTPException
+        
+            from app.models import CommentTargetType
+            from app.routers.specs import CommentResponse
+            from app.routers.specs import list_comments as _list_comments_endpoint
+        
+            db = SessionLocal()
             try:
-                ttype = CommentTargetType(target_type)
-            except ValueError:
+                try:
+                    ttype = CommentTargetType(target_type)
+                except ValueError:
+                    return json.dumps(
+                        {
+                            "error": f"target_type inválido: {target_type}",
+                            "valid": [t.value for t in CommentTargetType],
+                        }
+                    )
+                try:
+                    comments = _list_comments_endpoint(ttype, uuid.UUID(target_id), db=db)
+                except HTTPException as he:
+                    return f"Error: {he.detail}"
                 return json.dumps(
                     {
-                        "error": f"target_type inválido: {target_type}",
-                        "valid": [t.value for t in CommentTargetType],
-                    }
+                        "results": [
+                            CommentResponse.model_validate(c).model_dump(mode="json")
+                            for c in comments
+                        ]
+                    },
+                    default=str,
                 )
-            try:
-                comments = _list_comments_endpoint(ttype, uuid.UUID(target_id), db=db)
-            except HTTPException as he:
-                return f"Error: {he.detail}"
-            return json.dumps(
-                {
-                    "results": [
-                        CommentResponse.model_validate(c).model_dump(mode="json")
-                        for c in comments
-                    ]
-                },
-                default=str,
-            )
-        finally:
-            db.close()
+            finally:
+                db.close()
+        return await _run_blocking(_sync_op)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
         return f"Error: {e}"
@@ -1664,25 +1758,27 @@ async def list_spec_comments(target_type: str, target_id: str) -> str:
 @mcp.tool(description="Read a task card in full, including its `description` (requirements, subtasks, relevant files, deliverables, test cases, acceptance criteria) and `version`. Call this before claim_task to decide whether to take the card, and to build the execution checklist. Returns JSON with the card plus kanban guidance.")
 async def get_task(task_id: str) -> str:
     try:
-        from fastapi import HTTPException
-
-        from app.routers.specs import TaskResponse
-        from app.routers.specs import get_task as _get_task_endpoint
-        from app.utils.kanban_pipeline import enrich_status_payload
-
-        db = SessionLocal()
-        try:
+        def _sync_op():
+            from fastapi import HTTPException
+        
+            from app.routers.specs import TaskResponse
+            from app.routers.specs import get_task as _get_task_endpoint
+            from app.utils.kanban_pipeline import enrich_status_payload
+        
+            db = SessionLocal()
             try:
-                task = _get_task_endpoint(uuid.UUID(task_id), db=db)
-            except HTTPException as he:
-                return f"Error: {he.detail}"
-            data = TaskResponse.model_validate(task).model_dump(mode="json")
-            return json.dumps(
-                enrich_status_payload(data, data.get("status") or "tasks", db=db),
-                default=str,
-            )
-        finally:
-            db.close()
+                try:
+                    task = _get_task_endpoint(uuid.UUID(task_id), db=db)
+                except HTTPException as he:
+                    return f"Error: {he.detail}"
+                data = TaskResponse.model_validate(task).model_dump(mode="json")
+                return json.dumps(
+                    enrich_status_payload(data, data.get("status") or "tasks", db=db),
+                    default=str,
+                )
+            finally:
+                db.close()
+        return await _run_blocking(_sync_op)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
         return f"Error: {e}"
@@ -1695,44 +1791,46 @@ async def list_tasks(
     include_description: bool = False,
 ) -> str:
     try:
-        from fastapi import HTTPException
-
-        from app.models import TaskCardStatus
-        from app.routers.specs import TaskResponse
-        from app.routers.specs import list_workspace_tasks as _list_tasks_endpoint
-
-        db = SessionLocal()
-        try:
-            status_enum = None
-            if status:
-                try:
-                    status_enum = TaskCardStatus(status)
-                except ValueError:
-                    return json.dumps(
-                        {
-                            "error": f"status inválido: {status}",
-                            "valid": [s.value for s in TaskCardStatus],
-                        }
-                    )
+        def _sync_op():
+            from fastapi import HTTPException
+        
+            from app.models import TaskCardStatus
+            from app.routers.specs import TaskResponse
+            from app.routers.specs import list_workspace_tasks as _list_tasks_endpoint
+        
+            db = SessionLocal()
             try:
-                tasks = _list_tasks_endpoint(
-                    uuid.UUID(workspace_id), status=status_enum, db=db
-                )
-            except HTTPException as he:
-                return f"Error: {he.detail}"
-
-            results = []
-            for t in tasks:
-                data = TaskResponse.model_validate(t).model_dump(mode="json")
-                if not include_description:
-                    # Omitido por padrão: o corpo enriquecido de um card é longo, e
-                    # listar um workspace inteiro com todos eles estoura o contexto
-                    # de quem só quer escolher o que puxar.
-                    data.pop("description", None)
-                results.append(data)
-            return json.dumps({"results": results}, default=str)
-        finally:
-            db.close()
+                status_enum = None
+                if status:
+                    try:
+                        status_enum = TaskCardStatus(status)
+                    except ValueError:
+                        return json.dumps(
+                            {
+                                "error": f"status inválido: {status}",
+                                "valid": [s.value for s in TaskCardStatus],
+                            }
+                        )
+                try:
+                    tasks = _list_tasks_endpoint(
+                        uuid.UUID(workspace_id), status=status_enum, db=db
+                    )
+                except HTTPException as he:
+                    return f"Error: {he.detail}"
+        
+                results = []
+                for t in tasks:
+                    data = TaskResponse.model_validate(t).model_dump(mode="json")
+                    if not include_description:
+                        # Omitido por padrão: o corpo enriquecido de um card é longo, e
+                        # listar um workspace inteiro com todos eles estoura o contexto
+                        # de quem só quer escolher o que puxar.
+                        data.pop("description", None)
+                    results.append(data)
+                return json.dumps({"results": results}, default=str)
+            finally:
+                db.close()
+        return await _run_blocking(_sync_op)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
         return f"Error: {e}"
@@ -1747,63 +1845,65 @@ async def update_task(
     branch_ref: str | None = None,
 ) -> str:
     try:
-        from fastapi import HTTPException
-
-        from app.models import TaskCard
-        from app.routers.specs import _assert_access
-        from app.utils.task_lock import update_task_metadata
-
-        db = SessionLocal()
-        try:
-            tid = uuid.UUID(task_id)
-            task = db.query(TaskCard).filter(TaskCard.id == tid).first()
-            if task is None:
-                return f"Error: task {task_id} não encontrada"
+        def _sync_op():
+            from fastapi import HTTPException
+        
+            from app.models import TaskCard
+            from app.routers.specs import _assert_access
+            from app.utils.task_lock import update_task_metadata
+        
+            db = SessionLocal()
             try:
-                _assert_access(db, task.workspace_id)
-            except HTTPException as he:
-                return f"Error: {he.detail}"
-
-            if title is None and description is None and branch_ref is None:
-                return json.dumps(
-                    {
-                        "error": "nada a atualizar",
-                        "hint": "informe title, description e/ou branch_ref",
-                    }
+                tid = uuid.UUID(task_id)
+                task = db.query(TaskCard).filter(TaskCard.id == tid).first()
+                if task is None:
+                    return f"Error: task {task_id} não encontrada"
+                try:
+                    _assert_access(db, task.workspace_id)
+                except HTTPException as he:
+                    return f"Error: {he.detail}"
+        
+                if title is None and description is None and branch_ref is None:
+                    return json.dumps(
+                        {
+                            "error": "nada a atualizar",
+                            "hint": "informe title, description e/ou branch_ref",
+                        }
+                    )
+        
+                result = update_task_metadata(
+                    db,
+                    tid,
+                    expected_version,
+                    title=title,
+                    description=description,
+                    branch_ref=branch_ref,
                 )
-
-            result = update_task_metadata(
-                db,
-                tid,
-                expected_version,
-                title=title,
-                description=description,
-                branch_ref=branch_ref,
-            )
-            if result.conflict:
+                if result.conflict:
+                    return json.dumps(
+                        {
+                            "conflict": True,
+                            "expected_version": expected_version,
+                            "current_version": result.version,
+                            "current_title": result.title,
+                            "current_description": result.description,
+                            "current_branch_ref": result.branch_ref,
+                        },
+                        default=str,
+                    )
                 return json.dumps(
                     {
-                        "conflict": True,
-                        "expected_version": expected_version,
-                        "current_version": result.version,
-                        "current_title": result.title,
-                        "current_description": result.description,
-                        "current_branch_ref": result.branch_ref,
+                        "updated": True,
+                        "version": result.version,
+                        "title": result.title,
+                        "description": result.description,
+                        "branch_ref": result.branch_ref,
                     },
                     default=str,
                 )
-            return json.dumps(
-                {
-                    "updated": True,
-                    "version": result.version,
-                    "title": result.title,
-                    "description": result.description,
-                    "branch_ref": result.branch_ref,
-                },
-                default=str,
-            )
-        finally:
-            db.close()
+            finally:
+                db.close()
+        return await _run_blocking(_sync_op)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
         return f"Error: {e}"
@@ -1812,21 +1912,23 @@ async def update_task(
 @mcp.tool(description="List a task card's column-change history, oldest first. Each entry has old_status, new_status, changed_by, changed_at and by_timeout. Use it to tell an automatic lease expiry (by_timeout=true, changed_by='system:timeout') apart from someone releasing the card on purpose — a card that went back to the backlog on its own is otherwise indistinguishable from one that was released. Returns a JSON list; empty when the card never changed column (never an error).")
 async def list_task_history(task_id: str) -> str:
     try:
-        from fastapi import HTTPException
-
-        from app.routers.specs import list_task_history as _list_history_endpoint
-
-        db = SessionLocal()
-        try:
+        def _sync_op():
+            from fastapi import HTTPException
+        
+            from app.routers.specs import list_task_history as _list_history_endpoint
+        
+            db = SessionLocal()
             try:
-                rows = _list_history_endpoint(uuid.UUID(task_id), db=db)
-            except HTTPException as he:
-                return f"Error: {he.detail}"
-            return json.dumps(
-                {"results": [r.model_dump(mode="json") for r in rows]}, default=str
-            )
-        finally:
-            db.close()
+                try:
+                    rows = _list_history_endpoint(uuid.UUID(task_id), db=db)
+                except HTTPException as he:
+                    return f"Error: {he.detail}"
+                return json.dumps(
+                    {"results": [r.model_dump(mode="json") for r in rows]}, default=str
+                )
+            finally:
+                db.close()
+        return await _run_blocking(_sync_op)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
         return f"Error: {e}"
@@ -1835,19 +1937,21 @@ async def list_task_history(task_id: str) -> str:
 @mcp.tool(description="Delete a task card and its status history and comments. Use it to remove a card created by mistake or duplicated — without this, a test card stays on the board forever, which discourages validating against the real server. Irreversible; it does NOT touch memories. Returns JSON {deleted: true, task_id}.")
 async def delete_task(task_id: str) -> str:
     try:
-        from fastapi import HTTPException
-
-        from app.routers.specs import delete_task as _delete_task_endpoint
-
-        db = SessionLocal()
-        try:
+        def _sync_op():
+            from fastapi import HTTPException
+        
+            from app.routers.specs import delete_task as _delete_task_endpoint
+        
+            db = SessionLocal()
             try:
-                _delete_task_endpoint(uuid.UUID(task_id), db=db)
-            except HTTPException as he:
-                return f"Error: {he.detail}"
-            return json.dumps({"deleted": True, "task_id": task_id})
-        finally:
-            db.close()
+                try:
+                    _delete_task_endpoint(uuid.UUID(task_id), db=db)
+                except HTTPException as he:
+                    return f"Error: {he.detail}"
+                return json.dumps({"deleted": True, "task_id": task_id})
+            finally:
+                db.close()
+        return await _run_blocking(_sync_op)
     except Exception as e:  # noqa: BLE001
         logging.exception(e)
         return f"Error: {e}"
@@ -1874,9 +1978,13 @@ async def handle_sse(request: Request):
     client_token = client_name_var.set(client_name or "")
     registry_token = registry_auth_headers_var.set(_registry_auth_headers_from_request(request))
     # ?group= na URL de instalação: vincula equipe na primeira conexão (ADR-004).
-    ensure_user_group(uid, request.query_params.get("group"))
-    # Token de agente em máquina não vinculada: log estruturado (Fase 2 trata).
-    _log_machine_divergence_if_any(path_uid)
+    
+    def _sync_sse_setup():
+        ensure_user_group(uid, request.query_params.get("group"))
+        # Token de agente em máquina não vinculada: log estruturado (Fase 2 trata).
+        _log_machine_divergence_if_any(path_uid)
+        
+    await _run_blocking(_sync_sse_setup)
 
     try:
         # NOTE: request._send is the raw ASGI `send` callable. Starlette does not
@@ -1970,9 +2078,13 @@ async def handle_streamable_http(request: Request):
     client_name = request.path_params.get("client_name")
     client_token = client_name_var.set(client_name or "")
     registry_token = registry_auth_headers_var.set(_registry_auth_headers_from_request(request))
-    ensure_user_group(uid, request.query_params.get("group"))
-    # Token de agente em máquina não vinculada: log estruturado (Fase 2 trata).
-    _log_machine_divergence_if_any(path_uid)
+    
+    def _sync_http_setup():
+        ensure_user_group(uid, request.query_params.get("group"))
+        # Token de agente em máquina não vinculada: log estruturado (Fase 2 trata).
+        _log_machine_divergence_if_any(path_uid)
+        
+    await _run_blocking(_sync_http_setup)
 
     # Intercept the ASGI messages the transport sends so we can return them
     # as a single Response to FastAPI.  Without this, FastAPI would attempt to

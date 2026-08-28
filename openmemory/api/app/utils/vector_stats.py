@@ -8,12 +8,18 @@ match what operators see via MCP.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from app.utils.datetime_utc import utc_now_naive
 
 logger = logging.getLogger(__name__)
+
+# Upper bound of points pulled through the created_at index for one page.
+# Normal UI pages (start+size <= a few hundred) never approach it; a request
+# beyond it falls back to the full scroll so deep paging stays correct.
+ORDERED_WINDOW_CAP = int(os.getenv("MEM0_LIST_ORDERED_WINDOW_CAP", "2000"))
 
 
 def _vector_store():
@@ -113,6 +119,45 @@ def _scroll_points(vs, *, filters: dict[str, str], search: Optional[str] = None)
     return points
 
 
+def _created_at_key(point) -> str:
+    payload = getattr(point, "payload", {}) or {}
+    return str(payload.get("created_at") or "")
+
+
+def _ordered_page(
+    vs, *, filters: dict[str, str], start: int, size: int, reverse: bool
+) -> tuple[list, int]:
+    """Fetch one page via the ``created_at`` payload index (order_by scroll).
+
+    The UI list is already sorted by created_at, so asking Qdrant for an ordered
+    window of ``start + size`` points replaces the previous full-collection
+    scroll (~2 s / 5 MB at 10k points) with ~5 ms. order_by pagination is
+    value-based, so the bounded window is fetched from the top and sliced. The
+    window is capped (MEM0_LIST_ORDERED_WINDOW_CAP); beyond it the full-scroll
+    fallback keeps deep paging correct.
+    """
+    flt = vs._create_filter(filters) if filters else None
+    total = vs.client.count(
+        collection_name=vs.collection_name, count_filter=flt, exact=True
+    ).count
+
+    window = start + size
+    if window > ORDERED_WINDOW_CAP:
+        points = _scroll_points(vs, filters=filters)
+        points.sort(key=_created_at_key, reverse=reverse)
+        return points[start : start + size], len(points)
+
+    records, _ = vs.client.scroll(
+        collection_name=vs.collection_name,
+        scroll_filter=flt,
+        limit=window,
+        order_by={"key": "created_at", "direction": "desc" if reverse else "asc"},
+        with_payload=True,
+        with_vectors=False,
+    )
+    return (records or [])[start : start + size], total
+
+
 def list_shared_memories(
     *,
     search: Optional[str] = None,
@@ -121,7 +166,12 @@ def list_shared_memories(
     size: int = 10,
     sort_direction: str = "desc",
 ) -> dict[str, Any]:
-    """List memories from Qdrant with in-memory pagination (fast for LAN scale)."""
+    """List memories from Qdrant with indexed pagination (O(page), not O(n)).
+
+    Without a text search the page comes straight from the ``created_at``
+    payload index. The text-search path keeps the full scroll because payload
+    text has no index (search is rare and admin-driven).
+    """
     _, vs = _vector_store()
     if vs is None:
         return {"items": [], "total": 0, "page": page, "size": size, "pages": 0}
@@ -132,14 +182,25 @@ def list_shared_memories(
     if project:
         filters["project"] = project
 
+    reverse = sort_direction.lower() != "asc"
+    start = (page - 1) * size
+
     try:
-        points = _scroll_points(vs, filters=filters, search=search)
+        if search and search.strip():
+            points = _scroll_points(vs, filters=filters, search=search)
+            points.sort(key=_created_at_key, reverse=reverse)
+            total = len(points)
+            page_points = points[start : start + size]
+        else:
+            page_points, total = _ordered_page(
+                vs, filters=filters, start=start, size=size, reverse=reverse
+            )
     except Exception as exc:  # noqa: BLE001
         logger.exception("list_shared_memories failed")
         raise RuntimeError(str(exc)) from exc
 
     items = []
-    for p in points:
+    for p in page_points:
         payload = getattr(p, "payload", {}) or {}
         created = payload.get("created_at")
         items.append(
@@ -156,16 +217,10 @@ def list_shared_memories(
             }
         )
 
-    reverse = sort_direction.lower() != "asc"
-    items.sort(key=lambda x: x.get("created_at") or "", reverse=reverse)
-
-    total = len(items)
     pages = (total + size - 1) // size if total else 0
-    start = (page - 1) * size
-    page_items = items[start : start + size]
 
     return {
-        "items": page_items,
+        "items": items,
         "total": total,
         "page": page,
         "size": size,

@@ -42,7 +42,9 @@ from app.utils.write_queue import WriteQueue
 def _audit_factory():
     """In-memory sqlite sessionmaker with just the write_audit_logs table."""
     engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
     WriteAuditLog.__table__.create(bind=engine, checkfirst=True)
     return sessionmaker(autocommit=False, autoflush=False, bind=engine)

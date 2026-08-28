@@ -434,3 +434,68 @@ class TestSSEMessageErrors:
         )
 
         assert response.status_code == 404
+
+# --- Event loop unblocking tests ---
+import asyncio
+import time
+
+import pytest
+
+from app.mcp_server import add_memories, search_memory, write_queue
+
+@pytest.mark.asyncio
+async def test_add_memories_does_not_block_event_loop(monkeypatch):
+    """
+    Testa se o add_memories devolve o event loop para outras tasks
+    enquanto faz o enqueue síncrono.
+    """
+    def slow_enqueue(*args, **kwargs):
+        time.sleep(0.6)
+        return "job-123"
+        
+    monkeypatch.setattr(write_queue, "enqueue", slow_enqueue)
+    import app.mcp_server
+    monkeypatch.setattr(app.mcp_server, "check_write_allowed", lambda *a, **k: None)
+
+    beats = 0
+    async def heartbeat():
+        nonlocal beats
+        while True:
+            beats += 1
+            await asyncio.sleep(0.05)
+
+    hb = asyncio.create_task(heartbeat())
+    await add_memories("texto", project="mem0-shared")
+    hb.cancel()
+    
+    # Se o loop estivesse bloqueado por sleep(0.6), beats seria 0 ou 1.
+    assert beats >= 3
+
+
+@pytest.mark.asyncio
+async def test_search_memory_does_not_block_event_loop(monkeypatch):
+    """
+    Testa se o search_memory devolve o event loop durante a inicialização síncrona
+    do cliente de memória.
+    """
+    # Vamos fazer o get_memory_client_safe ser lento
+    import app.mcp_server
+    
+    def slow_get_memory_client_safe(*args, **kwargs):
+        time.sleep(0.6)
+        return None
+        
+    monkeypatch.setattr(app.mcp_server, "get_memory_client_safe", slow_get_memory_client_safe)
+
+    beats = 0
+    async def heartbeat():
+        nonlocal beats
+        while True:
+            beats += 1
+            await asyncio.sleep(0.05)
+
+    hb = asyncio.create_task(heartbeat())
+    await search_memory(query="teste", project="mem0-shared")
+    hb.cancel()
+    
+    assert beats >= 3

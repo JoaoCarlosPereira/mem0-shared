@@ -86,8 +86,39 @@ class _Hit:
 
 
 class _Embed:
+    model = "test-embed"
+
     def embed(self, query, mode):  # noqa: D401
         return [0.1, 0.2, 0.3]
+
+
+class _CountingEmbed(_Embed):
+    def __init__(self):
+        self.calls = 0
+
+    def embed(self, query, mode):
+        self.calls += 1
+        return super().embed(query, mode)
+
+
+class _MemReadCache:
+    """In-memory stand-in for the Redis read cache (embed + search pools)."""
+
+    def __init__(self):
+        self.embeds = {}
+        self.pools = {}
+
+    def get_embedding(self, model, query):
+        return self.embeds.get((model, query))
+
+    def set_embedding(self, model, query, vector):
+        self.embeds[(model, query)] = vector
+
+    def get_search(self, project, query, top_k, filter_hash):
+        return self.pools.get((project, query, top_k, filter_hash))
+
+    def set_search(self, project, query, top_k, filter_hash, hits):
+        self.pools[(project, query, top_k, filter_hash)] = hits
 
 
 class _VectorStore:
@@ -144,6 +175,38 @@ def _and(*clauses):
 
 
 class TestSearch:
+    @pytest.fixture(autouse=True)
+    def _mem_cache(self, monkeypatch):
+        """Keep the search hermetic: swap the Redis read cache for an in-memory one."""
+        cache = _MemReadCache()
+        monkeypatch.setattr(compat_v3, "read_cache", cache)
+        self.read_cache = cache
+        yield
+
+    @pytest.mark.asyncio
+    async def test_repeated_search_uses_cached_pool_and_embedding(self, client, monkeypatch):
+        """Hooks re-send the same query; the 2nd call must skip embed + vector search."""
+        fake = _FakeClient(_hits())
+        fake.embedding_model = _CountingEmbed()
+        search_calls = []
+        original_search = fake.vector_store.search
+
+        def _counting_search(*args, **kwargs):
+            search_calls.append(kwargs)
+            return original_search(*args, **kwargs)
+
+        fake.vector_store.search = _counting_search
+        monkeypatch.setattr(compat_v3, "get_memory_client", lambda: fake)
+        client._fake = fake
+        body = {"query": "state", "filters": _and({"user_id": "host"}, {"app_id": "A"})}
+
+        first = (await client.post("/v3/memories/search/", json=body)).json()
+        second = (await client.post("/v3/memories/search/", json=body)).json()
+
+        assert fake.embedding_model.calls == 1  # embed computed once
+        assert len(search_calls) == 1  # pool served from cache on the 2nd call
+        assert {r["id"] for r in first["results"]} == {r["id"] for r in second["results"]}
+
     @pytest.mark.asyncio
     async def test_global_search_includes_all_projects(self, client):
         body = {"query": "state", "filters": _and({"user_id": "host"}, {"app_id": "A"})}

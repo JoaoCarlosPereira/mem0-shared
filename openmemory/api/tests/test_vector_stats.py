@@ -83,12 +83,13 @@ class TestListSharedMemories:
         assert out == {"items": [], "total": 0, "page": 1, "size": 10, "pages": 0}
 
     def test_list_shared_memories_paginates_scroll_results(self):
+        # Already ordered newest-first, as Qdrant returns with order_by desc.
         points = [
             _point("a", "first", "sysmovs", "2026-06-21T10:00:00+00:00"),
             _point("b", "second", "sysmovs", "2026-06-20T10:00:00+00:00"),
             _point("c", "third", "sysmovs", "2026-06-19T10:00:00+00:00"),
         ]
-        client, vs = _make_vs()
+        client, vs = _make_vs(count_total=3)
         vs.client.scroll.return_value = (points, None)
         with patch.object(vector_stats, "_vector_store", return_value=(client, vs)):
             page1 = vector_stats.list_shared_memories(page=1, size=2)
@@ -100,6 +101,50 @@ class TestListSharedMemories:
         assert page1["items"][0]["content"] == "first"
         assert page1["items"][0]["app_name"] == "sysmovs"
         assert page2["items"][0]["content"] == "third"
+
+    def test_list_shared_memories_uses_indexed_order_by(self):
+        """The non-search path must read a bounded ordered window, not the full collection."""
+        points = [
+            _point("a", "first", "sysmovs", "2026-06-21T10:00:00+00:00"),
+            _point("b", "second", "sysmovs", "2026-06-20T10:00:00+00:00"),
+        ]
+        client, vs = _make_vs(count_total=50)
+        vs.client.scroll.return_value = (points, None)
+        with patch.object(vector_stats, "_vector_store", return_value=(client, vs)):
+            out = vector_stats.list_shared_memories(page=1, size=2)
+
+        assert out["total"] == 50
+        assert len(out["items"]) == 2
+        kwargs = vs.client.scroll.call_args.kwargs
+        assert kwargs.get("order_by") == {"key": "created_at", "direction": "desc"}
+        assert kwargs.get("limit") == 2  # only the requested window, not the collection
+
+    def test_list_shared_memories_asc_direction(self):
+        client, vs = _make_vs(count_total=1)
+        vs.client.scroll.return_value = ([_point("a", "oldest", "sysmovs")], None)
+        with patch.object(vector_stats, "_vector_store", return_value=(client, vs)):
+            vector_stats.list_shared_memories(page=1, size=10, sort_direction="asc")
+
+        kwargs = vs.client.scroll.call_args.kwargs
+        assert kwargs.get("order_by") == {"key": "created_at", "direction": "asc"}
+
+    def test_list_shared_memories_deep_page_falls_back_to_full_scroll(self):
+        """Beyond the ordered window cap, deep paging must stay correct via full scroll."""
+        points = [
+            _point(str(i), f"m{i}", "sysmovs", f"2026-06-{i:02d}T10:00:00+00:00")
+            for i in range(1, 11)
+        ]
+        client, vs = _make_vs(count_total=10)
+        vs.client.scroll.return_value = (points, None)
+        with (
+            patch.object(vector_stats, "_vector_store", return_value=(client, vs)),
+            patch.object(vector_stats, "ORDERED_WINDOW_CAP", 5),
+        ):
+            out = vector_stats.list_shared_memories(page=2, size=3)
+
+        assert out["total"] == 10
+        # desc-sorted: [10..1]; page 2 of size 3 -> indices 3..5
+        assert [p["id"] for p in out["items"]] == ["7", "6", "5"]
 
     def test_list_shared_memories_search_filters_by_text_substring(self):
         points = [

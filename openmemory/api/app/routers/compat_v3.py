@@ -32,6 +32,7 @@ from app.utils.write_guard import check_write_allowed
 from app.utils.memory import get_memory_client
 from app.utils.partitioning import bind_active_collection
 from app.utils.read_audit import record_memory_reads
+from app.utils.read_cache import read_cache
 from app.utils.recency import rank_search_results
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
@@ -153,7 +154,7 @@ class SearchRequest(BaseModel):
 
 
 @router.post("/search/")
-async def search(request: SearchRequest, http_request: Request) -> dict:
+def search(request: SearchRequest, http_request: Request) -> dict:
     """Semantic search across all projects, ranked by relevance and recency."""
     client = _memory_client()
     if not client or not request.query:
@@ -183,32 +184,78 @@ async def search(request: SearchRequest, http_request: Request) -> dict:
     # gets up to top_k matches after filtering.
     fetch_k = min(MAX_TOP_K, top_k * 4) if metadata_filters else top_k
 
-    hits = None
+    # Same Redis cache as app.mcp_server.search_memory: the hook prefetches reuse
+    # one query per session, and re-embedding + re-querying Qdrant on every hook
+    # call is the read path that saturates CPU on weak servers. Reads stay
+    # global (no filters in the vector call), so the pool key only varies with
+    # query + fetch_k. Writes invalidate the search cache per project via
+    # read_cache.invalidate_search, so freshness matches the MCP path.
     degraded = None
-    try:
-        embeddings = client.embedding_model.embed(request.query, "search")
-        hits = client.vector_store.search(
-            query=request.query,
-            vectors=embeddings,
-            top_k=fetch_k,
-            filters=None,
-            shard_key_selector=None,
-        )
-    except Exception as e:  # noqa: BLE001
-        logging.warning("compat_v3 semantic search failed (%s); falling back to list", e)
-        degraded = "list_fallback"
+    pool = read_cache.get_search(project or "global", request.query, fetch_k, "compat-global")
+    if pool is not None:
+        hits = [dict(r) for r in pool]
+    else:
+        hits = None
         try:
-            raw = client.vector_store.list(filters=None, top_k=fetch_k)
-            if isinstance(raw, (tuple, list)) and raw and isinstance(raw[0], (list, tuple)):
-                hits = raw[0]
-            else:
-                hits = raw
-        except Exception as list_err:  # noqa: BLE001
-            logging.exception("compat_v3 list fallback failed: %s", list_err)
-            return {"results": []}
+            embed_model = getattr(client.embedding_model, "model", "default")
+            embeddings = read_cache.get_embedding(embed_model, request.query)
+            if embeddings is None:
+                embeddings = client.embedding_model.embed(request.query, "search")
+                read_cache.set_embedding(embed_model, request.query, embeddings)
+            hits = client.vector_store.search(
+                query=request.query,
+                vectors=embeddings,
+                top_k=fetch_k,
+                filters=None,
+                shard_key_selector=None,
+            )
+            cached = [
+                {
+                    "id": str(getattr(h, "id", "") or ""),
+                    "memory": (getattr(h, "payload", {}) or {}).get("data"),
+                    "score": getattr(h, "score", None),
+                    "created_at": (getattr(h, "payload", {}) or {}).get("created_at"),
+                    "updated_at": (getattr(h, "payload", {}) or {}).get("updated_at"),
+                    "project": (getattr(h, "payload", {}) or {}).get("project"),
+                    "owner": author_hostname_from_payload(getattr(h, "payload", {}) or {}),
+                    "metadata": dict(getattr(h, "payload", {}) or {}),
+                }
+                for h in hits or []
+            ]
+            read_cache.set_search(project or "global", request.query, fetch_k, "compat-global", cached)
+        except Exception as e:  # noqa: BLE001
+            logging.warning("compat_v3 semantic search failed (%s); falling back to list", e)
+            degraded = "list_fallback"
+            try:
+                raw = client.vector_store.list(filters=None, top_k=fetch_k)
+                if isinstance(raw, (tuple, list)) and raw and isinstance(raw[0], (list, tuple)):
+                    hits = raw[0]
+                else:
+                    hits = raw
+            except Exception as list_err:  # noqa: BLE001
+                logging.exception("compat_v3 list fallback failed: %s", list_err)
+                return {"results": []}
 
     results = []
     for h in hits or []:
+        if isinstance(h, dict):
+            payload = h.get("metadata") or {}
+            if metadata_filters and not _payload_matches_metadata(payload, metadata_filters):
+                continue
+            score = h.get("score")
+            if request.threshold and score is not None and score < request.threshold:
+                continue
+            results.append({
+                "id": h.get("id"),
+                "memory": h.get("memory"),
+                "score": score,
+                "created_at": h.get("created_at"),
+                "updated_at": h.get("updated_at"),
+                "project": h.get("project"),
+                "owner": h.get("owner"),
+                "metadata": payload,
+            })
+            continue
         payload = getattr(h, "payload", {}) or {}
         if metadata_filters and not _payload_matches_metadata(payload, metadata_filters):
             continue

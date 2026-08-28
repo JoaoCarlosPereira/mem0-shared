@@ -120,16 +120,34 @@ async def test_off_peak_curfew_defers_scheduled_but_runs_manual(queue):
         finally:
             db.close()
 
+    loop = asyncio.get_running_loop()
+
+    async def _wait_for(predicate, *, what, timeout=15.0):
+        # Poll instead of a fixed sleep: the worker hop (DB dequeue → to_thread
+        # handler → DB mark_done) outlives 50ms on loaded runners, which flaked
+        # the old sleep. Asserts on the event, not the wall clock.
+        deadline = loop.time() + timeout
+        last = _statuses()
+        while not predicate(last):
+            if loop.time() >= deadline:
+                raise AssertionError(f"timed out waiting for {what}: {last}")
+            await asyncio.sleep(0.01)
+            last = _statuses()
+        return last
+
     # Outside the window: manual job runs, scheduled job is held back.
     worker._in_off_peak_window = lambda: False
     worker.start()
-    await asyncio.sleep(0.05)
-    st = _statuses()
-    assert st[man_id] == GovernanceJobStatus.done
+    st = await _wait_for(
+        lambda s: s[man_id] == GovernanceJobStatus.done,
+        what=f"manual job {man_id} done",
+    )
     assert st[sched_id] == GovernanceJobStatus.queued
 
     # Window opens: the scheduled job drains too.
     worker._in_off_peak_window = lambda: True
-    await asyncio.sleep(0.05)
+    await _wait_for(
+        lambda s: s[sched_id] == GovernanceJobStatus.done,
+        what=f"scheduled job {sched_id} done",
+    )
     await worker.stop()
-    assert _statuses()[sched_id] == GovernanceJobStatus.done
