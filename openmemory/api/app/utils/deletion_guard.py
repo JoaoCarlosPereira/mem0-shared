@@ -109,18 +109,24 @@ def deletion_guard_status() -> dict[str, bool]:
 
 def log_deletion_guard_startup() -> None:
     status = deletion_guard_status()
+    is_prod = os.environ.get("MEM0_ENV", "").lower() in ("production", "prod")
+
     if status["memory_delete_allowed"]:
-        logger.warning(
-            "MEM0 deletion guard: memory deletes ENABLED (MEM0_ALLOW_MEMORY_DELETE=1)"
-        )
+        msg = "MEM0 deletion guard: memory deletes ENABLED (MEM0_ALLOW_MEMORY_DELETE=1)"
+        if is_prod:
+            logger.error(f"CRITICAL: {msg} IN PRODUCTION ENVIRONMENT!")
+        else:
+            logger.warning(msg)
     else:
         logger.info(
             "MEM0 deletion guard: memory deletes blocked (default fail-closed)"
         )
     if status["bulk_delete_allowed"]:
-        logger.warning(
-            "MEM0 deletion guard: bulk deletes ENABLED (MEM0_ALLOW_BULK_DELETE=1)"
-        )
+        msg = "MEM0 deletion guard: bulk deletes ENABLED (MEM0_ALLOW_BULK_DELETE=1)"
+        if is_prod:
+            logger.error(f"CRITICAL: {msg} IN PRODUCTION ENVIRONMENT!")
+        else:
+            logger.warning(msg)
     if status["governance_purge_allowed"]:
         logger.warning(
             "MEM0 deletion guard: governance purge ENABLED "
