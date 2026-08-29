@@ -259,3 +259,34 @@ export type GroupAnalyticsDetail = {
   group: GroupAnalytics;
   members: UserAnalytics[];
 };
+
+export type ContributorMetric = "writes" | "reads" | "total";
+export type ContributorPeriod = "24h" | "7d" | "30d" | "all";
+
+export type TopContributor = {
+  rank: number;
+  user_id: string;
+  display_name?: string | null;
+  avatar_url?: string | null;
+  group_id?: string | null;
+  group_name?: string | null;
+  value: number;
+  writes: number;
+  reads: number;
+  distinct_projects: number;
+};
+
+export type TopContributorsResponse = {
+  metric: ContributorMetric;
+  period: ContributorPeriod;
+  project?: string | null;
+  group_id?: string | null;
+  items: TopContributor[];
+};
+
+export type ContributorFilters = {
+  metric: ContributorMetric;
+  period: ContributorPeriod;
+  groupId?: string;
+  project?: string;
+};

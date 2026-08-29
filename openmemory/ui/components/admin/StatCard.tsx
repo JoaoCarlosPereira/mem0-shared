@@ -19,13 +19,10 @@ export function StatCard({
   icon,
   accent = "blue",
 }: StatCardProps) {
-  const displayValue: string | number =
-    typeof value === "number" || typeof value === "string" ? value : "—";
-
   return (
     <KpiCard
       label={title}
-      value={displayValue}
+      value={value}
       hint={hint}
       alert={alert}
       icon={icon}

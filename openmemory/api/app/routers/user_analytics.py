@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from app.database import get_db
-from app.models import Group, Machine, User
+from app.models import Group, User
 from app.utils.creator_identity import (
     identity_for_hostname,
     resolve_creator_identities_with_db,
@@ -16,13 +16,14 @@ from app.utils.user_analytics import (
     group_activity_stats,
     recent_user_reads,
     recent_user_writes,
+    top_contributors,
     user_activity_stats,
+    visible_group_members,
 )
 from app.utils.legacy_user_deletion import purge_legacy_host_user
 from app.utils.machine_resolver import (
     consolidate_group_legacy_members,
     find_legacy_host_user,
-    linked_legacy_ids_for_users,
 )
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
@@ -86,6 +87,27 @@ class UserDeleteRequest(BaseModel):
     confirm: str
 
 
+class TopContributorItem(BaseModel):
+    rank: int
+    user_id: str
+    display_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    group_id: Optional[str] = None
+    group_name: Optional[str] = None
+    value: int
+    writes: int
+    reads: int
+    distinct_projects: int = 0
+
+
+class TopContributorsResponse(BaseModel):
+    metric: str
+    period: str
+    project: Optional[str] = None
+    group_id: Optional[str] = None
+    items: list[TopContributorItem]
+
+
 def _get_group_or_404(db: Session, group_id: UUID) -> Group:
     group = db.query(Group).filter(Group.id == group_id).first()
     if group is None:
@@ -127,25 +149,30 @@ def _user_summary(
 
 def _visible_group_members(db: Session, group_id: UUID) -> list[tuple[User, Optional[str]]]:
     """Return person accounts and unpaired legacy hosts with metric hostnames."""
-    users = db.query(User).filter(User.group_id == group_id).all()
-    user_ids = [user.id for user in users]
-    linked_legacy_ids = linked_legacy_ids_for_users(db, user_ids)
-    machines = (
-        db.query(Machine).filter(Machine.linked_user_id.in_(user_ids)).all()
-        if user_ids
-        else []
+    return visible_group_members(db, group_id)
+
+
+@router.get("/top-contributors")
+def get_top_contributors(
+    metric: Literal["writes", "reads", "total"] = "total",
+    period: Literal["24h", "7d", "30d", "all"] = "7d",
+    group_id: Optional[UUID] = None,
+    project: Optional[str] = None,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Top contributors ranked by write/read activity."""
+    if group_id is not None:
+        _get_group_or_404(db, group_id)
+    payload = top_contributors(
+        db,
+        metric=metric,
+        period=period,
+        group_id=group_id,
+        project=project.strip() if project else None,
+        limit=limit,
     )
-    machine_by_person = {
-        machine.linked_user_id: machine.hostname
-        for machine in machines
-        if machine.linked_user_id is not None
-    }
-    visible = [
-        (user, machine_by_person.get(user.id, user.user_id))
-        for user in users
-        if user.id not in linked_legacy_ids
-    ]
-    return sorted(visible, key=lambda item: item[1].lower())
+    return TopContributorsResponse(**payload).model_dump(mode="json")
 
 
 @router.get("/groups")
@@ -278,9 +305,9 @@ def delete_legacy_user(
 @router.get("/overview")
 def analytics_overview(db: Session = Depends(get_db)) -> dict:
     """Global summary for the dashboard header."""
-    total_users = db.query(func.count(User.id)).scalar() or 0
     total_groups = db.query(func.count(Group.id)).scalar() or 0
     groups = db.query(Group).all()
+    total_users = 0
     active_users_7d = 0
     writes_total = 0
     writes_24h = 0
@@ -290,6 +317,7 @@ def analytics_overview(db: Session = Depends(get_db)) -> dict:
     reads_7d = 0
     for group in groups:
         stats = group_activity_stats(db, group.id)
+        total_users += stats["member_count"]
         writes_total += stats["writes_total"]
         writes_24h += stats["writes_24h"]
         writes_7d += stats["writes_7d"]

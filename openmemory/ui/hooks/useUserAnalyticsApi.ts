@@ -3,8 +3,10 @@ import axios from "axios";
 import { getApiUrl } from "@/lib/api-url";
 import type {
   AnalyticsOverview,
+  ContributorFilters,
   GroupAnalytics,
   GroupAnalyticsDetail,
+  TopContributorsResponse,
   UserAnalyticsDetail,
 } from "@/types/admin";
 
@@ -50,12 +52,32 @@ export const useUserAnalyticsApi = () => {
     );
   }, []);
 
+  const fetchTopContributors = useCallback(
+    async (filters: ContributorFilters): Promise<TopContributorsResponse> => {
+      const res = await axios.get<TopContributorsResponse>(
+        `${getApiUrl()}/admin/analytics/top-contributors`,
+        {
+          params: {
+            metric: filters.metric,
+            period: filters.period,
+            group_id: filters.groupId || undefined,
+            project: filters.project || undefined,
+            limit: 10,
+          },
+        },
+      );
+      return res.data;
+    },
+    [],
+  );
+
   return {
     fetchOverview,
     fetchGroupsAnalytics,
     fetchGroupAnalytics,
     fetchUserAnalytics,
     deleteLegacyUser,
+    fetchTopContributors,
   };
 };
 

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Optional
+import os
+from typing import Literal, Optional
 from uuid import UUID
 
 from app.models import (
+    DEFAULT_GROUP_NAME,
+    Group,
     Machine,
     User,
     WriteAuditLog,
@@ -15,12 +18,16 @@ from app.models import (
 )
 from app.read_audit_log_model import ReadAuditLog
 from app.utils.datetime_utc import as_utc_naive
+from app.utils.identity import DEFAULT_HOSTNAME
+from app.utils.legacy_user_deletion import protected_user_ids
 from app.utils.machine_resolver import legacy_hostname_variants, linked_legacy_ids_for_users
 from app.utils.read_audit import read_audit_hostname_variants
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 UsageLevel = str  # online | offline
+ContributorMetric = Literal["writes", "reads", "total"]
+ContributorPeriod = Literal["24h", "7d", "30d", "all"]
 
 PREVIEW_MAX_LEN = 160
 
@@ -47,6 +54,85 @@ def _since(hours: Optional[int] = None, days: Optional[int] = None) -> Optional[
     return now - timedelta(days=days)
 
 
+def _period_since(period: ContributorPeriod) -> Optional[datetime]:
+    if period == "24h":
+        return _since(hours=24)
+    if period == "7d":
+        return _since(days=7)
+    if period == "30d":
+        return _since(days=30)
+    return None
+
+
+def is_system_contributor(hostname: str) -> bool:
+    """True para contas de serviço (UI, fallback, usuários protegidos)."""
+    key = (hostname or "").strip().lower()
+    if not key:
+        return True
+    if key in {"unknown", DEFAULT_HOSTNAME.lower()}:
+        return True
+    blocked = {value.lower() for value in protected_user_ids()}
+    blocked.add(os.getenv("OPENMEMORY_UI_USER_ID", "openmemory").strip().lower())
+    return key in blocked
+
+
+def _is_default_group(group: Group | None) -> bool:
+    return group is not None and group.name.lower() == DEFAULT_GROUP_NAME.lower()
+
+
+def is_real_contributor(user: User, hostname: str) -> bool:
+    """Membros reais: fora do grupo Default e fora das contas de sistema."""
+    if is_system_contributor(hostname):
+        return False
+    return not _is_default_group(user.group)
+
+
+def visible_group_members(db: Session, group_id: UUID) -> list[tuple[User, str]]:
+    """Return person accounts and unpaired legacy hosts with metric hostnames."""
+    users = db.query(User).filter(User.group_id == group_id).all()
+    user_ids = [user.id for user in users]
+    linked_legacy_ids = linked_legacy_ids_for_users(db, user_ids)
+    machines = (
+        db.query(Machine).filter(Machine.linked_user_id.in_(user_ids)).all()
+        if user_ids
+        else []
+    )
+    machine_by_person = {
+        machine.linked_user_id: machine.hostname
+        for machine in machines
+        if machine.linked_user_id is not None
+    }
+    visible = [
+        (user, machine_by_person.get(user.id, user.user_id))
+        for user in users
+        if user.id not in linked_legacy_ids
+    ]
+    return sorted(visible, key=lambda item: item[1].lower())
+
+
+def all_visible_members(
+    db: Session,
+    *,
+    group_id: Optional[UUID] = None,
+    real_users_only: bool = False,
+) -> list[tuple[User, str]]:
+    """Visible members across all groups, or restricted to one group."""
+    if group_id is not None:
+        members = visible_group_members(db, group_id)
+    else:
+        members = []
+        groups = db.query(Group).order_by(Group.name).all()
+        for group in groups:
+            members.extend(visible_group_members(db, group.id))
+    if real_users_only:
+        members = [
+            (user, hostname)
+            for user, hostname in members
+            if is_real_contributor(user, hostname)
+        ]
+    return members
+
+
 def _audit_variants_for_hosts(db: Session, hostnames: list[str]) -> tuple[list[str], dict[str, str]]:
     """Expande hostnames para variantes de auditoria e mapeia de volta ao membro canônico."""
     all_variants: list[str] = []
@@ -66,6 +152,7 @@ def _write_stats_for_hostnames(
     hostnames: list[str],
     *,
     since: Optional[datetime] = None,
+    project: Optional[str] = None,
 ) -> dict[str, dict]:
     if not hostnames:
         return {}
@@ -80,6 +167,8 @@ def _write_stats_for_hostnames(
     ).filter(WriteAuditLog.hostname.in_(all_variants))
     if since is not None:
         q = q.filter(WriteAuditLog.created_at >= since)
+    if project is not None:
+        q = q.filter(WriteAuditLog.project == project)
     rows = q.group_by(WriteAuditLog.hostname).all()
 
     result: dict[str, dict] = {
@@ -102,10 +191,12 @@ def _write_stats_for_hostnames(
     )
     if since is not None:
         project_rows = project_rows.filter(WriteAuditLog.created_at >= since)
-    for hostname, project in project_rows:
+    if project is not None:
+        project_rows = project_rows.filter(WriteAuditLog.project == project)
+    for hostname, proj in project_rows:
         member = variant_to_member.get(hostname, hostname)
-        if member in project_sets and project:
-            project_sets[member].add(project)
+        if member in project_sets and proj:
+            project_sets[member].add(proj)
 
     for host in hostnames:
         result[host]["projects"] = len(project_sets[host])
@@ -117,6 +208,7 @@ def _read_stats_for_hostnames(
     hostnames: list[str],
     *,
     since: Optional[datetime] = None,
+    project: Optional[str] = None,
 ) -> dict[str, dict]:
     if not hostnames:
         return {}
@@ -139,6 +231,8 @@ def _read_stats_for_hostnames(
     ).filter(ReadAuditLog.hostname.in_(all_variants))
     if since is not None:
         q = q.filter(ReadAuditLog.accessed_at >= since)
+    if project is not None:
+        q = q.filter(ReadAuditLog.project == project)
     rows = q.group_by(canonical).all()
 
     result: dict[str, dict] = {
@@ -370,3 +464,100 @@ def recent_user_reads(db: Session, hostname: str, *, limit: int = 20) -> list[di
             }
         )
     return items
+
+
+def top_contributors(
+    db: Session,
+    *,
+    metric: ContributorMetric = "total",
+    period: ContributorPeriod = "7d",
+    group_id: Optional[UUID] = None,
+    project: Optional[str] = None,
+    limit: int = 10,
+) -> dict:
+    """Rank visible members by write/read activity."""
+    from app.utils.creator_identity import (
+        identity_for_hostname,
+        resolve_creator_identities_with_db,
+    )
+
+    capped_limit = max(1, min(limit, 50))
+    since = _period_since(period)
+    members = all_visible_members(db, group_id=group_id, real_users_only=True)
+    if not members:
+        return {
+            "metric": metric,
+            "period": period,
+            "project": project,
+            "group_id": str(group_id) if group_id else None,
+            "items": [],
+        }
+
+    hostnames = [hostname for _, hostname in members]
+    member_by_hostname = {hostname: user for user, hostname in members}
+
+    writes = _write_stats_for_hostnames(db, hostnames, since=since, project=project)
+    reads = _read_stats_for_hostnames(db, hostnames, since=since, project=project)
+
+    ranked: list[dict] = []
+    for hostname in hostnames:
+        write_count = writes.get(hostname, {}).get("total", 0)
+        read_count = reads.get(hostname, {}).get("total", 0)
+        if metric == "writes":
+            value = write_count
+        elif metric == "reads":
+            value = read_count
+        else:
+            value = write_count + read_count
+        if value <= 0:
+            continue
+        write_projects = writes.get(hostname, {}).get("projects", 0)
+        read_projects = reads.get(hostname, {}).get("projects", 0)
+        distinct_projects = 1 if project else max(write_projects, read_projects)
+        ranked.append(
+            {
+                "user_id": hostname,
+                "value": value,
+                "writes": write_count,
+                "reads": read_count,
+                "distinct_projects": distinct_projects,
+                "member": member_by_hostname[hostname],
+            }
+        )
+
+    ranked.sort(key=lambda item: (-item["value"], -item["writes"], item["user_id"].lower()))
+    top = ranked[:capped_limit]
+
+    identities = resolve_creator_identities_with_db(db, [item["user_id"] for item in top])
+    items: list[dict] = []
+    for index, entry in enumerate(top, start=1):
+        user = entry["member"]
+        hostname = entry["user_id"]
+        identity = identity_for_hostname(hostname, identities)
+        group_name = user.group.name if user.group else None
+        items.append(
+            {
+                "rank": index,
+                "user_id": hostname,
+                "display_name": (
+                    identity.display_name
+                    if identity
+                    else user.display_name or user.name or user.email or hostname
+                ),
+                "avatar_url": identity.avatar_url if identity else user.avatar_url,
+                "group_id": str(user.group_id) if user.group_id else None,
+                "group_name": group_name,
+                "value": entry["value"],
+                "writes": entry["writes"],
+                "reads": entry["reads"],
+                "distinct_projects": entry["distinct_projects"],
+            }
+        )
+
+    return {
+        "metric": metric,
+        "period": period,
+        "project": project,
+        "group_id": str(group_id) if group_id else None,
+        "items": items,
+    }

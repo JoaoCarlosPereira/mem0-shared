@@ -16,6 +16,7 @@ import queuesReducer, { setFailedJobIds } from "@/store/queuesSlice";
 import profileReducer from "@/store/profileSlice";
 import OverviewPage from "@/app/admin/overview/page";
 import { StatCard } from "@/components/admin/StatCard";
+import { ActivityMetricsCell } from "@/components/admin/ActivityMetricsCell";
 import { useAdminApi } from "@/hooks/useAdminApi";
 import type { AdminOverview } from "@/types/admin";
 
@@ -132,5 +133,18 @@ describe("StatCard", () => {
     render(<StatCard title="Meu Card" value={42} />);
     expect(screen.getByText("Meu Card")).toBeInTheDocument();
     expect(screen.getByText("42")).toBeInTheDocument();
+  });
+
+  it("renderiza ReactNode como value (ex.: ActivityMetricsCell)", () => {
+    render(
+      <StatCard
+        title="Escritas"
+        value={<ActivityMetricsCell h24={9} d7={62} total={140} />}
+      />,
+    );
+    expect(screen.getByText("9")).toBeInTheDocument();
+    expect(screen.getByText("62")).toBeInTheDocument();
+    expect(screen.getByText("140")).toBeInTheDocument();
+    expect(screen.queryByText("—")).not.toBeInTheDocument();
   });
 });

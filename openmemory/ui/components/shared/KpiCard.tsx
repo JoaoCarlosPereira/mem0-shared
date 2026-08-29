@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -14,7 +15,7 @@ const ACCENT_STYLES: Record<KpiAccent, { border: string; bar: string; icon: stri
 
 interface KpiCardProps {
   label: string;
-  value: string | number;
+  value: string | number | ReactNode;
   icon?: LucideIcon;
   accent?: KpiAccent;
   progress?: number;

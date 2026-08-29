@@ -41,6 +41,11 @@ def _protected_user_ids() -> frozenset[str]:
     return _PROTECTED_USER_IDS
 
 
+def protected_user_ids() -> frozenset[str]:
+    """Hostnames de contas de serviço que não entram em rankings de contribuição."""
+    return _protected_user_ids()
+
+
 def purge_legacy_host_user(db: Session, hostname: str) -> dict:
     """Remove usuário legado e catálogo SQL; memórias no Qdrant não são alteradas."""
     hostname = (hostname or "").strip()

@@ -362,6 +362,320 @@ def test_analytics_overview(factory, client):
     assert body["reads_7d"] >= 1
 
 
+def test_analytics_overview_counts_visible_members_not_linked_legacy(factory, client):
+    """Overview total must match sum of group member_count (person + legacy = 1)."""
+    import uuid as _uuid
+
+    group_id, hostname = _seed_group_and_user(factory, hostname="S0293")
+    s = factory()
+    try:
+        person = User(
+            user_id="google-sub-1",
+            google_sub="google-sub-1",
+            display_name="João Silva",
+            user_type=USER_TYPE_PERSON,
+            group_id=_uuid.UUID(group_id),
+        )
+        legacy = s.query(User).filter(User.user_id == hostname).one()
+        s.add(person)
+        s.flush()
+        s.add(
+            Machine(
+                hostname=hostname,
+                linked_user_id=person.id,
+                legacy_user_id=legacy.id,
+                status=MachineStatus.linked,
+            )
+        )
+        s.commit()
+    finally:
+        s.close()
+
+    overview = client.get("/admin/analytics/overview").json()
+    groups = client.get("/admin/analytics/groups").json()["groups"]
+    member_sum = sum(group["member_count"] for group in groups)
+
+    assert overview["total_users"] == 1
+    assert member_sum == 1
+
+
+def test_top_contributors_empty(client):
+    r = client.get("/admin/analytics/top-contributors")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["metric"] == "total"
+    assert body["period"] == "7d"
+    assert body["items"] == []
+
+
+def _seed_multi_user_audit(factory):
+    s = factory()
+    try:
+        default = Group(name=DEFAULT_GROUP_NAME)
+        team = Group(name="Dev")
+        s.add_all([default, team])
+        s.flush()
+        alice = User(user_id="alice-pc", group_id=team.id)
+        bob = User(user_id="bob-pc", group_id=team.id)
+        s.add_all([alice, bob])
+        s.commit()
+        group_id = str(team.id)
+    finally:
+        s.close()
+
+    now = datetime.now(timezone.utc)
+    s = factory()
+    try:
+        for i in range(3):
+            s.add(
+                WriteAuditLog(
+                    project="proj-a",
+                    hostname="alice-pc",
+                    client_name="cursor",
+                    action="enqueue",
+                    created_at=now - timedelta(hours=i),
+                )
+            )
+        s.add(
+            WriteAuditLog(
+                project="proj-b",
+                hostname="bob-pc",
+                client_name="cursor",
+                action="enqueue",
+                created_at=now - timedelta(hours=1),
+            )
+        )
+        s.add(
+            ReadAuditLog(
+                project="proj-a",
+                memory_id="mem-1",
+                access_type="search",
+                source="mcp",
+                hostname="bob-pc",
+                client_name="cursor",
+                accessed_at=now - timedelta(hours=1),
+            )
+        )
+        s.add(
+            ReadAuditLog(
+                project="proj-a",
+                memory_id="mem-ui-1",
+                access_type="search",
+                source="api",
+                hostname="ui:alice-pc",
+                client_name="openmemory",
+                accessed_at=now,
+            )
+        )
+        s.commit()
+    finally:
+        s.close()
+    return group_id
+
+
+def test_top_contributors_ranks_by_total(factory, client):
+    group_id = _seed_multi_user_audit(factory)
+    r = client.get("/admin/analytics/top-contributors?metric=total&period=all")
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert len(items) == 2
+    assert items[0]["user_id"] == "alice-pc"
+    assert items[0]["rank"] == 1
+    assert items[0]["writes"] == 3
+    assert items[0]["reads"] == 1
+    assert items[0]["value"] == 4
+    assert items[1]["user_id"] == "bob-pc"
+    assert items[1]["value"] == 2
+
+
+def test_top_contributors_metric_writes(factory, client):
+    _seed_multi_user_audit(factory)
+    r = client.get("/admin/analytics/top-contributors?metric=writes&period=all")
+    items = r.json()["items"]
+    assert items[0]["user_id"] == "alice-pc"
+    assert items[0]["value"] == 3
+    assert items[1]["user_id"] == "bob-pc"
+    assert items[1]["value"] == 1
+
+
+def test_top_contributors_metric_reads(factory, client):
+    _seed_multi_user_audit(factory)
+    r = client.get("/admin/analytics/top-contributors?metric=reads&period=all")
+    items = r.json()["items"]
+    assert len(items) == 2
+    assert {item["user_id"] for item in items} == {"alice-pc", "bob-pc"}
+    assert all(item["value"] == 1 for item in items)
+
+
+def test_top_contributors_filters_by_project(factory, client):
+    _seed_multi_user_audit(factory)
+    r = client.get(
+        "/admin/analytics/top-contributors?metric=writes&period=all&project=proj-b"
+    )
+    items = r.json()["items"]
+    assert len(items) == 1
+    assert items[0]["user_id"] == "bob-pc"
+    assert items[0]["writes"] == 1
+
+
+def test_top_contributors_filters_by_group(factory, client):
+    group_id = _seed_multi_user_audit(factory)
+    r = client.get(f"/admin/analytics/top-contributors?period=all&group_id={group_id}")
+    assert r.status_code == 200
+    assert len(r.json()["items"]) == 2
+
+
+def test_top_contributors_unknown_group_404(factory, client):
+    import uuid as _uuid
+
+    r = client.get(f"/admin/analytics/top-contributors?group_id={_uuid.uuid4()}")
+    assert r.status_code == 404
+
+
+def test_top_contributors_excludes_system_users(factory, client):
+    _seed_multi_user_audit(factory)
+    s = factory()
+    try:
+        default = s.query(Group).filter(Group.name == DEFAULT_GROUP_NAME).one()
+        s.add_all(
+            [
+                User(user_id="unknown-host", group_id=default.id),
+                User(user_id="openmemory", group_id=default.id),
+            ]
+        )
+        now = datetime.now(timezone.utc)
+        for _ in range(50):
+            s.add(
+                WriteAuditLog(
+                    project="proj-a",
+                    hostname="unknown-host",
+                    client_name="cursor",
+                    action="enqueue",
+                    created_at=now,
+                )
+            )
+        for _ in range(40):
+            s.add(
+                WriteAuditLog(
+                    project="proj-a",
+                    hostname="openmemory",
+                    client_name="openmemory-ui",
+                    action="enqueue",
+                    created_at=now,
+                )
+            )
+        s.commit()
+    finally:
+        s.close()
+
+    items = client.get("/admin/analytics/top-contributors?metric=writes&period=all").json()["items"]
+    user_ids = [item["user_id"] for item in items]
+    assert "unknown-host" not in user_ids
+    assert "openmemory" not in user_ids
+    assert "alice-pc" in user_ids
+
+
+def test_top_contributors_excludes_default_group(factory, client):
+    s = factory()
+    try:
+        default = Group(name=DEFAULT_GROUP_NAME)
+        team = Group(name="Dev")
+        s.add_all([default, team])
+        s.flush()
+        s.add(User(user_id="mini-pc", group_id=default.id))
+        s.add(User(user_id="team-user", group_id=team.id))
+        s.commit()
+        team_id = str(team.id)
+        default_id = str(default.id)
+    finally:
+        s.close()
+
+    now = datetime.now(timezone.utc)
+    s = factory()
+    try:
+        for _ in range(20):
+            s.add(
+                WriteAuditLog(
+                    project="proj-a",
+                    hostname="mini-pc",
+                    client_name="cursor",
+                    action="enqueue",
+                    created_at=now,
+                )
+            )
+        s.add(
+            WriteAuditLog(
+                project="proj-a",
+                hostname="team-user",
+                client_name="cursor",
+                action="enqueue",
+                created_at=now,
+            )
+        )
+        s.commit()
+    finally:
+        s.close()
+
+    all_items = client.get("/admin/analytics/top-contributors?metric=writes&period=all").json()["items"]
+    assert [item["user_id"] for item in all_items] == ["team-user"]
+
+    default_items = client.get(
+        f"/admin/analytics/top-contributors?metric=writes&period=all&group_id={default_id}"
+    ).json()["items"]
+    assert default_items == []
+
+    team_items = client.get(
+        f"/admin/analytics/top-contributors?metric=writes&period=all&group_id={team_id}"
+    ).json()["items"]
+    assert team_items[0]["user_id"] == "team-user"
+
+
+def test_top_contributors_dedupes_linked_legacy(factory, client):
+    import uuid as _uuid
+
+    group_id, hostname = _seed_group_and_user(factory, hostname="S0293")
+    s = factory()
+    try:
+        person = User(
+            user_id="google-sub-1",
+            google_sub="google-sub-1",
+            display_name="João Silva",
+            user_type=USER_TYPE_PERSON,
+            group_id=_uuid.UUID(group_id),
+        )
+        legacy = s.query(User).filter(User.user_id == hostname).one()
+        s.add(person)
+        s.flush()
+        s.add(
+            Machine(
+                hostname=hostname,
+                linked_user_id=person.id,
+                legacy_user_id=legacy.id,
+                status=MachineStatus.linked,
+            )
+        )
+        now = datetime.now(timezone.utc)
+        s.add(
+            WriteAuditLog(
+                project="proj-a",
+                hostname=hostname,
+                client_name="cursor",
+                action="enqueue",
+                created_at=now,
+            )
+        )
+        s.commit()
+    finally:
+        s.close()
+
+    r = client.get("/admin/analytics/top-contributors?metric=writes&period=all")
+    items = r.json()["items"]
+    assert len(items) == 1
+    assert items[0]["user_id"] == hostname
+    assert items[0]["display_name"] == "João Silva"
+    assert items[0]["writes"] == 1
+
+
 def _delete_legacy_user(client, hostname: str, confirm: str):
     return client.request(
         "DELETE",

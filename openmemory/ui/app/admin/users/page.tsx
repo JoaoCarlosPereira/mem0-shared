@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { UserCircle2 } from "lucide-react";
 import { PageHeader } from "@/components/shared/PageHeader";
+import { UsersSubNav } from "@/components/admin/UsersSubNav";
 import { StatCard } from "@/components/admin/StatCard";
 import {
   ACTIVITY_METRICS_HINT,
@@ -61,6 +62,8 @@ export default function UsersDashboardPage() {
         title="Usuários"
         description="Visão centralizada de grupos, membros e uso da memória compartilhada"
       />
+
+      <UsersSubNav />
 
       {error && (
         <div
