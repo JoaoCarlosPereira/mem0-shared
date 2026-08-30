@@ -470,11 +470,41 @@ def _get_workspace_or_404(db: Session, workspace_id: UUID) -> SpecWorkspace:
 
 
 def _assert_access(db: Session, workspace_id: UUID) -> None:
-    """Nega (403) se o sujeito autenticado tem regras mas nenhuma inclui este workspace.
+    """Valida regras ACL do usuário e garante o isolamento por grupo do workspace.
 
-    O sujeito vem do contexto de auth (``auth_user_var``), nunca de query params.
+    O workspace deve pertencer ao mesmo grupo do ator autenticado.
+    Se o workspace não tiver grupo, o acesso falha fechado (invisível para todos).
     """
+    ws = db.query(SpecWorkspace.group_id).filter(SpecWorkspace.id == workspace_id).first()
+    if ws is None:
+        raise HTTPException(status_code=404, detail="Workspace não encontrado")
+    
     subject_type, subject_id = resolve_spec_subject()
+    actor_group_id = None
+    
+    if subject_id:
+        from app.models import User
+        user = db.query(User.group_id).filter(User.id == subject_id).first()
+        if user:
+            actor_group_id = user[0]
+            
+    if not actor_group_id and subject_type == "user" and not subject_id:
+        # Fallback para agent tokens legados na MCP (onde actor = hostname do payload)
+        # O MCP pode usar um "actor" derivado
+        actor = resolve_spec_actor()
+        if actor:
+            from app.utils.machine_resolver import find_legacy_host_user
+            u = find_legacy_host_user(db, actor)
+            if u and u.group_id:
+                actor_group_id = u.group_id
+
+    if ws[0] is None or not actor_group_id:
+        raise HTTPException(status_code=403, detail="Workspace sem grupo ou usuário sem grupo")
+    
+    if ws[0] != actor_group_id:
+        raise HTTPException(status_code=403, detail="Sem permissão para o grupo deste workspace")
+
+    # 2. ACL baseada em objeto
     accessible = get_accessible_spec_workspace_ids(db, subject_type, subject_id)
     if accessible is not None and workspace_id not in accessible:
         raise HTTPException(status_code=403, detail="Sem permissão para este workspace")
@@ -633,6 +663,7 @@ def get_or_create_workspace(
     name: str,
     created_by: Optional[str] = None,
     status: Optional[SpecWorkspaceStatus] = None,
+    group_id: Optional[UUID] = None,
 ) -> tuple[SpecWorkspace, bool]:
     """Cria ou retorna o workspace de ``(project_id, slug)`` — idempotente.
 
@@ -655,6 +686,7 @@ def get_or_create_workspace(
         name=name,
         status=status or SpecWorkspaceStatus.planejamento,
         created_by=created_by,
+        group_id=group_id,
     )
     db.add(ws)
     try:
@@ -746,13 +778,31 @@ def create_workspace(
     db: Session = Depends(get_db),
 ) -> WorkspaceResponse:
     """Cria um workspace. Idempotente por ``(project_id, slug)``."""
+    actor = resolve_spec_actor(body_actor=payload.created_by)
+    subject_type, subject_id = resolve_spec_subject()
+    group_id = None
+    
+    if subject_id:
+        from app.models import User
+        user = db.query(User.group_id).filter(User.id == subject_id).first()
+        if user:
+            group_id = user[0]
+            
+    if not group_id and subject_type == "user" and not subject_id:
+        if actor:
+            from app.utils.machine_resolver import find_legacy_host_user
+            u = find_legacy_host_user(db, actor)
+            if u and u.group_id:
+                group_id = u.group_id
+
     ws, created = get_or_create_workspace(
         db,
         project_id=payload.project_id,
         slug=payload.slug,
         name=payload.name,
-        created_by=resolve_spec_actor(body_actor=payload.created_by),
+        created_by=actor,
         status=payload.status,
+        group_id=group_id,
     )
     response.status_code = 201 if created else 200
     from app.utils.planka_hooks import mirror_ensure_workspace
@@ -834,15 +884,60 @@ def _build_summaries(
     ]
 
 
+def _actor_group_id(db: Session) -> Optional[UUID]:
+    """Resolve o grupo do ator autenticado (fail-closed).
+
+    Ordem: subject da sessão (``auth_user_var``) → fallback para hostname
+    legado/agent (``resolve_spec_actor`` + ``find_legacy_host_user``). Retorna
+    ``None`` quando não há grupo resolvido (o chamador bloqueia o acesso).
+    """
+    subject_type, subject_id = resolve_spec_subject()
+    if subject_id:
+        from app.models import User
+
+        user = db.query(User.group_id).filter(User.id == subject_id).first()
+        if user:
+            return user[0]
+    actor = resolve_spec_actor()
+    if actor:
+        from app.utils.machine_resolver import find_legacy_host_user
+
+        u = find_legacy_host_user(db, actor)
+        if u and u.group_id:
+            return u.group_id
+    return None
+
+
+def accessible_workspace_ids_by_group(db: Session) -> Optional[set]:
+    """IDs de ``SpecWorkspace`` visíveis ao ator: interseção grupo ∩ ACL.
+
+    Fail-closed: ator sem grupo resolvido → ``set()`` (nada visível). A restrição
+    por grupo é a fonte da verdade do isolamento (kanban-board-group-isolation);
+    a ACL por usuário (``get_accessible_spec_workspace_ids``) refina quando há
+    regras (``None`` = aberto).
+    """
+    group_id = _actor_group_id(db)
+    if group_id is None:
+        return set()
+    visible = {
+        ws_id
+        for (ws_id,) in db.query(SpecWorkspace.id).filter(SpecWorkspace.group_id == group_id)
+    }
+    subject_type, subject_id = resolve_spec_subject()
+    accessible = get_accessible_spec_workspace_ids(db, subject_type, subject_id)
+    if accessible is not None:
+        visible &= accessible
+    return visible
+
+
 def _filter_accessible(
     db: Session,
     workspaces: list[SpecWorkspace],
 ) -> list[SpecWorkspace]:
-    subject_type, subject_id = resolve_spec_subject()
-    accessible = get_accessible_spec_workspace_ids(db, subject_type, subject_id)
-    if accessible is None:
-        return workspaces
-    return [w for w in workspaces if w.id in accessible]
+    allowed = accessible_workspace_ids_by_group(db)
+    if allowed is None:
+        return []
+    return [w for w in workspaces if w.id in allowed]
 
 
 @router.get("/workspaces", response_model=list[WorkspaceSummaryResponse])
@@ -981,6 +1076,11 @@ def _issue_kanban_access_token(db: Session) -> str:
     from app.models import User as AppUser
     from app.utils.logging_context import auth_email_var, auth_user_var
 
+    # Fail-closed (kanban-board-group-isolation): sem grupo resolvido não emite
+    # token de embed, mesmo antes de construir o JWT.
+    if _actor_group_id(db) is None:
+        raise HTTPException(status_code=403, detail="Usuário sem grupo associado")
+
     actor = resolve_spec_actor() or "ui-user"
     email = (auth_email_var.get() or "").strip()
     name = ""
@@ -1060,6 +1160,23 @@ def get_kanban_board(board_id: str, db: Session = Depends(get_db)) -> KanbanBoar
     """Deep-link de um quadro Kanban (URL compartilhável /docs/boards/:id)."""
     if not _kanban_board_id_ok(board_id):
         raise HTTPException(status_code=400, detail="board_id inválido")
+        
+    from app.models import SpecPlankaIdMap
+    from app.utils.planka import ENTITY_BOARD
+    
+    row = (
+        db.query(SpecPlankaIdMap)
+        .filter(
+            SpecPlankaIdMap.entity_type == ENTITY_BOARD,
+            SpecPlankaIdMap.planka_id == board_id,
+        )
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Quadro Kanban não mapeado")
+        
+    _assert_access(db, row.spec_id)
+        
     return KanbanBoardResponse(
         board_id=board_id,
         embed_url=f"{_kanban_public_base()}/boards/{board_id}",
@@ -1883,12 +2000,16 @@ def search_specs_endpoint(
     Por padrão só specs concluídas, como antes; ``status`` permite alcançar
     trabalho em andamento.
     """
-    subject_type, subject_id = resolve_spec_subject()
-    accessible = get_accessible_spec_workspace_ids(db, subject_type, subject_id)
+    # Isolamento por grupo (fail-closed): só specs de workspaces do grupo do
+    # ator, refinadas pela ACL quando houver regras.
+    valid_ws_ids = accessible_workspace_ids_by_group(db)
+    if not valid_ws_ids:
+        return []
+
     return search_specs(
         q,
         project_id=project_id,
         requester_group=group,
-        accessible_workspace_ids=accessible,
+        accessible_workspace_ids=valid_ws_ids,
         statuses=status,
     )

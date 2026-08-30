@@ -50,6 +50,30 @@ def factory():
 @pytest.fixture(autouse=True)
 def _wire(factory, monkeypatch):
     monkeypatch.setattr(mcp_server, "SessionLocal", factory)
+    
+    from app.utils.logging_context import auth_method_var, machine_var
+    auth_method_var.set("legacy")
+    machine_var.set("DESKTOP-01")
+
+    # Manually provision the user in the factory
+    s = factory()
+    try:
+        from app.models import DEFAULT_GROUP_NAME, Group, User
+        g = s.query(Group).filter(Group.name == DEFAULT_GROUP_NAME).first()
+        if not g:
+            g = Group(name=DEFAULT_GROUP_NAME)
+            s.add(g)
+            s.flush()
+        u = s.query(User).filter(User.user_id == "DESKTOP-01").first()
+        if not u:
+            import uuid
+            s.add(User(id=uuid.uuid4(), user_id="DESKTOP-01", group_id=g.id, user_type="legacy_host"))
+        s.commit()
+    finally:
+        s.close()
+
+    from app.utils.groups import ensure_user_group
+    ensure_user_group("DESKTOP-01", "Default")
     mcp_server.user_id_var.set("DESKTOP-01")
     mcp_server.client_name_var.set("cursor")
     yield

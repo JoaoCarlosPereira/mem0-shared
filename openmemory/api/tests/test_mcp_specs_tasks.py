@@ -43,6 +43,28 @@ def factory():
 @pytest.fixture(autouse=True)
 def _wire(factory, monkeypatch):
     monkeypatch.setattr(mcp_server, "SessionLocal", factory)
+    
+    from app.utils.logging_context import auth_method_var, machine_var
+    auth_method_var.set("legacy")
+    machine_var.set("DESKTOP-01")
+
+    # Manually provision the user in the factory
+    s = factory()
+    try:
+        from app.models import DEFAULT_GROUP_NAME, Group, User
+        g = s.query(Group).filter(Group.name == DEFAULT_GROUP_NAME).first()
+        if not g:
+            g = Group(name=DEFAULT_GROUP_NAME)
+            s.add(g)
+            s.flush()
+        u = s.query(User).filter(User.user_id == "DESKTOP-01").first()
+        if not u:
+            import uuid
+            s.add(User(id=uuid.uuid4(), user_id="DESKTOP-01", group_id=g.id, user_type="legacy_host"))
+        s.commit()
+    finally:
+        s.close()
+
     mcp_server.user_id_var.set("DESKTOP-01")
     mcp_server.client_name_var.set("cursor")
     mcp_server.auth_method_var.set("legacy")
@@ -163,11 +185,23 @@ class TestComments:
         assert out["author"] == "DESKTOP-01"
 
     @pytest.mark.asyncio
-    async def test_add_comment_com_agent_token_preserva_pessoa_autenticada(self):
+    async def test_add_comment_com_agent_token_preserva_pessoa_autenticada(self, factory):
         _, task = await _mk_ws_and_task()
-        person_id = str(uuid.uuid4())
+        # Cria um usuário real no Default group (necessário para o isolamento por grupo).
+        s = factory()
+        try:
+            from app.models import DEFAULT_GROUP_NAME, Group, User
+            g = s.query(Group).filter(Group.name == DEFAULT_GROUP_NAME).first()
+            person = User(id=uuid.uuid4(), user_id="agent-person", group_id=g.id, user_type="person")
+            s.add(person)
+            s.commit()
+            person_id = str(person.id)
+        finally:
+            s.close()
+        # Sem máquina vinculada: o autor deve ser a pessoa autenticada, não o host.
         mcp_server.auth_method_var.set("agent_token")
         mcp_server.auth_user_var.set(person_id)
+        mcp_server.machine_var.set("")
 
         out = json.loads(await add_spec_comment("task", task["id"], "comentário"))
 

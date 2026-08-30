@@ -707,10 +707,15 @@ class SpecWorkspace(Base):
     completed_at = Column(DateTime, nullable=True)
     archived_at = Column(DateTime, nullable=True)
     archived_by = Column(String, nullable=True)
+    # Grupo dono do workspace (isolation por grupo, kanban-board-group-isolation).
+    # Gravado na criação a partir do grupo do criador e imutável depois.
+    # NULL = sem grupo resolvido: fail-closed, invisível para todos, nunca Default.
+    group_id = Column(UUID, ForeignKey("groups.id"), nullable=True, index=True)
 
     project = relationship("Project")
     documents = relationship("SpecDocument", back_populates="workspace")
     tasks = relationship("TaskCard", back_populates="workspace")
+    group = relationship("Group")
 
     __table_args__ = (
         sa.UniqueConstraint("project_id", "slug", name="uq_spec_workspace_project_slug"),

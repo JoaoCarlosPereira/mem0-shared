@@ -984,12 +984,16 @@ async def create_spec_workspace(project_id: str, slug: str, name: str) -> str:
     try:
         def _sync_op():
             from app.routers.specs import WorkspaceResponse, get_or_create_workspace
-        
+
             hostname = resolve_hostname(user_id_var.get(None))
             db = SessionLocal()
             try:
+                from app.utils.machine_resolver import find_legacy_host_user
+                u = find_legacy_host_user(db, hostname) if hostname else None
+                group_id = u.group_id if u else None
                 ws, created = get_or_create_workspace(
-                    db, project_id=project_id, slug=slug, name=name, created_by=hostname
+                    db, project_id=project_id, slug=slug, name=name,
+                    created_by=hostname, group_id=group_id
                 )
                 out = WorkspaceResponse.model_validate(ws).model_dump(mode="json")
                 out["created"] = created
@@ -1188,7 +1192,7 @@ async def search_specs(
             from app.utils.permissions import get_accessible_spec_workspace_ids
             from app.utils.spec_auth import resolve_spec_subject
             from app.utils.spec_search import search_specs as _search_specs
-        
+
             requester_group = requester_group_for_mcp(user_id_var.get(None))
             subject_type, subject_id = resolve_spec_subject()
             db = SessionLocal()

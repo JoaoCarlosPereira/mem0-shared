@@ -1,0 +1,6 @@
+{
+  "files": ["openmemory/ui/app/layout.tsx"],
+  "insertBefore": "</body>",
+  "commentSyntax": "jsx",
+  "cspChecked": true
+}

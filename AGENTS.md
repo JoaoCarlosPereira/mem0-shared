@@ -668,3 +668,12 @@ N/A
 - Mix up linter configs: root Python SDK uses line-length 120, Python CLI uses 100, Node CLI uses Biome (not ESLint/Ruff).
 - Modify `openmemory/` database migrations without understanding the Alembic migration chain.
 - Change public APIs without updating documentation in `docs/`.
+
+## Design Context (from Impeccable)
+
+OpenMemory's visual interface (OpenMemory UI) is treated as a **product register** (an Agent Control Center).
+- **Core users:** AI engineering teams and agents operating on a local LAN.
+- **Brand Personality:** Modern, clean, and technical (Vercel/Linear feel).
+- **Design Principles:** Developer-First Clarity, Local & Fast, Precision over Playfulness.
+- **Anti-references:** Avoid bloated enterprise patterns and bubbly colors (or saturated "cream/sand" backgrounds).
+See `PRODUCT.md` and `DESIGN.md` in the project root for full strategic and visual token definitions.

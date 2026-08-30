@@ -44,8 +44,33 @@ def factory():
 @pytest.fixture(autouse=True)
 def _wire(factory, monkeypatch):
     monkeypatch.setattr(mcp_server, "SessionLocal", factory)
+    
+    # O ator do smoke é DESKTOP-SMOKE; mantém machine_var alinhado para o
+    # resolve_spec_actor/resolve_spec_subject resolverem o mesmo host e grupo.
+    from app.utils.logging_context import auth_method_var, machine_var
+    auth_method_var.set("legacy")
+    machine_var.set("DESKTOP-SMOKE")
+
+    # Provisiona o usuário DESKTOP-SMOKE (criador/ator) no Default group.
+    s = factory()
+    try:
+        from app.models import DEFAULT_GROUP_NAME, Group, User
+        g = s.query(Group).filter(Group.name == DEFAULT_GROUP_NAME).first()
+        if not g:
+            g = Group(name=DEFAULT_GROUP_NAME)
+            s.add(g)
+            s.flush()
+        u = s.query(User).filter(User.user_id == "DESKTOP-SMOKE").first()
+        if not u:
+            s.add(User(id=__import__("uuid").uuid4(), user_id="DESKTOP-SMOKE", group_id=g.id, user_type="legacy_host"))
+        s.commit()
+    finally:
+        s.close()
+
     mcp_server.user_id_var.set("DESKTOP-SMOKE")
     mcp_server.client_name_var.set("cursor")
+    mcp_server.auth_method_var.set("legacy")
+    mcp_server.auth_user_var.set("")
     monkeypatch.setenv("PLANKA_MIRROR_SYNC", "0")
     yield
 
