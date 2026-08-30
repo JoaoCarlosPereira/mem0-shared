@@ -133,9 +133,9 @@ class EffectivePolicy:
     ttl_idle_days: int
     quarantine_window_days: int
     consolidation_enabled: bool
-    processes_enabled: Dict[str, bool]
     similarity_threshold: float
     contradiction_tiebreak: str
+    processes_enabled: Dict[str, bool] = field(default_factory=default_processes_enabled)
     protected_categories: Tuple[str, ...] = field(default_factory=tuple)
     max_memories: Optional[int] = None
     max_memories_action: str = "alert"

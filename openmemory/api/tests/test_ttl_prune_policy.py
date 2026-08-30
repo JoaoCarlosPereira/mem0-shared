@@ -1,12 +1,11 @@
 import pytest
-from datetime import datetime, timedelta
-from app.utils.governance_policy import validate_policy_document, DEFAULT_POLICY
+from datetime import timedelta
+from app.utils.governance_policy import validate_policy_document
 from app.governance.ttl_prune import run_ttl_prune_job
 from app.governance.dedup import run_dedup_job
 from app.models import Memory, MemoryState
 from app.utils.datetime_utc import utc_now_naive
 from unittest.mock import MagicMock, patch
-import os
 
 def test_policy_ttl_idle_days():
     # 1. Política consolidada com ttl_idle_days = 180.
@@ -80,7 +79,6 @@ def test_deletion_guard():
     # 4. Deletion guard bloqueia deletes quando flags não ativadas.
     from app.utils.deletion_guard import assert_memory_delete_allowed, DeletionBlockedError
     import os
-    
     if "MEM0_ALLOW_MEMORY_DELETE" in os.environ:
         del os.environ["MEM0_ALLOW_MEMORY_DELETE"]
         
