@@ -55,6 +55,8 @@ class GovernanceJobType(enum.Enum):
     enforce_quota = "enforce_quota"
     cold_tier = "cold_tier"
     merge_projects = "merge_projects"
+    # Avaliacao de qualidade da busca (job proprio, controlavel individualmente).
+    quality_eval = "quality_eval"
 
 
 class GovernanceJobStatus(enum.Enum):

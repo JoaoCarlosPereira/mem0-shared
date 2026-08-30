@@ -10,6 +10,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+import uuid
+
 from app.models import Base, GovernanceJobStatus
 from app.utils.governance_queue import GovernanceQueue
 
@@ -48,7 +50,6 @@ async def test_process_once_marks_done(queue):
     handler.assert_called_once()
     db = queue._session_factory()
     from app.models import GovernanceJob
-    import uuid
 
     row = db.query(GovernanceJob).filter_by(id=uuid.UUID(job_id)).one()
     assert row.status == GovernanceJobStatus.done
@@ -151,3 +152,61 @@ async def test_off_peak_curfew_defers_scheduled_but_runs_manual(queue):
         what=f"scheduled job {sched_id} done",
     )
     await worker.stop()
+
+
+# ---------------------------------------------------------------------------
+# Process-level enable/disable (controles individuais de governança)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_disabled_process_stays_queued_until_reenabled(queue):
+    """Desabilitar um processo pausa os jobs já enfileirados (sem mudar o
+    status) e a execução retoma quando o processo é reativado."""
+    from app.models import GovernanceJob
+    from app.utils.governance_policy import (
+        DEFAULT_POLICY,
+        default_processes_enabled,
+        save_global_policy,
+    )
+    from app.workers import governance_worker as gw
+
+    db = queue._session_factory()
+    doc = {**DEFAULT_POLICY}
+    disabled = default_processes_enabled()
+    disabled["dedup"] = False
+    doc["processes_enabled"] = disabled
+    save_global_policy(db, doc)
+    db.close()
+
+    job_id = queue.enqueue("dedup", project="p1")
+    handler = MagicMock(return_value=1)
+    worker = gw.GovernanceWorker(
+        queue=queue,
+        handlers={"dedup": handler},
+        enable_scheduler=False,
+        session_factory=queue._session_factory,
+    )
+
+    # Processo desabilitado: nenhum job é consumido, nem manual.
+    assert await worker.process_once() == 0
+    assert await worker.process_once(manual_only=True) == 0
+    handler.assert_not_called()
+    db = queue._session_factory()
+    row = db.query(GovernanceJob).filter_by(id=uuid.UUID(job_id)).one()
+    assert row.status == GovernanceJobStatus.queued
+    db.close()
+
+    # Reativado: o job pendente é executado.
+    db = queue._session_factory()
+    doc2 = {**DEFAULT_POLICY}
+    doc2["processes_enabled"] = default_processes_enabled()
+    save_global_policy(db, doc2)
+    db.close()
+
+    assert await worker.process_once() == 1
+    handler.assert_called_once()
+    db = queue._session_factory()
+    row = db.query(GovernanceJob).filter_by(id=uuid.UUID(job_id)).one()
+    assert row.status == GovernanceJobStatus.done
+    db.close()

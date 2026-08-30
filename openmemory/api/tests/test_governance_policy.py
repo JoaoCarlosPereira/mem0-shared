@@ -111,3 +111,77 @@ def test_override_sets_quota_fields():
 def test_override_inherits_global_quota_when_absent():
     merged = merge_policy({**DEFAULT_POLICY, "max_memories": 500}, {"ttl_idle_days": 30})
     assert merged["max_memories"] == 500
+
+
+
+# ---------------------------------------------------------------------------
+# Individual process toggles (processes_enabled)
+# ---------------------------------------------------------------------------
+
+
+def test_default_policy_has_all_processes_enabled():
+    doc = validate_policy_document({})
+    assert set(doc["processes_enabled"]) == set(
+        {
+            "dedup",
+            "ttl_prune",
+            "consolidate",
+            "purge",
+            "quality_eval",
+            "enforce_quota",
+            "cold_tier",
+            "merge_projects",
+        }
+    )
+    assert doc["processes_enabled"]["consolidate"] is False
+    assert all(
+        enabled
+        for process, enabled in doc["processes_enabled"].items()
+        if process != "consolidate"
+    )
+
+
+def test_consolidate_inherits_legacy_consolidation_enabled():
+    doc = validate_policy_document({"consolidation_enabled": True})
+    assert doc["processes_enabled"]["consolidate"] is True
+    doc = validate_policy_document({"consolidation_enabled": False})
+    assert doc["processes_enabled"]["consolidate"] is False
+
+
+def test_invalid_process_key_rejected():
+    with pytest.raises(ValidationError):
+        validate_policy_document({"processes_enabled": {"bogus": True}})
+
+
+def test_process_toggle_roundtrip_merge_policy():
+    merged = merge_policy(
+        {**DEFAULT_POLICY, "processes_enabled": {"purge": False, "dedup": True}},
+        {"ttl_idle_days": 30},
+    )
+    assert merged["processes_enabled"]["purge"] is False
+    assert merged["processes_enabled"]["dedup"] is True
+    assert merged["processes_enabled"]["merge_projects"] is True
+
+
+def test_is_process_enabled_helper(session_factory):
+    from app.utils.governance_policy import is_process_enabled, resolve_policy
+
+    db = session_factory()
+    db.add(Config(key="governance", value={"processes_enabled": {"purge": False}}))
+    db.add(Project(name="p1"))
+    db.commit()
+    db.close()
+
+    policy = resolve_policy("p1", session_factory=session_factory)
+    assert is_process_enabled(policy, "purge") is False
+    assert is_process_enabled(policy, "dedup") is True
+    assert is_process_enabled(policy, "not_a_process") is False
+
+
+def test_project_override_cannot_change_global_process_toggle():
+    global_doc = {
+        **DEFAULT_POLICY,
+        "processes_enabled": {**DEFAULT_POLICY["processes_enabled"], "purge": False},
+    }
+    merged = merge_policy(global_doc, {"processes_enabled": {"purge": True}})
+    assert merged["processes_enabled"]["purge"] is False

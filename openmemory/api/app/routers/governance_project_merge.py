@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
+from app.database import get_db
 from app.governance.project_merge import (
     DEFAULT_CONFIDENCE_THRESHOLD,
     preview_project_merges,
     run_merge_projects_job,
 )
+from app.utils.governance_policy import is_process_enabled, resolve_policy
 from app.utils.governance_queue import governance_queue
 
 router = APIRouter(prefix="/admin/governance", tags=["governance"])
@@ -30,11 +33,22 @@ class MergeProjectsRequest(BaseModel):
     groups: Optional[List[MergeGroupSpec]] = None
 
 
+def _assert_merge_enabled(db: Session) -> None:
+    policy = resolve_policy("", session_factory=lambda: db)
+    if not is_process_enabled(policy, "merge_projects"):
+        raise HTTPException(
+            status_code=409,
+            detail="processo de governança 'merge_projects' está desabilitado",
+        )
+
+
 @router.get("/projects/merge-preview")
 def merge_projects_preview(
     confidence_threshold: float = Query(DEFAULT_CONFIDENCE_THRESHOLD, ge=0.0, le=1.0),
+    db: Session = Depends(get_db),
 ) -> dict:
     """Return LLM-suggested duplicate project groups without applying merges."""
+    _assert_merge_enabled(db)
     try:
         groups = preview_project_merges(confidence_threshold=confidence_threshold)
     except Exception as exc:  # noqa: BLE001
@@ -43,8 +57,12 @@ def merge_projects_preview(
 
 
 @router.post("/projects/merge", status_code=202)
-def enqueue_merge_projects(body: MergeProjectsRequest) -> Dict[str, Any]:
+def enqueue_merge_projects(
+    body: MergeProjectsRequest,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
     """Enqueue a governance job to unify duplicate MCP projects."""
+    _assert_merge_enabled(db)
     payload: Dict[str, Any] = {
         "manual": True,
         "dry_run": body.dry_run,
@@ -64,8 +82,12 @@ def enqueue_merge_projects(body: MergeProjectsRequest) -> Dict[str, Any]:
 
 
 @router.post("/projects/merge-now")
-def merge_projects_now(body: MergeProjectsRequest) -> Dict[str, Any]:
+def merge_projects_now(
+    body: MergeProjectsRequest,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
     """Run project merge synchronously (useful for dry-run / small catalogs)."""
+    _assert_merge_enabled(db)
     payload: Dict[str, Any] = {
         "dry_run": body.dry_run,
         "confidence_threshold": body.confidence_threshold,
