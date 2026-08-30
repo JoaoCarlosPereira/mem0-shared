@@ -68,6 +68,16 @@ def run_dedup_job(
                     return deduped
                 if engine.is_pinned(dup):
                     continue
+
+                sim_score = (dup.metadata_ or {}).get("similarity_score", 1.0)
+                try:
+                    sim_score = float(sim_score)
+                except (ValueError, TypeError):
+                    sim_score = 1.0
+
+                if sim_score < 0.99 and policy.max_memories_action != "enforce":
+                    continue
+
                 if engine.quarantine(dup.id, reason="dedup", job_id=job_id):
                     deduped += 1
                     GOVERNANCE_DEDUPED_TOTAL.inc()

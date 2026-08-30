@@ -254,6 +254,15 @@ LAN fail-closed guards.
 
 Upstream mem0 docs (SDK reference only): https://docs.mem0.ai
 
+## Governance and Retention
+For details on memory lifecycle, cleanup processes, TTL rules (e.g. 180 days idle limit), and deduplication confidence scores, refer to the policy documentation:
+[Governance Policy](openmemory/docs/governance/policy.md).
+
+### Procedimento de Revisão (Review Procedure)
+- Para alterar as políticas (como TTL ou limites de deduplicação), modifique o arquivo `openmemory/docs/governance/policy.md` e a variável `DEFAULT_POLICY` em `openmemory/api/app/utils/governance_policy.py`.
+- O código da aplicação de governança baseia-se num sistema *fail-closed* contra exclusões, alertando agressivamente se as variáveis de ambiente de deleção forem ligadas em produção.
+- Use a API `/admin/governance/policy` para alterar sob-demanda em tempo de execução para projetos específicos.
+
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).

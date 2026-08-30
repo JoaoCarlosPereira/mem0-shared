@@ -16,12 +16,30 @@ from app.utils.governance_schedule import normalize_weekdays, parse_hhmm
 
 GOVERNANCE_CONFIG_KEY = "governance"
 GLOBAL_SCOPE = "__global__"
+GOVERNANCE_PROCESS_TYPES = (
+    "dedup",
+    "ttl_prune",
+    "consolidate",
+    "purge",
+    "quality_eval",
+    "enforce_quota",
+    "cold_tier",
+    "merge_projects",
+)
+
+
+def default_processes_enabled(*, consolidation_enabled: bool = False) -> Dict[str, bool]:
+    return {
+        process: consolidation_enabled if process == "consolidate" else True
+        for process in GOVERNANCE_PROCESS_TYPES
+    }
 
 DEFAULT_POLICY: Dict[str, Any] = {
     "ttl_max_age_days": 365,
-    "ttl_idle_days": 90,
+    "ttl_idle_days": 180,
     "quarantine_window_days": 30,
     "consolidation_enabled": False,
+    "processes_enabled": default_processes_enabled(),
     "similarity_threshold": 0.92,
     "contradiction_tiebreak": "recency",
     "protected_categories": ["decision", "security"],
@@ -52,9 +70,10 @@ DEFAULT_POLICY: Dict[str, Any] = {
 
 class GovernancePolicySchema(BaseModel):
     ttl_max_age_days: int = Field(default=365, ge=1)
-    ttl_idle_days: int = Field(default=90, ge=1)
+    ttl_idle_days: int = Field(default=180, ge=1)
     quarantine_window_days: int = Field(default=30, ge=1)
     consolidation_enabled: bool = False
+    processes_enabled: Dict[str, bool] = Field(default_factory=default_processes_enabled)
     similarity_threshold: float = Field(default=0.92, ge=0.0, le=1.0)
     contradiction_tiebreak: str = "recency"
     protected_categories: Tuple[str, ...] = ("decision", "security")
@@ -75,6 +94,17 @@ class GovernancePolicySchema(BaseModel):
         if value is None:
             return (0, 1, 2, 3, 4, 5, 6)
         return normalize_weekdays(value)
+
+    @field_validator("processes_enabled")
+    @classmethod
+    def validate_processes_enabled(cls, value: Dict[str, bool]) -> Dict[str, bool]:
+        unknown = sorted(set(value) - set(GOVERNANCE_PROCESS_TYPES))
+        if unknown:
+            raise ValueError(f"unknown governance processes: {', '.join(unknown)}")
+        return {
+            process: bool(value.get(process, True))
+            for process in GOVERNANCE_PROCESS_TYPES
+        }
 
     @field_validator("schedule_start_time", "schedule_end_time")
     @classmethod
@@ -105,6 +135,7 @@ class EffectivePolicy:
     consolidation_enabled: bool
     similarity_threshold: float
     contradiction_tiebreak: str
+    processes_enabled: Dict[str, bool] = field(default_factory=default_processes_enabled)
     protected_categories: Tuple[str, ...] = field(default_factory=tuple)
     max_memories: Optional[int] = None
     max_memories_action: str = "alert"
@@ -120,7 +151,12 @@ class EffectivePolicy:
 
 def validate_policy_document(data: Dict[str, Any]) -> Dict[str, Any]:
     """Validate and normalize a governance policy document."""
-    merged = {**DEFAULT_POLICY, **(data or {})}
+    source = data or {}
+    merged = {**DEFAULT_POLICY, **source}
+    if "processes_enabled" not in source:
+        merged["processes_enabled"] = default_processes_enabled(
+            consolidation_enabled=bool(source.get("consolidation_enabled", False))
+        )
     model = GovernancePolicySchema.model_validate(merged)
     return model.model_dump()
 
@@ -132,6 +168,7 @@ def _to_effective(data: Dict[str, Any]) -> EffectivePolicy:
         ttl_idle_days=validated["ttl_idle_days"],
         quarantine_window_days=validated["quarantine_window_days"],
         consolidation_enabled=validated["consolidation_enabled"],
+        processes_enabled=dict(validated["processes_enabled"]),
         similarity_threshold=validated["similarity_threshold"],
         contradiction_tiebreak=validated["contradiction_tiebreak"],
         protected_categories=tuple(validated["protected_categories"]),
@@ -172,6 +209,12 @@ def save_global_policy(db: Session, data: Dict[str, Any]) -> Dict[str, Any]:
     db.commit()
     db.refresh(row)
     return row.value
+
+
+def is_process_enabled(policy: EffectivePolicy, process: str) -> bool:
+    if process not in GOVERNANCE_PROCESS_TYPES:
+        return False
+    return bool(policy.processes_enabled.get(process, True))
 
 
 def get_project_override(db: Session, project: str) -> Optional[Dict[str, Any]]:

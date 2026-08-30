@@ -474,7 +474,7 @@ def _seed_multi_user_audit(factory):
 
 
 def test_top_contributors_ranks_by_total(factory, client):
-    group_id = _seed_multi_user_audit(factory)
+    _seed_multi_user_audit(factory)
     r = client.get("/admin/analytics/top-contributors?metric=total&period=all")
     assert r.status_code == 200
     items = r.json()["items"]
