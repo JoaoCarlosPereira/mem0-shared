@@ -7,7 +7,12 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.utils.governance_policy import get_global_policy, save_global_policy
+from app.utils.admin_auth import require_admin
+from app.utils.governance_policy import (
+    GOVERNANCE_PROCESS_TYPES,
+    get_global_policy,
+    save_global_policy,
+)
 from app.utils.governance_schedule import normalize_weekdays, parse_hhmm
 
 router = APIRouter(prefix="/admin/governance", tags=["governance"])
@@ -42,6 +47,26 @@ class ScheduleConfigUpdate(BaseModel):
         return value.strip()
 
 
+class ProcessesConfigResponse(BaseModel):
+    processes_enabled: dict[str, bool]
+
+
+class ProcessesConfigUpdate(BaseModel):
+    processes_enabled: dict[str, bool]
+
+    @field_validator("processes_enabled")
+    @classmethod
+    def validate_processes(cls, value: dict[str, bool]) -> dict[str, bool]:
+        expected = set(GOVERNANCE_PROCESS_TYPES)
+        unknown = sorted(set(value) - expected)
+        missing = sorted(expected - set(value))
+        if unknown:
+            raise ValueError(f"processos de governança desconhecidos: {', '.join(unknown)}")
+        if missing:
+            raise ValueError(f"processos de governança ausentes: {', '.join(missing)}")
+        return {process: bool(value[process]) for process in GOVERNANCE_PROCESS_TYPES}
+
+
 def _to_response(doc: dict) -> ScheduleConfigResponse:
     weekdays = list(doc.get("schedule_weekdays") or [])
     return ScheduleConfigResponse(
@@ -73,3 +98,24 @@ def put_schedule_config(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _to_response(saved)
+
+
+@router.get("/processes", response_model=ProcessesConfigResponse)
+def get_processes_config(db: Session = Depends(get_db)) -> ProcessesConfigResponse:
+    policy = get_global_policy(db)
+    return ProcessesConfigResponse(processes_enabled=policy["processes_enabled"])
+
+
+@router.put("/processes", response_model=ProcessesConfigResponse)
+def put_processes_config(
+    body: ProcessesConfigUpdate,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin),
+) -> ProcessesConfigResponse:
+    try:
+        global_doc = get_global_policy(db)
+        global_doc["processes_enabled"] = body.processes_enabled
+        saved = save_global_policy(db, global_doc)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ProcessesConfigResponse(processes_enabled=saved["processes_enabled"])

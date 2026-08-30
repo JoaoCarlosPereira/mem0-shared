@@ -20,7 +20,9 @@ from app.models import (
 from app.schemas import GovernanceJobResponse, PaginatedGovernanceJobResponse
 from app.utils.governance_policy import (
     get_global_policy,
+    is_process_enabled,
     list_policies,
+    resolve_policy,
     save_global_policy,
     save_project_override,
     validate_policy_document,
@@ -88,11 +90,18 @@ def put_project_policy(
 def enqueue_job(
     job_type: str,
     body: EnqueueJobRequest,
+    db: Session = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict:
     allowed = {"dedup", "ttl_prune", "consolidate", "purge"}
     if job_type not in allowed:
         raise HTTPException(status_code=400, detail=f"unsupported job_type '{job_type}'")
+    policy = resolve_policy(body.project or "", session_factory=lambda: db)
+    if not is_process_enabled(policy, job_type):
+        raise HTTPException(
+            status_code=409,
+            detail=f"processo de governança '{job_type}' está desabilitado",
+        )
     if job_type == "purge":
         from app.utils.deletion_guard import assert_governance_purge_allowed
 

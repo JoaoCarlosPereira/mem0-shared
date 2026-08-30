@@ -250,6 +250,9 @@ def merge_policy(global_doc: Dict[str, Any], override: Optional[Dict[str, Any]])
     if not override:
         return base
     merged = {**base, **override}
+    # Individual process toggles are installation-wide. Project overrides may
+    # customize thresholds/schedules, but never re-enable a globally disabled process.
+    merged["processes_enabled"] = base["processes_enabled"]
     if "schedules" in override:
         merged["schedules"] = {**base.get("schedules", {}), **override.get("schedules", {})}
     if "protected_categories" in override:

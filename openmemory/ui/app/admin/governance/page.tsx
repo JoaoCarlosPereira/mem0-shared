@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { GovernanceJob, ProjectSize } from "@/types/admin";
 import { getApiUrl } from "@/lib/api-url";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -70,6 +71,49 @@ const TIMEZONES = [
 ];
 
 
+const PROCESS_DEFS: { type: string; label: string; description: string }[] = [
+  {
+    type: "dedup",
+    label: "Deduplicação",
+    description: "Isola memórias duplicadas por similaridade em quarentena",
+  },
+  {
+    type: "ttl_prune",
+    label: "TTL Prune",
+    description: "Quarentena de memórias acima da idade/inatividade máxima",
+  },
+  {
+    type: "consolidate",
+    label: "Consolidação",
+    description: "Mescla memórias redundantes e resolve contradições via LLM",
+  },
+  {
+    type: "purge",
+    label: "Purga",
+    description: "Exclusão definitiva de memórias em quarentena (destrutivo)",
+  },
+  {
+    type: "quality_eval",
+    label: "Avaliação de qualidade",
+    description: "Amostra buscas e calcula índices de qualidade (proxy/LLM)",
+  },
+  {
+    type: "enforce_quota",
+    label: "Cota de memórias",
+    description: "Aplica o teto de memórias por projeto quando configurado",
+  },
+  {
+    type: "cold_tier",
+    label: "Cold tier",
+    description: "Arquivamento de projetos inativos para o cold tier",
+  },
+  {
+    type: "merge_projects",
+    label: "Unificação de projetos",
+    description: "Move memórias de projetos duplicados para o nome canônico (LLM)",
+  },
+];
+
 const JOB_TYPES: { type: string; label: string; destructive?: boolean }[] = [
   { type: "dedup", label: "Deduplicar" },
   { type: "ttl_prune", label: "TTL Prune" },
@@ -102,6 +146,10 @@ export default function GovernancePage() {
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
   const [schedule, setSchedule] = useState<ScheduleConfig | null>(null);
   const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [processes, setProcesses] = useState<Record<string, boolean> | null>(
+    null,
+  );
+  const [processSaving, setProcessSaving] = useState<string | null>(null);
 
   useEffect(() => {
     fetchProjectSizes()
@@ -114,6 +162,12 @@ export default function GovernancePage() {
     axios
       .get<ScheduleConfig>(`${getApiUrl()}/admin/governance/schedule`)
       .then((res) => setSchedule(res.data))
+      .catch(() => {});
+    axios
+      .get<{ processes_enabled: Record<string, boolean> }>(
+        `${getApiUrl()}/admin/governance/processes`,
+      )
+      .then((res) => setProcesses(res.data.processes_enabled))
       .catch(() => {});
   }, [fetchProjectSizes]);
 
@@ -205,6 +259,40 @@ export default function GovernancePage() {
     }
   }, [schedule]);
 
+  const isProcessEnabled = useCallback(
+    (type: string) => processes?.[type] ?? true,
+    [processes],
+  );
+
+  const handleToggleProcess = useCallback(
+    async (type: string, enabled: boolean) => {
+      if (!processes) return;
+      setProcessSaving(type);
+      try {
+        const next = { ...processes, [type]: enabled };
+        const res = await axios.put(
+          `${getApiUrl()}/admin/governance/processes`,
+          { processes_enabled: next },
+        );
+        setProcesses(res.data.processes_enabled);
+        toast.success(
+          enabled ? "Processo habilitado" : "Processo desabilitado",
+        );
+      } catch {
+        toast.error("Falha ao atualizar o estado do processo");
+        axios
+          .get<{ processes_enabled: Record<string, boolean> }>(
+            `${getApiUrl()}/admin/governance/processes`,
+          )
+          .then((res) => setProcesses(res.data.processes_enabled))
+          .catch(() => {});
+      } finally {
+        setProcessSaving(null);
+      }
+    },
+    [processes],
+  );
+
   const columns: QueueColumn<GovernanceJob>[] = [
     { key: "job_type", header: "Tipo", render: (r) => r.job_type },
     {
@@ -243,6 +331,7 @@ export default function GovernancePage() {
               key={jt.type}
               variant={jt.destructive ? "destructive" : "outline"}
               size="sm"
+              disabled={!isProcessEnabled(jt.type)}
               onClick={() => setDialogJob(jt)}
             >
               {jt.label}
@@ -265,7 +354,7 @@ export default function GovernancePage() {
           <Button
             variant="outline"
             size="sm"
-            disabled={mergeLoading}
+            disabled={mergeLoading || !isProcessEnabled("merge_projects")}
             onClick={handleAnalyzeDuplicates}
           >
             Analisar Duplicatas
@@ -285,6 +374,46 @@ export default function GovernancePage() {
           onPageChange={() => {}}
           emptyMessage="Nenhum job de governança"
         />
+      </section>
+
+      <section className="mb-6">
+        <h2 className="mb-2 text-sm font-medium text-zinc-400">
+          Processos de governança
+        </h2>
+        <p className="mb-3 max-w-2xl text-sm text-zinc-500">
+          Habilite ou desabilite cada processo individualmente. Desabilitar um
+          processo impede o agendamento, o disparo manual e a execução dos jobs
+          já na fila, que ficam pausados até a reativação.
+        </p>
+        {processes ? (
+          <div className="grid max-w-3xl gap-2">
+            {PROCESS_DEFS.map((proc) => (
+              <div
+                key={proc.type}
+                className="flex items-center justify-between gap-4 rounded-md border border-zinc-800 bg-zinc-900/50 px-4 py-2.5"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm text-zinc-200">{proc.label}</p>
+                  <p className="truncate text-xs text-zinc-500">
+                    {proc.description}
+                  </p>
+                </div>
+                <Switch
+                  checked={processes[proc.type] ?? true}
+                  disabled={processSaving === proc.type}
+                  onCheckedChange={(checked) =>
+                    handleToggleProcess(proc.type, checked === true)
+                  }
+                  aria-label={`Habilitar ${proc.label}`}
+                />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-zinc-500">
+            Carregando processos…
+          </p>
+        )}
       </section>
 
       <section className="mb-6">

@@ -19,7 +19,12 @@ from app.governance.quality_eval import run_quality_eval_job
 from app.governance.quota import run_enforce_quota_job
 from app.governance.ttl_prune import run_ttl_prune_job
 from app.models import GovernanceJobType, GovernanceSchedule, Project
-from app.utils.governance_policy import GLOBAL_SCOPE, resolve_policy
+from app.utils.governance_policy import (
+    GLOBAL_SCOPE,
+    GOVERNANCE_PROCESS_TYPES,
+    is_process_enabled,
+    resolve_policy,
+)
 from app.utils.governance_schedule import is_governance_schedule_active
 from app.utils.governance_queue import GovernanceJob, governance_queue
 from app.utils.metrics import (
@@ -89,7 +94,17 @@ class GovernanceWorker:
         self._handlers[job_type] = handler
 
     async def process_once(self, *, manual_only: bool = False) -> int:
-        jobs = self._queue.dequeue(limit=self._batch_size, manual_only=manual_only)
+        policy = resolve_policy("", session_factory=self._session_factory)
+        enabled_job_types = {
+            process
+            for process in GOVERNANCE_PROCESS_TYPES
+            if is_process_enabled(policy, process)
+        }
+        jobs = self._queue.dequeue(
+            limit=self._batch_size,
+            manual_only=manual_only,
+            enabled_job_types=enabled_job_types,
+        )
         if not jobs:
             return 0
         await asyncio.gather(*(self._process_job(job) for job in jobs))
@@ -138,30 +153,18 @@ class GovernanceWorker:
                 project = None if scope == GLOBAL_SCOPE else scope
                 policy = resolve_policy(project or "", session_factory=self._session_factory)
                 for job_type, cadence in (policy.schedules or {}).items():
-                    if job_type == "quality_eval":
-                        gtype = "consolidate"  # reuse enum bucket; handled separately below
-                    else:
-                        try:
-                            gtype = job_type
-                            GovernanceJobType(gtype)
-                        except ValueError:
-                            continue
-                    if not self._is_due(db, gtype, scope, cadence):
+                    try:
+                        GovernanceJobType(job_type)
+                    except ValueError:
                         continue
-                    if gtype == "consolidate" and not policy.consolidation_enabled:
+                    if not is_process_enabled(policy, job_type):
+                        continue
+                    gtype = job_type
+                    if not self._is_due(db, gtype, scope, cadence):
                         continue
                     self._queue.enqueue(gtype, project=project, payload={"scheduled": True})
                     self._mark_scheduled(db, gtype, scope)
                     enqueued += 1
-                if scope != GLOBAL_SCOPE and policy.consolidation_enabled:
-                    if self._is_due(db, "quality_eval", scope, policy.schedules.get("quality_eval", "weekly")):
-                        self._queue.enqueue(
-                            "consolidate",
-                            project=project,
-                            payload={"quality_eval": True},
-                        )
-                        self._mark_scheduled(db, "quality_eval", scope)
-                        enqueued += 1
             if enqueued:
                 db.commit()
             return enqueued
@@ -202,7 +205,7 @@ class GovernanceWorker:
 
     def _is_due(self, db, job_type: str, scope: str, cadence: str) -> bool:
         try:
-            enum_type = GovernanceJobType(job_type if job_type != "quality_eval" else "consolidate")
+            enum_type = GovernanceJobType(job_type)
         except ValueError:
             return False
         row = (
@@ -218,7 +221,7 @@ class GovernanceWorker:
         return datetime.now(UTC) - row.last_run_at.replace(tzinfo=UTC) >= self._interval(cadence)
 
     def _mark_scheduled(self, db, job_type: str, scope: str) -> None:
-        enum_type = GovernanceJobType(job_type if job_type != "quality_eval" else "consolidate")
+        enum_type = GovernanceJobType(job_type)
         row = (
             db.query(GovernanceSchedule)
             .filter(
@@ -324,6 +327,7 @@ def _default_handlers() -> Dict[str, Handler]:
         "enforce_quota": run_enforce_quota_job,
         "cold_tier": run_cold_tier_job,
         "merge_projects": run_merge_projects_job,
+        "quality_eval": _quality_handler,
     }
 
 

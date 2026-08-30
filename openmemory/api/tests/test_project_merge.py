@@ -234,6 +234,17 @@ def test_merge_preview_endpoint(factory, monkeypatch):
     from fastapi.testclient import TestClient
 
     from app.database import get_db
+    from app.utils.governance_policy import (
+        DEFAULT_POLICY,
+        default_processes_enabled,
+        save_global_policy,
+    )
+
+    db = factory()
+    doc = {**DEFAULT_POLICY}
+    doc["processes_enabled"] = default_processes_enabled()
+    save_global_policy(db, doc)
+    db.close()
 
     app = FastAPI()
     app.include_router(_governance_merge.router)
@@ -272,3 +283,26 @@ def test_merge_preview_endpoint(factory, monkeypatch):
     body = resp.json()
     assert body["count"] == 1
     assert body["groups"][0]["canonical"] == "sysmovs"
+
+
+
+def test_merge_enqueue_blocked_when_process_disabled(factory):
+    from fastapi import HTTPException
+    from app.utils.governance_policy import (
+        DEFAULT_POLICY,
+        default_processes_enabled,
+        save_global_policy,
+    )
+
+    db = factory()
+    doc = {**DEFAULT_POLICY}
+    disabled = default_processes_enabled()
+    disabled["merge_projects"] = False
+    doc["processes_enabled"] = disabled
+    save_global_policy(db, doc)
+
+    with pytest.raises(HTTPException) as exc_info:
+        _governance_merge._assert_merge_enabled(db)
+    db.close()
+    assert exc_info.value.status_code == 409
+    assert "desabilitado" in exc_info.value.detail

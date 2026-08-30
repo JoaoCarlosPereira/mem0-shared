@@ -9,7 +9,11 @@ from typing import Callable, List, Optional, Tuple
 
 from app.database import SessionLocal
 from app.models import Memory, MemoryState
-from app.utils.governance_policy import EffectivePolicy, resolve_policy
+from app.utils.governance_policy import (
+    EffectivePolicy,
+    is_process_enabled,
+    resolve_policy,
+)
 from app.utils.metrics import (
     GOVERNANCE_CONTRADICTIONS_RESOLVED_TOTAL,
     GOVERNANCE_MERGED_TOTAL,
@@ -167,7 +171,7 @@ def run_consolidate_job(
     if not project:
         return 0
     policy = resolve_policy(project, session_factory=session_factory)
-    if not policy.consolidation_enabled:
+    if not is_process_enabled(policy, "consolidate"):
         return 0
 
     if memory_client_provider is None:

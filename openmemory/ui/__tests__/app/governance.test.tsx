@@ -51,6 +51,17 @@ const job: GovernanceJob = {
   updated_at: "2026-01-01T10:00:00Z",
 };
 
+const defaultProcesses = {
+  dedup: true,
+  ttl_prune: true,
+  consolidate: false,
+  purge: true,
+  quality_eval: true,
+  enforce_quota: true,
+  cold_tier: true,
+  merge_projects: true,
+};
+
 function renderPage() {
   const store = configureStore({
     reducer: { admin: adminReducer, queues: queuesReducer },
@@ -83,9 +94,20 @@ beforeEach(() => {
         },
       });
     }
+    if (String(url).includes("/admin/governance/processes")) {
+      return Promise.resolve({
+        data: { processes_enabled: defaultProcesses },
+      });
+    }
     return Promise.resolve({ data: { global: {} } });
   });
   mockedAxios.post.mockReset().mockResolvedValue({ data: { status: "queued" } });
+  mockedAxios.put.mockReset().mockImplementation((url: string, body: unknown) => {
+    if (String(url).includes("/admin/governance/processes")) {
+      return Promise.resolve({ data: body });
+    }
+    return Promise.resolve({ data: body });
+  });
   fetchGovernanceJobs.mockReset().mockResolvedValue(undefined);
 });
 
@@ -137,12 +159,59 @@ describe("GovernancePage", () => {
     expect(
       screen.getByText("Políticas ativas (somente leitura)"),
     ).toBeInTheDocument();
-    // Nenhum input/textarea de edição de política
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    // A política bruta continua sem textarea/editor JSON.
+    expect(screen.queryByRole("textbox", { name: /política/i })).not.toBeInTheDocument();
   });
 
   it("a lista de governance jobs usa JobStatusBadge", () => {
     renderPage();
     expect(screen.getByText("Na fila")).toHaveClass("bg-zinc-700");
   });
+
+
+  it("exibe um switch para cada processo de governança", async () => {
+    renderPage();
+    for (const label of [
+      "Deduplicação",
+      "TTL Prune",
+      "Consolidação",
+      "Purga",
+      "Avaliação de qualidade",
+      "Cota de memórias",
+      "Cold tier",
+      "Unificação de projetos",
+    ]) {
+      expect(
+        await screen.findByRole("switch", { name: `Habilitar ${label}` }),
+      ).toBeInTheDocument();
+    }
+  });
+
+  it("persiste a desativação de um processo", async () => {
+    renderPage();
+    const switchDedup = await screen.findByRole("switch", {
+      name: "Habilitar Deduplicação",
+    });
+    await userEvent.click(switchDedup);
+
+    await waitFor(() =>
+      expect(mockedAxios.put).toHaveBeenCalledWith(
+        expect.stringContaining("/admin/governance/processes"),
+        expect.objectContaining({
+          processes_enabled: expect.objectContaining({ dedup: false }),
+        }),
+      ),
+    );
+  });
+
+  it("desabilita ações manuais dos processos desligados", async () => {
+    renderPage();
+    expect(
+      await screen.findByRole("button", { name: "Consolidar" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Analisar Duplicatas" }),
+    ).toBeEnabled();
+  });
+
 });
