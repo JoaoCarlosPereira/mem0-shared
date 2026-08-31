@@ -1269,8 +1269,7 @@ class TestGroupIsolation:
         import uuid
         from app.models import User, Group, SpecWorkspace
         from app.utils.logging_context import auth_email_var, auth_user_var
-        from app.utils.spec_search import index_spec_document, get_specs_vector_store
-        
+
         class FakeEmbedder:
             def embed(self, text, mode): return [0.1]
         
