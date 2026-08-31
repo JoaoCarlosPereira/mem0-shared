@@ -90,6 +90,20 @@ describe("TokenSummaryChart", () => {
     expect(screen.queryByTestId("area-g")).not.toBeInTheDocument();
   });
 
+  it("agrega o grupo 'unknown' em 'Outros'", () => {
+    render(
+      <TokenSummaryChart
+        data={[
+          row({ group: "proj-a", total_tokens: 500 }),
+          row({ group: "unknown", total_tokens: 200 }),
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("area-Outros")).toBeInTheDocument();
+    expect(screen.queryByTestId("area-unknown")).not.toBeInTheDocument();
+    expect(screen.getByTestId("area-proj-a")).toBeInTheDocument();
+  });
+
   it("exibe legenda também para série única", () => {
     render(<TokenSummaryChart data={[row()]} />);
     expect(screen.getByTestId("legend")).toBeInTheDocument();

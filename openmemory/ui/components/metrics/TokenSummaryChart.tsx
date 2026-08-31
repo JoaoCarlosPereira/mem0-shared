@@ -42,22 +42,31 @@ function computeTotals(data: TokenSummaryRow[]): Totals {
   );
 }
 
+/** Fold backend default project label into the chart's "Others" bucket. */
+function normalizeGroup(group: string): string {
+  return group === "unknown" ? OTHERS_KEY : group;
+}
+
 /** Pivots lines (period, group) into series by period; top N groups + "Others". */
 function pivot(data: TokenSummaryRow[]) {
   const totalsByGroup = new Map<string, number>();
   for (const row of data) {
-    totalsByGroup.set(row.group, (totalsByGroup.get(row.group) ?? 0) + row.total_tokens);
+    const group = normalizeGroup(row.group);
+    totalsByGroup.set(group, (totalsByGroup.get(group) ?? 0) + row.total_tokens);
   }
-  const groups = [...totalsByGroup.entries()]
+  const ranked = [...totalsByGroup.entries()]
+    .filter(([group]) => group !== OTHERS_KEY)
     .sort((a, b) => b[1] - a[1])
     .map(([group]) => group);
-  const top = groups.slice(0, MAX_SERIES);
-  const hasOthers = groups.length > MAX_SERIES;
+  const top = ranked.slice(0, MAX_SERIES);
+  const hasOthers =
+    ranked.length > MAX_SERIES || (totalsByGroup.get(OTHERS_KEY) ?? 0) > 0;
 
   const byPeriod = new Map<string, Record<string, number | string>>();
   for (const row of data) {
     const bucket = byPeriod.get(row.period) ?? { period: row.period };
-    const key = top.includes(row.group) ? row.group : OTHERS_KEY;
+    const group = normalizeGroup(row.group);
+    const key = top.includes(group) ? group : OTHERS_KEY;
     bucket[key] = ((bucket[key] as number) ?? 0) + row.total_tokens;
     byPeriod.set(row.period, bucket);
   }
