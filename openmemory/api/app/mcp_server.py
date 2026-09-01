@@ -584,6 +584,7 @@ async def search_memory(
                             preferred_project=project,
                             requester_group=requester_group,
                             annotate=True,
+                            query=query,
                         )
                     )
                     return json.dumps(
@@ -639,6 +640,7 @@ async def search_memory(
                 preferred_project=project,
                 requester_group=requester_group,
                 annotate=True,
+                query=query,
             )
             return r_status
 

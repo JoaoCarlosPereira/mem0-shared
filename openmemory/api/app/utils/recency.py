@@ -15,12 +15,14 @@ Tunable via env:
                                       (0.0 = pure semantic relevance, previous behavior)
   MEM0_SEARCH_PROJECT_BOOST_EXACT   — multiplicative boost when project names match exactly
   MEM0_SEARCH_PROJECT_BOOST_FUZZY   — smaller boost when normalized names overlap/substring-match
+  MEM0_SEARCH_LEXICAL_BOOST         — boost when an exact task code from the query appears in the result
 """
 
 from __future__ import annotations
 
 import datetime
 import os
+import re
 from typing import Optional
 
 from app.utils.groups import group_of_hostname
@@ -34,6 +36,61 @@ SEARCH_PROJECT_BOOST_FUZZY = float(os.getenv("MEM0_SEARCH_PROJECT_BOOST_FUZZY", 
 # solicitante (ADR-003). Forte por padrão: prioriza o contexto da própria equipe sem
 # remover memórias de outros grupos. Calibrável por env, sem alteração de código.
 SEARCH_GROUP_BOOST = float(os.getenv("MEM0_SEARCH_GROUP_BOOST", "2.5"))
+
+
+# Boost lexical para chave exata de tarefa (medido em 01/09/2026).
+#
+# O embedding nao codifica numero de tarefa. Medido em 4 consultas reais contra
+# 100 candidatos cada:
+#
+#   consulta                                 amplitude do score semantico
+#   "371145"                                 0,511 - 0,577   (0,066)
+#   "371145 aliquotas efetivas ... MR"       0,668 - 0,819   (0,151)
+#   recencia (meia-vida 90d) no mesmo pool   0,606 - 1,000   (0,394)
+#
+# Ou seja: a recencia varre uma faixa 2,6x maior que o sinal semantico, e no caso
+# do codigo puro, 6x. Reponderar semantico/recencia/projeto foi medido e nao
+# resolve - amplificar um sinal que nao existe nao cria discriminacao (precisao@5
+# em "371145 aliquotas...": 3/5 hoje, 2/5 com semantico^3, 2/5 com recencia
+# achatada, 3/5 com projeto forte). O que resolve e casar a chave exata: com este
+# fator a mesma consulta vai a 5/5, e as 6 memorias da tarefa presentes no pool
+# ficam nas 6 primeiras posicoes.
+#
+# Por isso NAO mexemos em SEARCH_RECENCY_* nem em SEARCH_PROJECT_BOOST_*: os
+# numeros nao sustentam a mudanca.
+SEARCH_LEXICAL_BOOST = float(os.getenv("MEM0_SEARCH_LEXICAL_BOOST", "3.0"))
+
+# Codigo de tarefa do Redmine: 6 digitos, com ou sem "#", sem digito colado.
+_TASK_CODE_RE = re.compile(r"(?<!\d)#?(\d{6})(?!\d)")
+
+
+def extract_task_codes(query) -> list:
+    """Codigos de tarefa citados na consulta, sem repetir e em ordem estavel."""
+    if not query:
+        return []
+    seen = []
+    for m in _TASK_CODE_RE.finditer(str(query)):
+        if m.group(1) not in seen:
+            seen.append(m.group(1))
+    return seen
+
+
+def lexical_match_factor(result, codes) -> float:
+    """Boost quando a chave exata da consulta aparece literalmente no resultado.
+
+    Nunca penaliza: sem codigo na consulta, ou sem o codigo no resultado, o fator
+    e 1.0 e a ordem continua sendo a do blend semantico/recencia/projeto/grupo.
+    """
+    if not codes:
+        return 1.0
+    haystack = str(result.get("memory") or "")
+    project = result.get("project")
+    if not project:
+        meta = result.get("metadata")
+        if isinstance(meta, dict):
+            project = meta.get("project")
+    haystack = haystack + " " + str(project or "")
+    return SEARCH_LEXICAL_BOOST if any(c in haystack for c in codes) else 1.0
 
 
 def parse_ts(value):
@@ -112,9 +169,9 @@ def group_match_factor(author_group, requester_group) -> float:
 
 
 def rank_search_results(
-    results, preferred_project=None, requester_group=None, annotate=False
+    results, preferred_project=None, requester_group=None, annotate=False, query=None
 ):
-    """Order results by semantic score blended with recency, project and group boost.
+    """Order results by semantic score blended with recency, project, group and exact-key boost.
 
     Relevance and recency dominate ordering; ``preferred_project`` applies a small
     multiplicative boost when names match. When ``requester_group`` is provided, results
@@ -129,6 +186,8 @@ def rank_search_results(
     which makes an ordering impossible to explain or calibrate from the outside.
     """
     now = datetime.datetime.now(datetime.timezone.utc)
+    # Chave exata da consulta (codigo de tarefa). Extraida uma vez, nao por item.
+    task_codes = extract_task_codes(query)
 
     def _project_name(result) -> Optional[str]:
         name = result.get("project")
@@ -150,13 +209,15 @@ def rank_search_results(
         recency = recency_factor(r, now) ** SEARCH_RECENCY_WEIGHT
         project = project_match_factor(_project_name(r), preferred_project)
         group = group_match_factor(_author_group(r), requester_group)
-        effective = score * recency * project * group
+        lexical = lexical_match_factor(r, task_codes)
+        effective = score * recency * project * group * lexical
         if annotate:
             r["effective_score"] = effective
             r["ranking_factors"] = {
                 "recency": recency,
                 "project": project,
                 "group": group,
+                "lexical": lexical,
             }
         return effective
 
