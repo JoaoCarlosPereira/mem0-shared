@@ -99,19 +99,23 @@ const getGroupVisibilityUserIds = require('../../../utils/get-group-visibility-u
 module.exports = {
   async fn() {
     const { currentUser } = this.req;
+    const legacySharedMode = this.req.mem0Auth && this.req.mem0Auth.group === '*';
 
     let groupVisibilityUserIds;
-    try {
-      groupVisibilityUserIds = await getGroupVisibilityUserIds(
-        (sql, values) => sails.sendNativeQuery(sql, values),
-        currentUser,
-      );
-    } catch (error) {
-      sails.log.warn('projects/index: failed to resolve current user group:', error.message);
-      groupVisibilityUserIds = {
-        restrictUnknownCreators: true,
-        sameGroupUserIds: [],
-      };
+    if (!legacySharedMode) {
+      try {
+        groupVisibilityUserIds = await getGroupVisibilityUserIds(
+          (sql, values) => sails.sendNativeQuery(sql, values),
+          currentUser,
+          this.req.mem0Auth && this.req.mem0Auth.group,
+        );
+      } catch (error) {
+        sails.log.warn('projects/index: failed to resolve current user group:', error.message);
+        groupVisibilityUserIds = {
+          restrictUnknownCreators: true,
+          sameGroupUserIds: [],
+        };
+      }
     }
 
     let boardGroupIds = {};

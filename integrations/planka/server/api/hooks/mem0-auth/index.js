@@ -85,7 +85,7 @@ module.exports = function defineMem0AuthHook(sails) {
     return `${sub || 'mem0-user'}@mem0.local`;
   };
 
-  const reconcileBoardMembership = async (board, project, boardGroupId, userGroupId) => {
+  const reconcileBoardMembership = async (user, board, project, boardGroupId, userGroupId) => {
     const existingBm = await BoardMembership.qm.getOneByBoardIdAndUserId(board.id, user.id);
     const isOwnGroup = String(boardGroupId) === String(userGroupId);
     if (isOwnGroup) {
@@ -135,13 +135,31 @@ module.exports = function defineMem0AuthHook(sails) {
           const boardGroupIds = await getBoardGroupIds(runQuery, boards);
           // eslint-disable-next-line no-restricted-syntax
           for (const board of boards) {
-            // eslint-disable-next-line no-await-in-loop
-            await reconcileBoardMembership(
-              board,
-              project,
-              boardGroupIds[String(board.id)],
-              userGroupId,
-            );
+            if (userGroupId === '*') {
+              // eslint-disable-next-line no-await-in-loop
+              const existingBm = await BoardMembership.qm.getOneByBoardIdAndUserId(
+                board.id,
+                user.id,
+              );
+              if (!existingBm) {
+                // eslint-disable-next-line no-await-in-loop
+                await BoardMembership.qm.createOne({
+                  projectId: project.id,
+                  boardId: board.id,
+                  userId: user.id,
+                  role: BoardMembership.Roles.EDITOR,
+                });
+              }
+            } else {
+              // eslint-disable-next-line no-await-in-loop
+              await reconcileBoardMembership(
+                user,
+                board,
+                project,
+                boardGroupIds[String(board.id)],
+                userGroupId,
+              );
+            }
           }
         }
       }
@@ -241,6 +259,7 @@ module.exports = function defineMem0AuthHook(sails) {
               email: auth.email,
               name: auth.name,
               picture: auth.picture,
+              group: auth.group,
             };
 
             if (auth.method === 'jwt') {

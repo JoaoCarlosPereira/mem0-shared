@@ -8,6 +8,7 @@ autenticada, ``subject_id=None`` preserva o comportamento aberto por padrão
 
 from __future__ import annotations
 
+import os
 from typing import Any, Optional
 from uuid import UUID
 
@@ -18,6 +19,20 @@ from app.utils.logging_context import (
     auth_user_var,
     machine_var,
 )
+
+
+def is_legacy_spec_access_open() -> bool:
+    """True quando Specs opera sem autenticação/isolamento na LAN.
+
+    ``AUTH_MODE=warn`` permite requisições sem token como ``legacy``;
+    ``AUTH_MODE=off`` ignora o middleware e pode deixar o método vazio.
+    Credenciais explicitamente inválidas continuam sendo rejeitadas na borda.
+    """
+    mode = (os.getenv("AUTH_MODE") or "warn").strip().lower()
+    method = (auth_method_var.get() or "").strip().lower()
+    return mode in ("off", "warn") and (
+        method == "legacy" or (mode == "off" and not method)
+    )
 
 
 def resolve_spec_subject() -> tuple[str, Optional[UUID]]:

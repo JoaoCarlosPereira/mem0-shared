@@ -39,7 +39,11 @@ from app.utils.creator_identity import (
 )
 from app.utils.permissions import get_accessible_spec_workspace_ids
 from app.utils.projects import upsert_project
-from app.utils.spec_auth import resolve_spec_actor, resolve_spec_subject
+from app.utils.spec_auth import (
+    is_legacy_spec_access_open,
+    resolve_spec_actor,
+    resolve_spec_subject,
+)
 from app.utils.claim_lease import TIMEOUT_ACTOR, claim_expires_at
 from app.utils.spec_search import (
     index_completed_workspace,
@@ -478,6 +482,8 @@ def _assert_access(db: Session, workspace_id: UUID) -> None:
     ws = db.query(SpecWorkspace.group_id).filter(SpecWorkspace.id == workspace_id).first()
     if ws is None:
         raise HTTPException(status_code=404, detail="Workspace não encontrado")
+    if is_legacy_spec_access_open():
+        return
     
     subject_type, subject_id = resolve_spec_subject()
     actor_group_id = None
@@ -892,10 +898,30 @@ def _actor_group_id(db: Session) -> Optional[UUID]:
     ``None`` quando não há grupo resolvido (o chamador bloqueia o acesso).
     """
     subject_type, subject_id = resolve_spec_subject()
-    if subject_id:
-        from app.models import User
+    from app.models import DEFAULT_GROUP_NAME, Group, User
+    from app.utils.logging_context import auth_email_var, auth_user_var
+    from app.utils.logging_context import auth_method_var
 
+    if subject_id:
         user = db.query(User.group_id).filter(User.id == subject_id).first()
+        if user and user[0] is not None:
+            return user[0]
+    # Alguns emissores de sessão legados usam o e-mail/``user_id`` como sub,
+    # em vez do UUID técnico. Resolva ambos sem relaxar o fail-closed.
+    identity_values = {
+        value.strip()
+        for value in (auth_user_var.get(), auth_email_var.get())
+        if value and value.strip()
+    }
+    if identity_values:
+        user = (
+            db.query(User.group_id)
+            .filter(
+                (User.email.in_(identity_values))
+                | (User.user_id.in_(identity_values))
+            )
+            .first()
+        )
         if user:
             return user[0]
     actor = resolve_spec_actor()
@@ -905,6 +931,14 @@ def _actor_group_id(db: Session) -> Optional[UUID]:
         u = find_legacy_host_user(db, actor)
         if u and u.group_id:
             return u.group_id
+    # A UI LAN sem Google usa ``Bearer local``. Nesse modo não há UUID/e-mail
+    # no contexto; o grupo Default é a identidade explícita do ambiente legado.
+    if auth_method_var.get() == "legacy":
+        default_group = (
+            db.query(Group).filter(Group.name.ilike(DEFAULT_GROUP_NAME)).first()
+        )
+        if default_group:
+            return default_group.id
     return None
 
 
@@ -916,6 +950,8 @@ def accessible_workspace_ids_by_group(db: Session) -> Optional[set]:
     a ACL por usuário (``get_accessible_spec_workspace_ids``) refina quando há
     regras (``None`` = aberto).
     """
+    if is_legacy_spec_access_open():
+        return None
     group_id = _actor_group_id(db)
     if group_id is None:
         return set()
@@ -936,7 +972,7 @@ def _filter_accessible(
 ) -> list[SpecWorkspace]:
     allowed = accessible_workspace_ids_by_group(db)
     if allowed is None:
-        return []
+        return workspaces
     return [w for w in workspaces if w.id in allowed]
 
 
@@ -1074,11 +1110,13 @@ def _issue_kanban_access_token(db: Session) -> str:
     import jwt as pyjwt
 
     from app.models import User as AppUser
-    from app.utils.logging_context import auth_email_var, auth_user_var
+    from app.utils.logging_context import auth_email_var, auth_method_var, auth_user_var
 
-    # Fail-closed (kanban-board-group-isolation): sem grupo resolvido não emite
-    # token de embed, mesmo antes de construir o JWT.
-    if _actor_group_id(db) is None:
+    legacy_shared_mode = auth_method_var.get() == "legacy"
+    actor_group_id = None if legacy_shared_mode else _actor_group_id(db)
+    # Com autenticação de pessoa, o isolamento continua fail-closed. No modo
+    # legado da LAN, ``*`` instrui o PLANKA a exibir todos os quadros.
+    if not legacy_shared_mode and actor_group_id is None:
         raise HTTPException(status_code=403, detail="Usuário sem grupo associado")
 
     actor = resolve_spec_actor() or "ui-user"
@@ -1132,7 +1170,7 @@ def _issue_kanban_access_token(db: Session) -> str:
             "email": email or f"{sub}@mem0.local",
             "name": name,
             "picture": picture,
-            "group": user.group.name if user is not None and user.group is not None else None,
+            "group": "*" if legacy_shared_mode else str(actor_group_id),
             # Marca embed Mem0: current-user do PLANKA não trata como sessão nativa.
             "mem0": True,
             "iat": now,
@@ -2003,7 +2041,7 @@ def search_specs_endpoint(
     # Isolamento por grupo (fail-closed): só specs de workspaces do grupo do
     # ator, refinadas pela ACL quando houver regras.
     valid_ws_ids = accessible_workspace_ids_by_group(db)
-    if not valid_ws_ids:
+    if valid_ws_ids == set():
         return []
 
     return search_specs(

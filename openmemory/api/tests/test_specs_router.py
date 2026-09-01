@@ -16,7 +16,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.models import (AccessControl, Group, KanbanColumnPrompt, TaskCard, TaskCardStatus, User, SpecWorkspace, DEFAULT_GROUP_NAME)
-from app.routers.specs import router
+from app.routers.specs import _actor_group_id, router
 
 
 @pytest.fixture
@@ -98,6 +98,29 @@ def _create_ws(client, project_id="mem0-shared", slug="ws-1", name="WS 1"):
         "/api/v1/specs/workspaces",
         json={"project_id": project_id, "slug": slug, "name": name},
     )
+
+
+def test_actor_group_id_falls_back_when_uuid_user_has_no_group(factory):
+    """Uma pessoa sem grupo não deve impedir a resolução do membro canônico."""
+    from app.utils.logging_context import auth_email_var, auth_user_var
+
+    db = factory()
+    group = Group(name="Grupo Kanban")
+    db.add(group)
+    db.flush()
+    session_user_id = uuid.uuid4()
+    db.add(User(id=session_user_id, user_id="google-person"))
+    db.add(User(user_id="legacy-person", email="person@example.com", group_id=group.id))
+    db.commit()
+
+    user_token = auth_user_var.set(str(session_user_id))
+    email_token = auth_email_var.set("person@example.com")
+    try:
+        assert _actor_group_id(db) == group.id
+    finally:
+        auth_user_var.reset(user_token)
+        auth_email_var.reset(email_token)
+        db.close()
 
 
 def test_list_kanban_prompts_always_returns_statuses(client):
@@ -820,6 +843,29 @@ class TestKanbanHomeIdentity:
         finally:
             auth_email_var.reset(tok_e)
             auth_user_var.reset(tok_u)
+
+    def test_jwt_legacy_libera_todos_os_quadros(self, client, monkeypatch):
+        import jwt as pyjwt
+        from app.utils.logging_context import auth_method_var, auth_user_var
+
+        secret = "kanban-home-legacy-shared-secret!!"
+        monkeypatch.setenv("AUTH_JWT_SECRET", secret)
+        monkeypatch.delenv("NEXTAUTH_SECRET", raising=False)
+
+        method_token = auth_method_var.set("legacy")
+        user_token = auth_user_var.set("")
+        try:
+            response = client.get("/api/v1/specs/kanban-home")
+            assert response.status_code == 200
+            claims = pyjwt.decode(
+                response.json()["access_token"],
+                secret,
+                algorithms=["HS256"],
+            )
+            assert claims["group"] == "*"
+        finally:
+            auth_user_var.reset(user_token)
+            auth_method_var.reset(method_token)
 
     def test_jwt_embed_respeita_planka_embed_token_ttl_seconds(
         self, client, factory, monkeypatch

@@ -23,6 +23,7 @@ from app.mcp_server import (
     claim_task,
     create_spec_workspace,
     create_task,
+    get_task,
     release_task,
     update_task_status,
 )
@@ -112,6 +113,45 @@ class TestCreateAndClaim:
     async def test_claim_task_inexistente_error(self):
         out = await claim_task(str(uuid.uuid4()))
         assert out.startswith("Error:")
+
+    @pytest.mark.asyncio
+    async def test_legacy_get_e_claim_ignoram_grupo_e_acl(self, factory):
+        from app.models import AccessControl, Group, SpecWorkspace, TaskCard
+
+        workspace_id = uuid.uuid4()
+        task_id = uuid.uuid4()
+        s = factory()
+        try:
+            other_group = Group(name="Grupo isolado")
+            s.add(other_group)
+            s.flush()
+            s.add(
+                SpecWorkspace(
+                    id=workspace_id,
+                    project_id="outro-projeto",
+                    slug="workspace-isolado",
+                    name="Workspace isolado",
+                    group_id=other_group.id,
+                )
+            )
+            s.add(TaskCard(id=task_id, workspace_id=workspace_id, title="Task compartilhada"))
+            s.add(
+                AccessControl(
+                    subject_type="user",
+                    subject_id=None,
+                    object_type="spec_workspace",
+                    object_id=None,
+                    effect="deny",
+                )
+            )
+            s.commit()
+        finally:
+            s.close()
+
+        task = json.loads(await get_task(str(task_id)))
+        assert task["title"] == "Task compartilhada"
+        claimed = json.loads(await claim_task(str(task_id)))
+        assert claimed["claimed"] is True
 
 
 class TestReleaseAndStatus:

@@ -139,6 +139,52 @@ class TestWriteAndRead:
         out = await write_spec_document(str(uuid.uuid4()), "prd", "x", None)
         assert out.startswith("Error:")
 
+    @pytest.mark.asyncio
+    async def test_legacy_read_ignora_grupo_e_acl(self, factory):
+        import uuid
+
+        from app.models import AccessControl, Group, SpecDocument, SpecWorkspace
+
+        workspace_id = uuid.uuid4()
+        s = factory()
+        try:
+            other_group = Group(name="Outro grupo")
+            s.add(other_group)
+            s.flush()
+            s.add(
+                SpecWorkspace(
+                    id=workspace_id,
+                    project_id="outro-projeto",
+                    slug="workspace-outro-grupo",
+                    name="Workspace outro grupo",
+                    group_id=other_group.id,
+                )
+            )
+            s.add(
+                AccessControl(
+                    subject_type="user",
+                    subject_id=None,
+                    object_type="spec_workspace",
+                    object_id=None,
+                    effect="deny",
+                )
+            )
+            s.add(
+                SpecDocument(
+                    workspace_id=workspace_id,
+                    document_type="prd",
+                    current_version=1,
+                    current_content="# Visível na LAN",
+                )
+            )
+            s.commit()
+        finally:
+            s.close()
+
+        out = json.loads(await read_spec_document(str(workspace_id), "prd"))
+        assert out["found"] is True
+        assert out["current_content"] == "# Visível na LAN"
+
 
 class TestAdrsDocumentType:
     @pytest.mark.asyncio

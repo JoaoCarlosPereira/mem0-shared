@@ -157,11 +157,13 @@ module.exports = {
       boards = await Board.qm.getByProjectId(project.id);
     }
 
-    if (boards.length > 0 && currentUser.email) {
+    const legacySharedMode = this.req.mem0Auth && this.req.mem0Auth.group === '*';
+    if (boards.length > 0 && currentUser.email && !legacySharedMode) {
       try {
         const groupVisibilityUserIds = await getGroupVisibilityUserIds(
           (sql, values) => sails.sendNativeQuery(sql, values),
           currentUser,
+          this.req.mem0Auth && this.req.mem0Auth.group,
         );
         if (groupVisibilityUserIds) {
           const boardGroupIds = await getBoardGroupIds(

@@ -185,11 +185,13 @@ module.exports = {
       .getPathToProjectById(inputs.id)
       .intercept('pathNotFound', () => Errors.BOARD_NOT_FOUND);
 
-    if (currentUser.email) {
+    const legacySharedMode = this.req.mem0Auth && this.req.mem0Auth.group === '*';
+    if (currentUser.email && !legacySharedMode) {
       try {
         const groupVisibilityUserIds = await getGroupVisibilityUserIds(
           (sql, values) => sails.sendNativeQuery(sql, values),
           currentUser,
+          this.req.mem0Auth && this.req.mem0Auth.group,
         );
         if (
           groupVisibilityUserIds &&

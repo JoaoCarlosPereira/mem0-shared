@@ -1190,14 +1190,18 @@ async def search_specs(
     try:
         def _sync_op():
             from app.utils.permissions import get_accessible_spec_workspace_ids
-            from app.utils.spec_auth import resolve_spec_subject
+            from app.utils.spec_auth import is_legacy_spec_access_open, resolve_spec_subject
             from app.utils.spec_search import search_specs as _search_specs
 
             requester_group = requester_group_for_mcp(user_id_var.get(None))
             subject_type, subject_id = resolve_spec_subject()
             db = SessionLocal()
             try:
-                accessible = get_accessible_spec_workspace_ids(db, subject_type, subject_id)
+                accessible = (
+                    None
+                    if is_legacy_spec_access_open()
+                    else get_accessible_spec_workspace_ids(db, subject_type, subject_id)
+                )
             finally:
                 db.close()
             results = _search_specs(
