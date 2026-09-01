@@ -212,4 +212,20 @@ achatar a curva, com o caso `558075ce` nominal.
 3. **`MEM0_AUTODEDUP_MODE=report`**: ligar e ler os logs antes de qualquer
    `apply`.
 4. **Deploy**: o servidor em 192.168.3.213 continua rodando a versão antiga.
-5. **As 2 memórias irrecuperáveis** (`a62a97a9`, `b9f5075a`): apagar e regravar.
+
+## Decidido: não mexer nas memórias já corrompidas
+
+As 11 memórias com dano de escape ficam como estão, inclusive as 2
+irrecuperáveis (`a62a97a9`, `b9f5075a`). O `repair_escape_damage` age no momento
+da extração, então é **preventivo**: corrige o que for gravado daqui para frente
+e não toca no que já está no acervo.
+
+Consequência aceita: quem recuperar a `a62a97a9` continua recebendo o caminho UNC
+quebrado. O impacto é baixo — são 11 registros em 12.725 (0,09%), o caminho em
+questão é trivialmente re-derivável, e o acervo se corrige sozinho por uso: na
+próxima vez que alguém gravar sobre o mesmo assunto a memória nova sai íntegra, e
+o fan-out do `supersedes` (item 2) apresenta a antiga como candidata a
+obsolescência.
+
+O `audit_escape_damage` continua no repositório para reconferir depois do deploy:
+se aparecer memória nova na lista, o reparo não está valendo.
