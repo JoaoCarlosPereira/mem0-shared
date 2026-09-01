@@ -48,13 +48,18 @@ def _wrap_search(fn: Callable) -> Callable:
         rerank: bool = False,
         strict_project: bool = False,
         include_obsolete: bool = False,
+        task: str | None = None,
     ) -> str:
+        # A assinatura tem de acompanhar a da tool: o FastMCP valida contra o
+        # schema da funcao ORIGINAL e chama esta com os mesmos kwargs, entao um
+        # parametro novo que nao chegue aqui vira TypeError em tempo de dispatch.
         out = await fn(
             query,
             project,
             rerank=rerank,
             strict_project=strict_project,
             include_obsolete=include_obsolete,
+            task=task,
         )
         try:
             from app.mcp_server import (

@@ -54,6 +54,7 @@ from app.utils.permissions import check_memory_access_permissions
 from app.utils.read_cache import read_cache
 from app.utils.project_groups import projects_in_group
 from app.utils.recency import rank_search_results
+from app.utils.scope_keys import normalize_task, resolve_task
 from app.utils.reranking import apply_rerank
 from app.utils.token_usage_wrapper import usage_attribution
 from app.utils.write_guard import check_write_allowed
@@ -183,10 +184,11 @@ mcp_router = APIRouter(prefix="/mcp")
 # Initialize SSE transport
 sse = SseServerTransport("/mcp/messages/")
 
-@mcp.tool(description="Save content for asynchronous memory extraction in a project. Call this whenever the user shares durable facts or preferences, or asks you to remember something. `project` is REQUIRED and scopes the memory (memories are shared across all machines on the local network). Optional `supersedes` is a list of memory IDs this write replaces — those are marked obsolete and hidden from search by default. Returns immediately with status accepted after enqueue (includes job_id, queue_depth, estimated_wait_sec); extraction runs in the background — the memory is not searchable until the worker finishes. Do NOT poll for job status. If the HTTP call returns 429 / rate_limit_exceeded, wait retry_after_sec (or Retry-After) and retry the same text 1–3 times with backoff; do not discard the content. To find conflicting memories, use search_memory / mark_obsolete — never on this write path.")
+@mcp.tool(description="Save content for asynchronous memory extraction in a project. Call this whenever the user shares durable facts or preferences, or asks you to remember something. `project` is REQUIRED and scopes the memory (memories are shared across all machines on the local network). Optional `task` is the Redmine task code (6 digits) this memory belongs to — it is a separate, exactly filterable key, so use it instead of putting the task number in `project` (`project` is the repository/product). Optional `supersedes` is a list of memory IDs this write replaces — those are marked obsolete and hidden from search by default; the reply also lists other active memories that say the same thing as what you superseded, so a duplicate does not survive the correction. Returns immediately with status accepted after enqueue (includes job_id, queue_depth, estimated_wait_sec); extraction runs in the background — the memory is not searchable until the worker finishes. Do NOT poll for job status. If the HTTP call returns 429 / rate_limit_exceeded, wait retry_after_sec (or Retry-After) and retry the same text 1–3 times with backoff; do not discard the content. To find conflicting memories, use search_memory / mark_obsolete — never on this write path.")
 async def add_memories(
     text: str,
     project: str,
+    task: str | None = None,
     supersedes: list[str] | None = None,
 ) -> str:
     # task_07 / ADR-004: fire-and-forget enqueue only. No embed/search/LLM on
@@ -233,7 +235,16 @@ async def add_memories(
             if s:
                 supersede_ids.append(s)
 
-    extras = {"supersedes": supersede_ids} if supersede_ids else None
+    # Chave de tarefa (opcional): a informada pelo chamador vence; senao tenta a
+    # forma explicita `TAREFA #NNNNNN` no proprio texto. Ver app.utils.scope_keys.
+    task_key = resolve_task(task, text)
+
+    extras: dict | None = {}
+    if supersede_ids:
+        extras["supersedes"] = supersede_ids
+    if task_key:
+        extras["task"] = task_key
+    extras = extras or None
 
     def _sync_enqueue():
         job_id_val = write_queue.enqueue(
@@ -290,6 +301,8 @@ async def add_memories(
     }
     if supersede_ids:
         payload["supersedes"] = supersede_ids
+    if task_key:
+        payload["task"] = task_key
     return json.dumps(payload, indent=2)
 
 
@@ -461,13 +474,14 @@ async def _fetch_all_memories(memory_client, top_k: int = DEFAULT_LIST_TOP_K) ->
     return [_point_to_memory_result(p) for p in points]
 
 
-@mcp.tool(description="Search stored memories across all projects, ranked by relevance and recency. By default `project` is a soft hint (slight boost for matching names) — wrong or slightly different project names do not exclude results. Pass `strict_project=true` to hard-filter to that exact project name only. Obsolete (superseded) memories are hidden by default; pass `include_obsolete=true` for audit. Pass `rerank=true` only if you want cross-encoder reordering: it applies solely when MEM0_RERANKER_PROVIDER is set on the server; otherwise the response includes `rerank.applied=false` with reason `not_configured` (expected, not a bug). Memories are shared across all machines on the local network.")
+@mcp.tool(description="Search stored memories across all projects, ranked by relevance and recency. By default `project` is a soft hint (slight boost for matching names) — wrong or slightly different project names do not exclude results. Pass `strict_project=true` to hard-filter to that exact project name only. Pass `task` (6-digit Redmine code) to hard-filter to one task — that is the exact, reliable way to ask for everything about a task, and it works across projects. Even without it, a task code written in `query` gets an exact-match boost. Obsolete (superseded) memories are hidden by default; pass `include_obsolete=true` for audit. Pass `rerank=true` only if you want cross-encoder reordering: it applies solely when MEM0_RERANKER_PROVIDER is set on the server; otherwise the response includes `rerank.applied=false` with reason `not_configured` (expected, not a bug). Memories are shared across all machines on the local network.")
 async def search_memory(
     query: str,
     project: str,
     rerank: bool = False,
     strict_project: bool = False,
     include_obsolete: bool = False,
+    task: str | None = None,
 ) -> str:
     # NOTE (task_03 / ADR-003): semantic reads are GLOBAL across projects and SHARED
     # across all machines by default. ``project`` is a ranking hint only (small boost
@@ -505,11 +519,22 @@ async def search_memory(
             )
         else:
             search_filters = None
+
+        # ``task`` e filtro duro e ORTOGONAL ao projeto: a mesma tarefa vive em
+        # mais de um repositorio (a 371145 em sysmo-api-tributacao e sysmo-s1),
+        # entao restringir a tarefa nao pode implicar restringir o projeto.
+        task_key = normalize_task(task)
+        if task_key:
+            search_filters = dict(search_filters or {})
+            search_filters["task"] = task_key
         filter_hash = hashlib.sha256(
             json.dumps(
                 {
                     "mode": "strict" if strict_project else "global",
                     "preferred_project": project,
+                    # Parte da chave: o pool em cache e o pool FILTRADO, entao
+                    # uma busca com task nao pode ser servida da entrada sem ela.
+                    "task": task_key,
                     # Part of the key: the family is config-driven, so a change to
                     # MEM0_PROJECT_GROUPS must not be served from a stale entry.
                     "scope": strict_scope,
@@ -713,11 +738,13 @@ async def list_memories(
         return f"Error getting memories: {e}"
 
 
-@mcp.tool(description="Mark specific memories as obsolete (superseded) without deleting them. They disappear from search/list by default and remain recoverable via include_obsolete=true. Pass optional superseded_by with the correcting memory ID.")
+@mcp.tool(description="Mark specific memories as obsolete (superseded) without deleting them. They disappear from search/list by default and remain recoverable via include_obsolete=true. Pass optional superseded_by with the correcting memory ID. The reply carries `sibling_candidates`: OTHER memories still active that say the same thing as what you just obsoleted, plus `ingest_siblings`, the other facts extracted from the same original write. Neither is marked automatically — review them and call mark_obsolete again for the ones that must also go, or the wrong fact survives the correction in a second copy.")
 async def mark_obsolete(
     memory_ids: list[str],
     superseded_by: str | None = None,
+    suggest_siblings: bool = True,
 ) -> str:
+    from app.utils.supersede_fanout import find_sibling_candidates, ingest_siblings
     from app.utils.supersedes import mark_points_obsolete
 
     if not memory_ids:
@@ -734,6 +761,26 @@ async def mark_obsolete(
         return "Error: memory_ids not provided"
 
     try:
+        # Os irmaos sao lidos ANTES de marcar: depois de obsoleto o ponto ainda
+        # existe, mas o filtro de estado passaria a exclui-lo dos vizinhos e a
+        # busca partiria de um texto que ja nao esta em circulacao.
+        candidates: list = []
+        siblings: list = []
+        if suggest_siblings:
+            try:
+                candidates = await anyio.to_thread.run_sync(
+                    lambda: find_sibling_candidates(
+                        memory_client,
+                        ids,
+                        exclude_ids=[superseded_by] if superseded_by else [],
+                    )
+                )
+                siblings = await anyio.to_thread.run_sync(
+                    lambda: ingest_siblings(memory_client, ids)
+                )
+            except Exception:  # noqa: BLE001 - sugerir nao pode impedir corrigir
+                logging.exception("sibling lookup failed; proceeding with mark_obsolete")
+
         out = await anyio.to_thread.run_sync(
             lambda: mark_points_obsolete(
                 memory_client,
@@ -743,14 +790,21 @@ async def mark_obsolete(
         )
         # Best-effort cache bust for common projects of updated points is hard
         # without payloads; callers should re-search.
-        return json.dumps(
-            {
-                "status": "ok",
-                "updated": out.get("updated") or [],
-                "missing": out.get("missing") or [],
-            },
-            indent=2,
-        )
+        payload = {
+            "status": "ok",
+            "updated": out.get("updated") or [],
+            "missing": out.get("missing") or [],
+        }
+        if suggest_siblings:
+            payload["sibling_candidates"] = candidates
+            payload["ingest_siblings"] = siblings
+            if candidates or siblings:
+                payload["note"] = (
+                    "Estas memorias continuam ATIVAS e dizem o mesmo que a que "
+                    "voce acabou de superar. Nenhuma foi marcada. Revise e chame "
+                    "mark_obsolete de novo para as que tambem devem sair."
+                )
+        return json.dumps(payload, indent=2)
     except Exception as e:
         logging.exception("mark_obsolete failed")
         return f"Error marking obsolete: {e}"

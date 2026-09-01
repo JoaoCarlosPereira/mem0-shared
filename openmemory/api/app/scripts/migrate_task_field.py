@@ -14,8 +14,9 @@ Como as memorias de uma mesma tarefa tambem caem em `sysmo-s1` e
 A migracao faz duas coisas:
 
 1. Backfill de `task` em TODA memoria cujo texto cite `TAREFA #NNNNNN` ou cujo
-   `project` seja um codigo de tarefa. `task` passa a ser a chave de tarefa,
-   indexada como keyword no Qdrant e filtravel na busca.
+   `project` seja um codigo de tarefa. O campo `task` JA EXISTE no write-path e
+   na busca (`app.utils.scope_keys`, `search_memory(task=...)`), indexado como
+   keyword no Qdrant; o que falta e preencher o acervo anterior a ele.
 2. Reatribuicao de `project` para as memorias cujo `project` e um codigo, usando
    o mapa `{"374954": "sysmo-s1", ...}` fornecido em `--map`. Sem mapa, `project`
    fica como esta e so o `task` e gravado - a migracao e incremental e reversivel.

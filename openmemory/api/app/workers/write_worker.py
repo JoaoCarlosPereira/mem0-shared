@@ -40,6 +40,7 @@ from app.utils.metrics import (
 )
 from app.utils.projects import upsert_project as _default_upsert_project
 from app.utils.read_cache import read_cache
+from app.utils.scope_keys import resolve_task
 from app.utils.token_usage_wrapper import usage_attribution
 from app.utils.write_queue import WriteJob
 from app.utils.write_queue import write_queue as _default_write_queue
@@ -371,6 +372,16 @@ class WriteWorker:
         supersedes = extras.get("supersedes") or []
         if isinstance(supersedes, list) and supersedes:
             metadata["supersedes"] = [str(x) for x in supersedes if x]
+
+        # Procedencia (app.utils.scope_keys): a extracao e fan-out, um texto vira
+        # N fatos atomicos com ids independentes. O id do job ja e unico por
+        # submissao, entao serve de agrupador - superar a decisao passa a poder
+        # alcancar todos os fatos que nasceram dela.
+        if job.id:
+            metadata["ingest_id"] = str(job.id)
+        task_key = resolve_task(extras.get("task"), job.text)
+        if task_key:
+            metadata["task"] = task_key
         kwargs = dict(
             user_id=job.hostname,
             project=job.project,
@@ -455,6 +466,19 @@ class WriteWorker:
         try:
             from app.utils.supersedes import mark_points_obsolete
 
+            # Vizinhos ativos ANTES de marcar: depois o filtro de estado os
+            # esconderia. Sao so registrados - marcar em silencio uma memoria
+            # que o chamador nao citou seria decidir por ele.
+            candidates = []
+            try:
+                from app.utils.supersede_fanout import find_sibling_candidates
+
+                candidates = find_sibling_candidates(
+                    client, supersedes, exclude_ids=new_ids
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("sibling lookup failed job_id=%s", job.id)
+
             out = mark_points_obsolete(
                 client, supersedes, superseded_by=superseded_by
             )
@@ -465,6 +489,17 @@ class WriteWorker:
                 out.get("updated"),
                 out.get("missing"),
             )
+            for c in candidates:
+                logger.warning(
+                    "supersede sibling STILL ACTIVE job_id=%s superseded=%s "
+                    "candidate=%s score=%.4f project=%s text=%r",
+                    job.id,
+                    c["superseded_id"],
+                    c["candidate_id"],
+                    c["score"],
+                    c.get("project"),
+                    (c.get("candidate_text") or "")[:160],
+                )
         except Exception:  # noqa: BLE001
             logger.exception(
                 "supersedes apply failed job_id=%s project=%s", job.id, job.project

@@ -27,7 +27,34 @@ from typing import Optional
 
 from app.utils.groups import group_of_hostname
 
-SEARCH_RECENCY_HALFLIFE_DAYS = float(os.getenv("MEM0_SEARCH_RECENCY_HALFLIFE_DAYS", "90"))
+# Meia-vida da recencia: 45 dias (era 90, alterado em 01/09/2026 COM medicao).
+#
+# Motivo: com o fator lexical abaixo assumindo a discriminacao de ASSUNTO, a
+# recencia fica livre para fazer o que ela realmente sabe fazer - distinguir
+# VERSAO do mesmo fato. E a 90 dias ela nao fazia nem isso: um par adversarial
+# real (fato revogado de 26 dias com score 0,870 contra o fato correto de 4 dias
+# com score 0,700) era vencido pelo REVOGADO, porque 22 dias de diferenca so
+# valiam 1,18x contra os 1,24x da vantagem semantica.
+#
+# Medido nas mesmas 4 consultas reais da calibracao do fator lexical, precisao@5:
+#
+#   meia-vida   q1    q2    q3    q4     par adversarial
+#     90 (era)  5/5   2/5   5/5   1/5    revogado vence
+#     60        5/5   2/5   5/5   1/5    correto vence (margem 4%)
+#     45  <-    5/5   2/5   5/5   1/5    correto vence (margem 13%)
+#     30        5/5   2/5   4/5   1/5    correto vence
+#     21        5/5   2/5   4/5   1/5    correto vence
+#
+# 45 e o ponto mais afiado que nao custa nada na precisao (o degrau esta em 30,
+# onde q3 cai) e ainda deixa margem no criterio de aceite. Ver
+# tests/test_ranking_regression_obsoletas.py: memoria revogada nao pode subir.
+#
+# ATENCAO ao mexer aqui: o remedio "obvio" para o ranking - mais peso semantico
+# e curva de recencia ACHATADA - vai na direcao contraria e ja foi medido como
+# nocivo. Em 01/09/2026 a memoria 558075ce, com um contrato de API revogado,
+# tinha o MAIOR score semantico dos 20 resultados (0,878) e so nao subiu porque
+# a recencia dela era 0,769. Achatar a recencia teria promovido dado errado.
+SEARCH_RECENCY_HALFLIFE_DAYS = float(os.getenv("MEM0_SEARCH_RECENCY_HALFLIFE_DAYS", "45"))
 SEARCH_RECENCY_WEIGHT = float(os.getenv("MEM0_SEARCH_RECENCY_WEIGHT", "1.0"))
 SEARCH_PROJECT_BOOST_EXACT = float(os.getenv("MEM0_SEARCH_PROJECT_BOOST_EXACT", "0.1"))
 SEARCH_PROJECT_BOOST_FUZZY = float(os.getenv("MEM0_SEARCH_PROJECT_BOOST_FUZZY", "0.05"))
