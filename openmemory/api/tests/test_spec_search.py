@@ -516,8 +516,8 @@ class TestSearchEndpoint:
         assert r.status_code == 200
         assert len(r.json()) == 2
 
-    def test_search_sem_grupo_retorna_vazio(self, factory, monkeypatch):
-        """Fail-closed: ator sem grupo não vê nenhuma spec (mesmo hits sem workspace_id)."""
+    def test_search_legacy_sem_grupo_retorna_specs(self, factory, monkeypatch):
+        """Modo legado sem Google compartilha specs mesmo sem vínculo de grupo."""
         from app.routers.specs import router
         from app.utils.logging_context import auth_method_var, auth_user_var
 
@@ -548,7 +548,7 @@ class TestSearchEndpoint:
         try:
             r = TestClient(app).get("/api/v1/specs/search", params={"q": "spec"})
             assert r.status_code == 200
-            assert r.json() == []
+            assert [item["id"] for item in r.json()] == ["1"]
         finally:
             auth_user_var.reset(tok_u)
             auth_method_var.reset(tok_m)
